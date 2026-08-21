@@ -3,7 +3,7 @@ import type { ThemePaletteLike } from './api';
 import { PALETTE_FADE } from './palette';
 import { GLSL_ACES_INVERSE, GLSL_DITHER, GLSL_SRGB } from './shaders';
 import { makeSurface } from './surface';
-import { acesInMatrixInverse, acesOutMatrixInverse } from './tonemap';
+import { acesInMatrixInverse, acesOutMatrixInverse, directOverlayAlpha } from './tonemap';
 
 /**
  * The cyclorama.
@@ -11,17 +11,34 @@ import { acesInMatrixInverse, acesOutMatrixInverse } from './tonemap';
  * A photographer's sweep has no horizon line, no corner and no seam — just a
  * lit gradient that the subject floats in front of. That is an inverted sphere
  * pinned to the camera with a hand-written gradient: bgTop above, bgBottom
- * below, a warm pool of light behind the hero, a radial vignette, and a
+ * below, a soft box of light behind the hero, a radial vignette, and a
  * triangular dither so the whole thing does not band on an 8-bit display.
  *
  * It is deliberately outside the fog and outside the tone mapper. See
  * `shaders.ts` for how the pre-division works.
+ *
+ * ## Why the floor is a shadow catcher and not a surface
+ *
+ * This used to be a 120-unit lit disc, and it was a bug. The game camera sits
+ * at CAM_PITCH 0.5 rad with a 46 degree FOV, so the top of the frame looks
+ * 4.5 degrees BELOW the horizon — a horizontal plane under the camera
+ * therefore covers every single pixel, and the sweep was never visible at all.
+ * What measured as "the gradient" was the disc fading into FogExp2, which is
+ * why the top of frame read as roughly the tone-mapped fog colour and why the
+ * gradient ran dark in the middle instead of monotonically. The tell was that
+ * both tiers were wrong identically: it was never a colour-space or exposure
+ * error on the direct path, it was occlusion.
+ *
+ * A floor also contradicts the design bible outright — "no skyboxes, no
+ * horizons, no clutter". So the floor now renders nothing but the shadow that
+ * lands on it, and the plate is grounded by the contact blob instead.
  */
 
 const SKY_RADIUS = 100;
-const GROUND_RADIUS = 120;
-/** World-unit radius the baked pool of light spans. */
-const POOL_RADIUS = 11;
+/** Only has to be wide enough to catch the key light's shadow. */
+const SHADOW_CATCHER_RADIUS = 14;
+/** Alpha of the plate's contact blob on the composer path. */
+const CONTACT_ALPHA = 0.4;
 
 const VERT = /* glsl */ `
 varying vec3 vDir;
@@ -41,6 +58,7 @@ uniform vec2 uRange;
 uniform float uParallax;
 uniform float uGlowStrength;
 uniform float uVignette;
+uniform float uPostVignette;
 uniform float uDirect;
 uniform float uExposure;
 uniform mat3 uAcesInInv;
@@ -80,9 +98,16 @@ void main() {
   float vig = 1.0 - uVignette * smoothstep( 0.30, 1.05, r );
 
   if ( uDirect > 0.5 ) {
-    // No composer: this shader writes the final pixel itself.
+    // No composer: this shader writes the final pixel itself, which also means
+    // it has to stand in for the finishing pass's vignette. Same curve, same
+    // place in the order (after the encode), so the sweep measures the same on
+    // both tiers instead of being ~30 steps brighter at the frame edge here.
     col = clamp( col * glow * vig, 0.0, 1.0 );
     col = encodeSRGB( col );
+    float aspect = uResolution.x / max( uResolution.y, 1.0 );
+    vec2 pq = vec2( ( uv.x - 0.5 ) * aspect, uv.y - 0.5 );
+    float pd = length( pq ) / max( length( vec2( 0.5 * aspect, 0.5 ) ), 0.0001 );
+    col *= 1.0 - uPostVignette * smoothstep( 0.62, 1.35, pd );
     col = ditherTPDF( col, gl_FragCoord.xy, 1.0 / 255.0 );
   } else {
     // A tone mapper is downstream. Pre-divide so the sweep lands on the exact
@@ -117,26 +142,6 @@ function paintBlob(size: number, hardness: number): THREE.Texture | null {
   return tex;
 }
 
-/** Grayscale pool of light on the floor. Palette-independent, so baked once. */
-function paintLightPool(size: number): THREE.Texture | null {
-  const s = makeSurface(size);
-  if (!s) return null;
-  const ctx = s.ctx;
-  const half = size / 2;
-  const g = ctx.createRadialGradient(half, half, 0, half, half, half);
-  g.addColorStop(0, '#e6e6e6');
-  g.addColorStop(0.35, '#d2d2d2');
-  g.addColorStop(1, '#8c8c8c');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(s.source);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.needsUpdate = true;
-  return tex;
-}
-
 export interface BackdropOpts {
   /** Height of the studio floor. The plate's top sits at y = 0. */
   groundY?: number;
@@ -151,7 +156,7 @@ export class Backdrop {
   readonly contact: THREE.Mesh;
 
   private readonly skyMat: THREE.ShaderMaterial;
-  private readonly groundMat: THREE.MeshStandardMaterial;
+  private readonly groundMat: THREE.ShadowMaterial;
   private readonly contactMat: THREE.MeshBasicMaterial;
   private readonly owned: { dispose(): void }[] = [];
 
@@ -170,6 +175,15 @@ export class Backdrop {
   private readonly toGround = new THREE.Color();
   private fromVig = 0;
   private toVig = 0;
+  private fromPostVig = 0;
+  private toPostVig = 0;
+  /** Live crossfaded value of the finishing pass's vignette. */
+  private postVig = 0;
+  /** Authored contact-blob alpha, expressed on the composer path. */
+  private contactAlpha = CONTACT_ALPHA;
+  private paletteExposure = 1.05;
+  /** Sweep colour immediately behind the plate; the blob blends over this. */
+  private readonly behindPlate = new THREE.Color(0xe07a5f);
 
   constructor(opts: BackdropOpts) {
     this.group.name = 'cyclorama';
@@ -196,6 +210,7 @@ export class Backdrop {
         uParallax: { value: 0.18 },
         uGlowStrength: { value: 0.14 },
         uVignette: { value: 0.22 },
+        uPostVignette: { value: 0 },
         uDirect: { value: opts.direct ? 1 : 0 },
         uExposure: { value: 1.05 },
         uAcesInInv: { value: inIn },
@@ -209,31 +224,25 @@ export class Backdrop {
     this.sky.matrixAutoUpdate = true;
     this.owned.push(skyGeo, this.skyMat);
 
-    // --- studio floor ------------------------------------------------------
-    // Big enough that FogExp2 swallows the rim long before it can read as a
-    // circle sitting on the sweep.
-    const groundGeo = new THREE.CircleGeometry(GROUND_RADIUS, 56);
-    const pool = paintLightPool(256);
-    if (pool) {
-      // CircleGeometry stretches the texture across the whole disc; zoom it
-      // back in so the pool of light is a pool, not a planet-sized wash.
-      const zoom = GROUND_RADIUS / POOL_RADIUS;
-      pool.repeat.setScalar(zoom);
-      pool.offset.setScalar(0.5 - 0.5 * zoom);
-    }
-    this.groundMat = new THREE.MeshStandardMaterial({
-      color: 0xb4523c,
-      roughness: 0.92,
-      metalness: 0,
-      map: pool ?? undefined,
-      dithering: true,
+    // --- floor: shadow catcher only, never a visible surface -------------
+    // ShadowMaterial draws nothing except what the key light darkens, so the
+    // sweep runs uninterrupted from the top of the frame to the bottom. It is
+    // only ever visible on the composer tiers (LOW has no shadows at all),
+    // which is why its alpha needs no direct-path correction.
+    const groundGeo = new THREE.CircleGeometry(SHADOW_CATCHER_RADIUS, 48);
+    this.groundMat = new THREE.ShadowMaterial({
+      color: 0x000000,
+      opacity: 0.34,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
     });
     this.ground = new THREE.Mesh(groundGeo, this.groundMat);
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.position.y = opts.groundY ?? -0.52;
     this.ground.receiveShadow = true;
+    this.ground.renderOrder = -2;
     this.owned.push(groundGeo, this.groundMat);
-    if (pool) this.owned.push(pool);
 
     // --- contact shadow ----------------------------------------------------
     const contactGeo = new THREE.CircleGeometry(1, 32);
@@ -242,7 +251,7 @@ export class Backdrop {
       color: 0x000000,
       map: blob ?? undefined,
       transparent: true,
-      opacity: 0.4,
+      opacity: CONTACT_ALPHA,
       depthWrite: false,
       toneMapped: false,
       fog: false,
@@ -261,6 +270,23 @@ export class Backdrop {
   /** Tell the sweep whether it is writing the final pixel or feeding a composer. */
   setDirect(direct: boolean): void {
     this.skyMat.uniforms.uDirect.value = direct ? 1 : 0;
+    this.syncPathDependent();
+  }
+
+  private get direct(): boolean {
+    return (this.skyMat.uniforms.uDirect.value as number) > 0.5;
+  }
+
+  /**
+   * Everything whose correct value depends on whether a tone mapper runs after
+   * us: the stand-in vignette, and the contact blob's alpha.
+   */
+  private syncPathDependent(): void {
+    this.skyMat.uniforms.uPostVignette.value = this.direct ? this.postVig : 0;
+    this.contactMat.opacity = this.direct
+      ? directOverlayAlpha(this.behindPlate, this.contactAlpha, this.paletteExposure)
+      : this.contactAlpha;
+    this.contact.visible = this.contactAlpha > 0.001;
   }
 
   /** Base exposure, i.e. before any flash punch. */
@@ -290,8 +316,8 @@ export class Backdrop {
   /** Size and darkness of the blob under the plate. */
   setContactShadow(radius: number, strength: number): void {
     this.contact.scale.setScalar(Math.max(0.001, radius));
-    this.contactMat.opacity = THREE.MathUtils.clamp(strength, 0, 1);
-    this.contact.visible = strength > 0.001;
+    this.contactAlpha = THREE.MathUtils.clamp(strength, 0, 1);
+    this.syncPathDependent();
   }
 
   setSize(width: number, height: number): void {
@@ -306,15 +332,23 @@ export class Backdrop {
     this.fromGlow.copy(u.uGlow.value as THREE.Color);
     this.fromGround.copy(this.groundMat.color);
     this.fromVig = u.uVignette.value as number;
+    this.fromPostVig = this.postVig;
 
     this.toTop.setHex(p.bgTop, THREE.SRGBColorSpace);
     this.toBottom.setHex(p.bgBottom, THREE.SRGBColorSpace);
     this.toFloor.setHex(p.ground, THREE.SRGBColorSpace);
     this.toGlow.setHex(p.key, THREE.SRGBColorSpace);
-    // The floor is lifted slightly toward white so the baked pool of light has
-    // headroom to read as light rather than as a stain.
-    this.toGround.setHex(p.ground, THREE.SRGBColorSpace).lerp(WHITE, 0.06);
+    // A cast shadow on a warm sweep is not neutral black; it keeps a little of
+    // the theme's floor colour in it.
+    this.toGround.setHex(p.ground, THREE.SRGBColorSpace).lerp(BLACK, 0.6);
     this.toVig = p.vignette * 0.6;
+    this.toPostVig = p.vignette;
+
+    // The blob blends over the bottom of the sweep, which is bgBottom pulled
+    // partway toward the floor tint by the roll-off in the shader.
+    this.behindPlate.setHex(p.bgBottom, THREE.SRGBColorSpace);
+    this.behindPlate.lerp(TMP_GROUND.setHex(p.ground, THREE.SRGBColorSpace), 0.3);
+    this.paletteExposure = p.exposure;
 
     this.setExposure(p.exposure);
     this.fadeDur = Math.max(0, duration);
@@ -330,6 +364,8 @@ export class Backdrop {
     (u.uGlow.value as THREE.Color).lerpColors(this.fromGlow, this.toGlow, t);
     this.groundMat.color.lerpColors(this.fromGround, this.toGround, t);
     u.uVignette.value = this.fromVig + (this.toVig - this.fromVig) * t;
+    this.postVig = this.fromPostVig + (this.toPostVig - this.fromPostVig) * t;
+    this.syncPathDependent();
     this.fadeT = t;
   }
 
@@ -351,7 +387,8 @@ export class Backdrop {
   }
 }
 
-const WHITE = /* @__PURE__ */ new THREE.Color(0xffffff);
+const BLACK = /* @__PURE__ */ new THREE.Color(0x000000);
+const TMP_GROUND = /* @__PURE__ */ new THREE.Color();
 
 export function createBackdrop(opts: BackdropOpts): Backdrop {
   return new Backdrop(opts);
