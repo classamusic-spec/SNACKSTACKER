@@ -32,6 +32,12 @@ export function acesOutMatrixInverse(): THREE.Matrix3 {
 
 const IN_INV = /* @__PURE__ */ acesInMatrixInverse();
 const OUT_INV = /* @__PURE__ */ acesOutMatrixInverse();
+const IN_FWD = /* @__PURE__ */ new THREE.Matrix3().set(
+  0.59719, 0.35458, 0.04823, 0.076, 0.90834, 0.01566, 0.0284, 0.13383, 0.83777,
+);
+const OUT_FWD = /* @__PURE__ */ new THREE.Matrix3().set(
+  1.60475, -0.53108, -0.07367, -0.10208, 1.10813, -0.00605, -0.00327, -0.07276, 1.07602,
+);
 
 const tmpVec = /* @__PURE__ */ new THREE.Vector3();
 const tmpColor = /* @__PURE__ */ new THREE.Color();
@@ -67,6 +73,51 @@ export function acesInverse(
   out.set(Math.max(out.x, 0), Math.max(out.y, 0), Math.max(out.z, 0));
   out.multiplyScalar(0.6 / Math.max(exposure, 0.0001));
   return out;
+}
+
+/** Forward ACES, matching `acesFilmic` in shaders.ts. Writes into `v`. */
+export function acesForward(v: THREE.Vector3, exposure: number): THREE.Vector3 {
+  v.multiplyScalar(exposure / 0.6);
+  v.applyMatrix3(IN_FWD);
+  const fit = (x: number): number =>
+    (x * (x + 0.0245786) - 0.000090537) / (x * (0.983729 * x + 0.432951) + 0.238081);
+  v.set(fit(v.x), fit(v.y), fit(v.z));
+  v.applyMatrix3(OUT_FWD);
+  v.set(
+    THREE.MathUtils.clamp(v.x, 0, 1),
+    THREE.MathUtils.clamp(v.y, 0, 1),
+    THREE.MathUtils.clamp(v.z, 0, 1),
+  );
+  return v;
+}
+
+const encodeSRGB = (x: number): number =>
+  x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(Math.max(x, 0), 1 / 2.4) - 0.055;
+
+/**
+ * The alpha a dark overlay needs on the direct path to darken the cyclorama by
+ * the same visible amount it does on the composer path.
+ *
+ * They are not the same number. With a composer the overlay blends into a
+ * linear HDR buffer and ACES compresses the result afterwards, so removing 34%
+ * of the light costs far less than 34% of the displayed value. Drawing straight
+ * to the canvas, the same blend happens on already-encoded sRGB and lands at
+ * full strength. Solved here against the sweep colour behind the plate rather
+ * than guessed.
+ */
+export function directOverlayAlpha(
+  behind: THREE.Color,
+  composerAlpha: number,
+  exposure: number,
+): number {
+  acesInverse(behind, exposure, tmpVec).multiplyScalar(1 - composerAlpha);
+  acesForward(tmpVec, exposure);
+  const num =
+    encodeSRGB(tmpVec.x) * REC709.r + encodeSRGB(tmpVec.y) * REC709.g + encodeSRGB(tmpVec.z) * REC709.b;
+  const den =
+    encodeSRGB(behind.r) * REC709.r + encodeSRGB(behind.g) * REC709.g + encodeSRGB(behind.b) * REC709.b;
+  if (den <= 0.0001) return composerAlpha;
+  return THREE.MathUtils.clamp(1 - num / den, 0, 1);
 }
 
 const REC709 = { r: 0.2126, g: 0.7152, b: 0.0722 };
