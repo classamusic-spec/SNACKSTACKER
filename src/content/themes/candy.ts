@@ -909,6 +909,7 @@ export const candyTheme: ThemeDef = {
   foods,
   hero: [7, 4, 3, 2, 1, 0],
   plate: buildPlate,
-  scenery: buildScenery,
+  // TODO(environment): replaced by the per-theme environment builder.
+  // scenery: buildScenery,
   ambience: 'candy',
 };

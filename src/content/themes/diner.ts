@@ -619,6 +619,7 @@ export const dinerTheme: ThemeDef = {
   ],
   hero: [7, 1, 2, 3, 4, 0],
   plate: dinerPlate,
-  scenery: dinerScenery,
+  // TODO(environment): replaced by the per-theme environment builder.
+  // scenery: dinerScenery,
   ambience: 'diner',
 };

@@ -651,6 +651,7 @@ export const breakfastTheme: ThemeDef = {
   ],
   hero: [7, 0, 3, 4, 2, 1],
   plate: breakfastPlate,
-  scenery: breakfastScenery,
+  // TODO(environment): replaced by the per-theme environment builder.
+  // scenery: breakfastScenery,
   ambience: 'breakfast',
 };

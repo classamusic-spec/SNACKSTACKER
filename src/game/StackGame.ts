@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../content/api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../content/api';
 import { roundedBox } from '../content/kit';
 import { Emitter } from '../core/events';
 import { bounceEnvelope, clamp, clamp01, lerp } from '../core/math';
@@ -647,13 +647,30 @@ export class StackGame {
       console.error('[snackery] plate failed to build', err);
       this.plate = null;
     }
-    if (this.theme.scenery) {
+
+    // The table has to meet the underside of whatever plate the theme built —
+    // a geta board, a cake stand and an enamel tray are all different depths —
+    // so measure it rather than assuming a thickness.
+    let tableTopY = -0.35;
+    if (this.plate) {
+      const box = new THREE.Box3().setFromObject(this.plate);
+      if (Number.isFinite(box.min.y)) tableTopY = box.min.y;
+    }
+
+    if (this.theme.environment) {
+      const envCtx: EnvBuildCtx = {
+        tableTopY,
+        plateWidth: width,
+        baseFootprint: TUNING.BASE_FOOTPRINT,
+        rng: this.runRng.fork(9871),
+        quality: this.deps.quality,
+        materials: this.deps.materials,
+      };
       try {
-        const sceneryCtx = this.buildCtx(width * 3.2, width * 3.2, 0.2, -2, false);
-        this.scenery = this.theme.scenery(sceneryCtx);
+        this.scenery = this.theme.environment(envCtx);
         this.root.add(this.scenery);
       } catch (err) {
-        console.error('[snackery] scenery failed to build', err);
+        console.error('[snackery] environment failed to build', err);
         this.scenery = null;
       }
     }

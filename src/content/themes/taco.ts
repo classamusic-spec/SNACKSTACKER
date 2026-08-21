@@ -934,6 +934,7 @@ export const tacoTheme: ThemeDef = {
   foods,
   hero: [0, 1, 5, 2, 3, 4],
   plate: buildPlate,
-  scenery: buildScenery,
+  // TODO(environment): replaced by the per-theme environment builder.
+  // scenery: buildScenery,
   ambience: 'taco',
 };

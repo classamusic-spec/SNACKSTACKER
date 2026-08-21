@@ -768,6 +768,7 @@ export const pizzaTheme: ThemeDef = {
   ],
   hero: [0, 1, 2, 3, 5, 4],
   plate: pizzaPlate,
-  scenery: pizzaScenery,
+  // TODO(environment): replaced by the per-theme environment builder.
+  // scenery: pizzaScenery,
   ambience: 'pizza',
 };

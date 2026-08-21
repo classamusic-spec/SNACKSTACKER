@@ -44,6 +44,27 @@ export interface FoodDef {
   build(ctx: FoodBuildCtx): THREE.Object3D;
 }
 
+/**
+ * Context for building the world a tower is assembled in. Built once per run,
+ * not per layer, so it can afford more geometry than a food — but it must stay
+ * behind the tower and never compete with it for attention.
+ */
+export interface EnvBuildCtx {
+  /**
+   * World Y of the table's top surface. The plate is already sitting exactly
+   * here, so the table top must land on this plane — not above it, or it will
+   * poke through the plate.
+   */
+  tableTopY: number;
+  /** Footprint of the plate, so the table is sized in proportion to it. */
+  plateWidth: number;
+  /** Footprint of a full-size food layer. */
+  baseFootprint: number;
+  rng: Rng;
+  quality: QualityTier;
+  materials: MaterialLibrary;
+}
+
 export interface ThemeDef {
   id: ThemeId;
   name: string;
@@ -64,8 +85,14 @@ export interface ThemeDef {
   hero?: number[];
   /** The plate/board/tray the tower is built on. */
   plate(ctx: FoodBuildCtx): THREE.Object3D;
-  /** Scenery ring placed around the plate (booth seats, tatami, etc). Optional. */
-  scenery?(ctx: FoodBuildCtx): THREE.Object3D;
+  /**
+   * The place this theme happens in: the table the plate rests on, and the
+   * scene behind it — a backyard barbecue, a blossom garden, a piazza
+   * terrace. Everything must sit at or below `tableTopY` so the tower always
+   * reads against the sky, and must look right from any angle, because the
+   * home screen slowly turns the camera around it.
+   */
+  environment?(ctx: EnvBuildCtx): THREE.Object3D;
   /** Musical mood key for the audio engine. */
   ambience: 'diner' | 'sushi' | 'candy' | 'taco' | 'breakfast' | 'pizza';
 }
