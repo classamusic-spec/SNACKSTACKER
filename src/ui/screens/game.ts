@@ -3,7 +3,7 @@ import { createIconButton } from '../components/button';
 import type { UiCtx } from '../ctx';
 import { Bag, formatInt, h, setText, toggleClass } from '../dom';
 import { iconPause } from '../icons';
-import { EASE_IOS, animate, isReduced, pop, resetAnimations, runExit } from '../motion';
+import { EASE_IOS, EASE_OUT, animate, isReduced, pop, resetAnimations, runExit } from '../motion';
 
 export interface GameScreen {
   readonly el: HTMLElement;
@@ -102,11 +102,11 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
     animate(
       deltaEl,
       [
-        { transform: 'translate3d(0, 6px, 0) scale(0.92)', opacity: 0, offset: 0 },
-        { transform: 'translate3d(0, -6px, 0) scale(1)', opacity: 1, offset: 0.22 },
+        { transform: 'translate3d(0, 6px, 0) scale(0.92)', opacity: 0, offset: 0, easing: EASE_OUT },
+        { transform: 'translate3d(0, -6px, 0) scale(1)', opacity: 1, offset: 0.22, easing: EASE_IOS },
         { transform: 'translate3d(0, -30px, 0) scale(1)', opacity: 0, offset: 1 },
       ],
-      { duration: 720, easing: EASE_IOS },
+      { duration: 720, easing: 'linear' },
       'flourish',
     );
     bag.after(() => deltaEl.classList.remove('is-on'), 740);
@@ -210,13 +210,18 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
       perfectAnim = animate(
         perfect,
         [
-          { transform: 'translate3d(0, 8px, 0) scale(0.8)', opacity: 0, offset: 0 },
-          { transform: `translate3d(0, 0, 0) scale(${overshoot})`, opacity: 1, offset: 0.17 },
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.3 },
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.7 },
+          { transform: 'translate3d(0, 8px, 0) scale(0.8)', opacity: 0, offset: 0, easing: EASE_OUT },
+          {
+            transform: `translate3d(0, 0, 0) scale(${overshoot})`,
+            opacity: 1,
+            offset: 0.16,
+            easing: EASE_IOS,
+          },
+          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.3, easing: 'linear' },
+          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.74, easing: EASE_IOS },
           { transform: 'translate3d(0, -10px, 0) scale(1.04)', opacity: 0, offset: 1 },
         ],
-        { duration, easing: EASE_IOS },
+        { duration, easing: 'linear' },
         'timed',
       );
       perfectTimer = bag.after(() => perfect.classList.remove('is-on'), duration);
@@ -231,12 +236,12 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
       milestoneAnim = animate(
         milestone,
         [
-          { transform: 'translate3d(0, 12px, 0) scale(0.96)', opacity: 0, offset: 0 },
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.14 },
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.82 },
+          { transform: 'translate3d(0, 12px, 0) scale(0.96)', opacity: 0, offset: 0, easing: EASE_IOS },
+          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.16, easing: 'linear' },
+          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, offset: 0.84, easing: EASE_IOS },
           { transform: 'translate3d(0, -8px, 0) scale(1)', opacity: 0, offset: 1 },
         ],
-        { duration: 1200, easing: EASE_IOS },
+        { duration: 1200, easing: 'linear' },
         'timed',
       );
       milestoneTimer = bag.after(() => milestone.classList.remove('is-on'), 1200);

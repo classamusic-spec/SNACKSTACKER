@@ -449,10 +449,10 @@ function buildNori(ctx: FoodBuildCtx): THREE.Object3D {
   // rim, never from sheet thickness — thick nori reads as green cardboard.
   const t = Math.min(h * 0.2, 0.05);
   const top = sheet(w, t, d, {
-    arch: h * 0.7,
+    arch: h * 0.85,
     wave: h * 0.14,
     waveFreq: 2.2,
-    curlEdges: h * 0.2,
+    curlEdges: h * 0.14,
     seed: ctx.index * 3 + 1,
     segments: seg(ctx, 20, 14, 8),
   });
@@ -549,8 +549,14 @@ function buildAvocado(ctx: FoodBuildCtx): THREE.Object3D {
   const shardLen = step * (n === 1 ? 1.15 : 1.7);
   const shardThk = h * 0.46;
   const shardWid = S * 0.94;
-  const tilt = clamp((h - shardThk) / Math.max(shardLen, 1e-4), 0.06, 0.5);
-  const angle = Math.asin(clamp(tilt, 0, 0.85));
+  // Height of a lens of axes (shardLen, shardThk) tilted by t is
+  // sqrt(L^2 sin^2 t + T^2 cos^2 t); solve it for the angle that exactly fills
+  // the layer instead of guessing, or the fan ends up squat and finalize has
+  // to stretch it.
+  const den = shardLen * shardLen - shardThk * shardThk;
+  const num = h * h - shardThk * shardThk;
+  const sinT = den > 1e-6 && num > 0 ? Math.sqrt(clamp(num / den, 0, 1)) : 0.12;
+  const angle = Math.asin(clamp(sinT, 0.05, 0.82));
 
   const bodies: THREE.BufferGeometry[] = [];
   const inners: THREE.BufferGeometry[] = [];

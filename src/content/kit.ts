@@ -121,38 +121,61 @@ export function roundedBox(
   radius: number,
   segments = 3,
 ): THREE.BufferGeometry {
-  const r = clamp(radius, 0.0001, Math.min(width, height, depth) / 2 - 0.0005);
-  const geo = new THREE.BoxGeometry(width, height, depth, 1, 1, 1);
-  // Three has no rounded box primitive; build one from an extruded rounded
-  // rectangle plus a bevel, which gives clean quads and correct normals.
-  geo.dispose();
+  const w = Math.max(width, 1e-4);
+  const d = Math.max(depth, 1e-4);
+  const h = Math.max(height, 1e-4);
+  const r = clamp(radius, 1e-4, Math.min(w, d, h) / 2 - 1e-4);
 
-  const w = width / 2 - r;
-  const d = depth / 2 - r;
+  // ExtrudeGeometry grows its bevel OUTWARD from the profile, so the profile
+  // has to be inset by the bevel or the result overshoots its footprint — on a
+  // 0.15-wide cut sliver that overshoot is nearly 30%, which is very visible.
+  const bevel = Math.min(r, h / 2.2);
+  const sw = Math.max(w - bevel * 2, 1e-4);
+  const sd = Math.max(d - bevel * 2, 1e-4);
+  const sr = clamp(r - bevel, 1e-5, Math.min(sw, sd) / 2 - 1e-5);
+
+  const hx = sw / 2;
+  const hz = sd / 2;
+  const ix = hx - sr;
+  const iz = hz - sr;
+
   const shape = new THREE.Shape();
-  shape.moveTo(-w, -depth / 2);
-  shape.lineTo(w, -depth / 2);
-  shape.quadraticCurveTo(width / 2, -depth / 2, width / 2, -d);
-  shape.lineTo(width / 2, d);
-  shape.quadraticCurveTo(width / 2, depth / 2, w, depth / 2);
-  shape.lineTo(-w, depth / 2);
-  shape.quadraticCurveTo(-width / 2, depth / 2, -width / 2, d);
-  shape.lineTo(-width / 2, -d);
-  shape.quadraticCurveTo(-width / 2, -depth / 2, -w, -depth / 2);
+  shape.moveTo(-ix, -hz);
+  shape.lineTo(ix, -hz);
+  shape.quadraticCurveTo(hx, -hz, hx, -iz);
+  shape.lineTo(hx, iz);
+  shape.quadraticCurveTo(hx, hz, ix, hz);
+  shape.lineTo(-ix, hz);
+  shape.quadraticCurveTo(-hx, hz, -hx, iz);
+  shape.lineTo(-hx, -iz);
+  shape.quadraticCurveTo(-hx, -hz, -ix, -hz);
 
-  const bevel = Math.min(r, height / 2.2);
-  const out = new THREE.ExtrudeGeometry(shape, {
-    depth: Math.max(height - bevel * 2, 0.001),
-    bevelEnabled: bevel > 0.002,
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: Math.max(h - bevel * 2, 1e-4),
+    bevelEnabled: bevel > 1e-3,
     bevelThickness: bevel,
     bevelSize: bevel,
     bevelSegments: Math.max(1, segments),
     curveSegments: Math.max(2, segments + 1),
   });
-  out.rotateX(-Math.PI / 2);
-  out.translate(0, bevel, 0);
-  out.computeVertexNormals();
-  return out;
+  geo.rotateX(-Math.PI / 2);
+
+  // Curve tessellation can still leave a fraction of a percent out; normalise
+  // so callers can trust the footprint exactly.
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox!;
+  const sx = bb.max.x - bb.min.x;
+  const sz = bb.max.z - bb.min.z;
+  const sy = bb.max.y - bb.min.y;
+  geo.scale(sx > 1e-6 ? w / sx : 1, sy > 1e-6 ? h / sy : 1, sz > 1e-6 ? d / sz : 1);
+  geo.computeBoundingBox();
+  geo.translate(
+    -(geo.boundingBox!.max.x + geo.boundingBox!.min.x) / 2,
+    -geo.boundingBox!.min.y,
+    -(geo.boundingBox!.max.z + geo.boundingBox!.min.z) / 2,
+  );
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /**

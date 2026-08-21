@@ -9,8 +9,8 @@
 import * as THREE from 'three';
 import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import { Rng } from '../../core/rng';
-import { TAU, clamp, clamp01 } from '../../core/math';
-import { fbm2, foldedShell, mergeAll, mesh, pour, puck, roughen, tintGeometry } from '../kit';
+import { TAU, clamp } from '../../core/math';
+import { foldedShell, mergeAll, mesh, pour, puck, roughen, tintGeometry } from '../kit';
 import {
   areaRatio,
   fillFlat,
@@ -288,45 +288,51 @@ function buildShell(ctx: FoodBuildCtx): THREE.Object3D {
   const h = safeH(ctx);
   const g = new THREE.Group();
 
-  // The trough runs along X and opens across Z, so a 2.4 x 0.12 cut reads as a
-  // clean cross-section of a taco rather than a broken shape.
+  // kit's foldedShell is an ARCH extruded along Z: the fold sits at the top and
+  // the two solid cross-section faces are at x = +/-w/2. That is a folded
+  // tortilla seen end-on, which is exactly the read we want.
   const shell = foldedShell(w, h, d, {
     openness: 0.5,
     segments: seg(ctx, 30, 22, 13),
     thickness: 0.11,
   });
-  // Taper the ends and ripple the top edge: without this the long side of an
-  // extruded trough is a plain rectangle and the taco stops reading as a taco.
-  const spos = shell.attributes.position as THREE.BufferAttribute;
-  const shw = Math.max(w / 2, 1e-4);
-  for (let i = 0; i < spos.count; i++) {
-    const x = spos.getX(i);
-    const nx = clamp01(Math.abs(x) / shw);
-    const f = 1 - 0.26 * nx * nx * nx - 0.05 * fbm2(x * 3.3 + ctx.index, 0, 2);
-    spos.setY(i, spos.getY(i) * Math.max(f, 0.35));
-  }
-  spos.needsUpdate = true;
-  shell.computeVertexNormals();
   roughen(shell, Math.min(d, h) * 0.02, 13, ctx.index * 3 + 2);
+  // Normalise the shell itself instead of letting finalize stretch the whole
+  // group, so the filling below is placed against its real height.
+  shell.computeBoundingBox();
+  const sbb = shell.boundingBox;
+  if (sbb) {
+    const ext = sbb.max.y - sbb.min.y;
+    if (ext > 1e-5) shell.scale(1, h / ext, 1);
+    shell.computeBoundingBox();
+    if (shell.boundingBox) shell.translate(0, -shell.boundingBox.min.y, 0);
+  }
   g.add(mesh(shell, shellMat(ctx)));
 
-  // a little lettuce and cheese peeking out of the fold
+  // Lettuce and cheese spilling out of the two open ends. They straddle the end
+  // faces so half the bit is inside the fold and half pokes out — placing them
+  // inside the arch would hide them behind the solid cross-section.
   if (!ctx.offcut && d > 0.5 && w > 0.4 && ctx.quality !== 'low') {
     const ps = propScale(ctx);
-    const bits = scatterOnSurface(
-      propCount(ctx, 60, 3),
-      w * 0.86,
-      d * 0.42,
-      () => h * 0.46,
-      (_i, rng) => {
-        const green = rng.bool(0.6);
-        const s = 0.05 * ps * rng.range(0.7, 1.3);
-        const bit = new THREE.BoxGeometry(s * (green ? 2.6 : 3.2), s * 0.32, s * (green ? 1.5 : 0.42));
-        return tintGeometry(bit, green ? 0x86c047 : 0xf6c64a);
-      },
-      { seed: ctx.index * 19 + 4, margin: 0.06 * ps, randomTilt: 0.5 },
-    );
-    if (bits) g.add(mesh(bits, fillingMat(ctx)));
+    const rng = new Rng((ctx.index * 977 + 13) >>> 0);
+    const per = Math.max(3, Math.round(propCount(ctx, 30, 4) / 2));
+    const bits: THREE.BufferGeometry[] = [];
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < per; i++) {
+        const green = rng.bool(0.55);
+        const s = 0.055 * ps * rng.range(0.7, 1.3);
+        const bit = new THREE.BoxGeometry(s * 1.7, s * (green ? 0.5 : 0.34), s * (green ? 2.2 : 2.9));
+        bit.rotateX(rng.signed() * 0.6);
+        bit.rotateY(rng.signed() * 0.5);
+        const zz = rng.signed() * d * 0.3;
+        const closeness = clamp(1 - Math.abs(zz) / (d * 0.52), 0, 1);
+        const yy = Math.max(h * 0.07, h * (0.08 + rng.next() * 0.34) * closeness);
+        bit.translate(sx * w * 0.5, yy, zz);
+        bits.push(tintGeometry(bit, green ? 0x86c047 : 0xf6c64a));
+      }
+    }
+    const fill = mergeAll(bits);
+    if (fill) g.add(mesh(fill, fillingMat(ctx)));
   }
 
   return finalize(g, ctx);

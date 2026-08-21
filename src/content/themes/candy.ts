@@ -337,7 +337,7 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   const radial = seg(ctx, 40, 28, 16);
   const frillSegs = seg(ctx, 64, 44, 24);
 
-  const bottom = puck(w, shellH, d, {
+  const bottom = puck(w * 0.95, shellH, d * 0.95, {
     domed: 0.18,
     wobble: 0.045,
     taper: 0.04,
@@ -348,9 +348,9 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   g.add(mesh(bottom, shellMat));
 
   // "the feet" — the ruffled frill that makes a macaron a macaron
-  const feetLow = ruffle(w * 1.01, footH, d * 1.01, {
+  const feetLow = ruffle(w, footH, d, {
     folds: 22,
-    amplitude: 0.16,
+    amplitude: 0.18,
     seed: ctx.index * 2 + 1,
     segments: frillSegs,
   });
@@ -358,7 +358,7 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   flm.position.y = shellH - footH * 0.92;
   g.add(flm);
 
-  const filling = puck(w * 0.87, fillH, d * 0.87, {
+  const filling = puck(w * 0.8, fillH, d * 0.8, {
     domed: 0,
     wobble: 0.22,
     radial: seg(ctx, 32, 22, 14),
@@ -370,9 +370,9 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   g.add(fm);
 
   const topBase = shellH * 0.94 + fillH * 0.86;
-  const feetHigh = ruffle(w * 1.01, footH, d * 1.01, {
+  const feetHigh = ruffle(w, footH, d, {
     folds: 22,
-    amplitude: 0.16,
+    amplitude: 0.18,
     seed: ctx.index * 2 + 5,
     segments: frillSegs,
   });
@@ -380,7 +380,7 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   fhm.position.y = topBase - footH * 0.08;
   g.add(fhm);
 
-  const top = puck(w, shellH, d, {
+  const top = puck(w * 0.95, shellH, d * 0.95, {
     domed: 0.55,
     wobble: 0.045,
     taper: 0.09,
@@ -474,10 +474,10 @@ function buildMarshmallow(ctx: FoodBuildCtx): THREE.Object3D {
   g.add(mesh(low, mat));
 
   const highH = h * 0.45;
-  const high = puck(w * 0.985, highH, d * 0.985, {
-    domed: 0.42,
+  const high = puck(w, highH, d, {
+    domed: 0.3,
     wobble: 0.05,
-    taper: 0.12,
+    taper: 0.05,
     radial,
     rings: 6,
     seed: ctx.index + 6,

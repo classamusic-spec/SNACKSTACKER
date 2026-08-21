@@ -196,7 +196,7 @@ const bunCrown: FoodDef = {
     g.add(mesh(body, bunMat(ctx.materials)));
 
     // sesame seeds, placed along the dome so none of them float
-    const n = areaCount(ctx, ctx.quality === 'high' ? 30 : 18);
+    const n = areaCount(ctx, pickQ(ctx, 12, 20, 30));
     if (n > 0 && !ctx.offcut) {
       const len = propSize(ctx, 0.05, 0.072);
       const rng = ctx.rng.fork(11 + ctx.index);
@@ -512,7 +512,8 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
   );
 
   // off-white melamine face, sitting exactly on y = 0
-  const face = discFace(w * 0.95, d * 0.95, radial);
+  // Stops short of the rim tube: coplanar overlap here z-fights into dashes.
+  const face = discFace(w * 0.79, d * 0.79, radial);
   g.add(
     mesh(
       face,
@@ -530,7 +531,7 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
 
   // the chrome rim: outer edge exactly on the footprint, crest exactly on y = 0
   const rim = ringTorus(w, d, 0.055, t * 0.46, pickQ(ctx, 6, 8, 10), pickQ(ctx, 24, 40, 64));
-  rim.translate(0, -t * 0.46, 0);
+  rim.translate(0, -t * 0.46 - 0.005, 0);
   g.add(mesh(rim, chromeMat(m), { cast: false }));
   return g;
 }

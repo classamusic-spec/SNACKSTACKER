@@ -348,7 +348,7 @@
   font-weight: 700;
   letter-spacing: -0.045em;
   line-height: 0.98;
-  text-shadow: 0 6px 24px rgba(0, 0, 0, 0.38);
+  text-shadow: var(--ink-halo), 0 8px 30px rgba(0, 0, 0, 0.3);
 }
 
 .sn-wm__l {
@@ -380,8 +380,8 @@
   text-transform: uppercase;
   letter-spacing: 0.28em;
   text-indent: 0.28em;
-  opacity: 0.62;
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  opacity: 0.72;
+  text-shadow: var(--ink-halo);
 }
 
 .sn-wm--hero .sn-wm__word {
@@ -445,6 +445,11 @@
   gap: var(--s-5);
 }
 
+.sn-home__row .sn-icon {
+  width: 24px;
+  height: 24px;
+}
+
 /* -------------------------------------------------------------- game HUD */
 
 .sn-hud {
@@ -462,13 +467,14 @@
   left: 0;
   right: 0;
   top: 0;
-  height: calc(var(--safe-t) + 250px);
+  height: calc(var(--safe-t) + 340px);
   pointer-events: none;
   background: linear-gradient(
     180deg,
-    rgba(0, 0, 0, 0.2) 0%,
-    rgba(0, 0, 0, 0.13) 34%,
-    rgba(0, 0, 0, 0.05) 66%,
+    rgba(0, 0, 0, 0.24) 0%,
+    rgba(0, 0, 0, 0.17) 30%,
+    rgba(0, 0, 0, 0.1) 58%,
+    rgba(0, 0, 0, 0.04) 80%,
     rgba(0, 0, 0, 0) 100%
   );
 }
@@ -540,9 +546,7 @@
   letter-spacing: -0.03em;
   line-height: 1;
   color: rgba(255, 255, 255, 0.85);
-  text-shadow:
-    0 2px 3px rgba(0, 0, 0, 0.2),
-    0 8px 34px rgba(0, 0, 0, 0.45);
+  text-shadow: var(--ink-halo), 0 8px 34px rgba(0, 0, 0, 0.4);
   will-change: transform;
 }
 
@@ -610,8 +614,8 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.44);
-  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.58);
+  text-shadow: var(--ink-halo);
 }
 
 .sn-hud__dot {
@@ -645,26 +649,45 @@
   font-weight: 750;
   text-transform: uppercase;
   line-height: 1;
-  text-shadow: 0 3px 18px rgba(0, 0, 0, 0.42);
+  /* Denser halo: this banner lands anywhere on the backdrop, including the
+     palest part of Candy Stack. */
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 2px 12px rgba(0, 0, 0, 0.5),
+    0 8px 28px rgba(0, 0, 0, 0.3);
 }
 
+/* All tiers carry the theme accent — it is the one colour picked to read
+   against its own backdrop. The tier escalates size, tracking and glow. */
 .sn-perfect--t0 .sn-perfect__text {
   font-size: var(--t-22);
   letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.9);
+  text-indent: 0.08em;
+  color: var(--accent);
 }
 
 .sn-perfect--t1 .sn-perfect__text {
   font-size: 28px;
   letter-spacing: 0.1em;
-  color: rgba(255, 255, 255, 0.96);
+  text-indent: 0.1em;
+  color: var(--accent);
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 2px 13px rgba(0, 0, 0, 0.45),
+    0 0 18px rgba(var(--accent-rgb), 0.32);
 }
 
 .sn-perfect--t2 .sn-perfect__text {
   font-size: var(--t-34);
   letter-spacing: 0.12em;
   color: var(--accent);
-  text-shadow: 0 3px 18px rgba(0, 0, 0, 0.42), 0 0 22px rgba(var(--accent-rgb), 0.45);
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 2px 14px rgba(0, 0, 0, 0.42),
+    0 0 26px rgba(var(--accent-rgb), 0.5);
 }
 
 .sn-perfect--t3 .sn-perfect__text {
@@ -673,8 +696,10 @@
   text-indent: 0.15em;
   color: var(--accent);
   text-shadow:
-    0 3px 18px rgba(0, 0, 0, 0.45),
-    0 0 34px rgba(var(--accent-rgb), 0.85);
+    0 0 1px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 2px 14px rgba(0, 0, 0, 0.42),
+    0 0 36px rgba(var(--accent-rgb), 0.85);
 }
 
 @media (max-width: 360px) {
@@ -783,8 +808,8 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.78);
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.86);
+  text-shadow: var(--ink-halo);
 }
 
 @keyframes sn-ring {

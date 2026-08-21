@@ -32,22 +32,43 @@ const shot = async (page, name) => {
 const stats = (page) => page.evaluate(() => window.__snackeryStats ?? null);
 const tap = (page, y = 0.55) => page.mouse.click(PHONE.width / 2, PHONE.height * y);
 
-/** Tap when the sliding layer is close to aligned — i.e. actually play well. */
-async function playWell(page, { drops, tolerance = 0.07, budgetMs = 20000 }) {
-  const deadline = Date.now() + budgetMs;
-  let made = 0;
-  while (made < drops && Date.now() < deadline) {
-    const s = await stats(page);
-    if (!s || s.state !== 'playing') break;
-    if (s.offset !== null && Math.abs(s.offset) <= tolerance) {
-      await tap(page);
-      made++;
-      await page.waitForTimeout(90);
-    } else {
-      await page.waitForTimeout(16);
-    }
-  }
-  return made;
+/**
+ * Tap when the sliding layer is aligned — i.e. actually play well. The decision
+ * runs inside the page at frame rate: polling over CDP costs tens of
+ * milliseconds per sample and misses the alignment window entirely.
+ */
+function playWell(page, { drops, tolerance = 0.09, budgetMs = 25000 }) {
+  return page.evaluate(
+    ({ drops, tolerance, budgetMs }) =>
+      new Promise((resolve) => {
+        const canvas = document.getElementById('gl');
+        const deadline = performance.now() + budgetMs;
+        let made = 0;
+        let cooldown = 0;
+        const step = () => {
+          const s = window.__snackeryStats;
+          if (!s || s.state !== 'playing' || performance.now() > deadline) {
+            resolve(made);
+            return;
+          }
+          if (cooldown > 0) cooldown--;
+          else if (s.offset !== null && Math.abs(s.offset) <= tolerance) {
+            canvas.dispatchEvent(
+              new PointerEvent('pointerdown', { bubbles: true, cancelable: true }),
+            );
+            made++;
+            cooldown = 8;
+            if (made >= drops) {
+              resolve(made);
+              return;
+            }
+          }
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }),
+    { drops, tolerance, budgetMs },
+  );
 }
 
 const openAndShoot = async (page, name, label) => {
@@ -108,7 +129,7 @@ const run = async () => {
   await shot(page, '05-game-early');
   console.log('  stats', JSON.stringify(await stats(page)));
 
-  const more = await playWell(page, { drops: 16, budgetMs: 30000 });
+  const more = await playWell(page, { drops: 18, budgetMs: 35000 });
   console.log(`  clean drops (total): ${made + more}`);
   await page.waitForTimeout(400);
   await shot(page, '06-game-tall');

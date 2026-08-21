@@ -101,16 +101,22 @@ export function runExit(
   anim.addEventListener('cancel', finish);
 }
 
-/** Score / chip "pop": scale up fast, settle on the iOS curve. */
+/**
+ * Score / chip "pop": scale up fast, settle on the iOS curve.
+ *
+ * NOTE: multi-keyframe animations always carry their easing **per keyframe**
+ * and run `linear` at the animation level. An animation-level easing warps the
+ * whole timeline, which silently collapses any hold phase.
+ */
 export function pop(el: Element, scale = 1.12, duration = 260): Animation | null {
   return animate(
     el,
     [
-      { transform: 'scale(1)', offset: 0 },
-      { transform: `scale(${scale})`, offset: 0.32 },
+      { transform: 'scale(1)', offset: 0, easing: EASE_OUT },
+      { transform: `scale(${scale})`, offset: 0.34, easing: EASE_IOS },
       { transform: 'scale(1)', offset: 1 },
     ],
-    { duration, easing: EASE_IOS },
+    { duration, easing: 'linear' },
     'flourish',
   );
 }

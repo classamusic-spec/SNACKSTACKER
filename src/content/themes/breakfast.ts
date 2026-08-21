@@ -530,7 +530,8 @@ function breakfastPlate(ctx: FoodBuildCtx): THREE.Object3D {
 
   // The blue rim stripe is glaze, not geometry — painting it keeps the plate
   // top a single clean plane at y = 0.
-  const face = discFace(w * 0.95, d * 0.95, radial);
+  // Stops short of the rim tube: coplanar overlap here z-fights into dashes.
+  const face = discFace(w * 0.80, d * 0.80, radial);
   g.add(
     mesh(
       face,
@@ -547,7 +548,7 @@ function breakfastPlate(ctx: FoodBuildCtx): THREE.Object3D {
   );
 
   const lip = ringTorus(w, d, 0.045, t * 0.44, pickQ(ctx, 6, 8, 10), pickQ(ctx, 24, 40, 64));
-  lip.translate(0, -t * 0.44, 0);
+  lip.translate(0, -t * 0.44 - 0.005, 0);
   g.add(mesh(lip, ceramicMat(m), { cast: false }));
   return g;
 }
