@@ -432,7 +432,20 @@ async function boot(): Promise<void> {
   kit.render();
   ui.setLoadProgress(1);
 
-  ticker.start(({ dt, elapsed }) => {
+  // A small, always-on probe. The QA harness reads it; it costs one object
+  // write per frame and makes "is it actually 60fps?" answerable.
+  const stats = {
+    fps: 0,
+    drawCalls: 0,
+    triangles: 0,
+    programs: 0,
+    layers: 0,
+    tier: kit.quality.tier as string,
+    state: state as string,
+  };
+  (window as unknown as { __snackeryStats?: typeof stats }).__snackeryStats = stats;
+
+  ticker.start(({ dt, elapsed, fps }) => {
     if (state !== 'paused') game.update(dt, elapsed);
 
     if (state === 'home' || state === 'boot') rig.update(dt, 2.2);
@@ -442,6 +455,14 @@ async function boot(): Promise<void> {
     vfx.update(dt, elapsed);
     kit.update(dt, elapsed);
     kit.render();
+
+    stats.fps = Math.round(fps);
+    stats.drawCalls = kit.renderer.info.render.calls;
+    stats.triangles = kit.renderer.info.render.triangles;
+    stats.programs = kit.renderer.info.programs?.length ?? 0;
+    stats.layers = game.layerCount;
+    stats.tier = kit.quality.tier;
+    stats.state = state;
   });
 
   requestAnimationFrame(() => ui.dismissBoot());

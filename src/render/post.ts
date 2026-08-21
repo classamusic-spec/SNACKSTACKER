@@ -23,6 +23,13 @@ import { GLSL_ACES, GLSL_DITHER, GLSL_FULLSCREEN_VERT, GLSL_SRGB } from './shade
  * pass is real money.
  */
 
+/**
+ * Threshold sits just above the brightest the cyclorama can reach (see
+ * backdrop.ts) so bloom is fed by specular highlights and glaze, not by a
+ * cream-coloured wall filling most of the frame.
+ */
+const BLOOM_THRESHOLD = 1.02;
+
 const FINISH_FRAG = /* glsl */ `
 uniform sampler2D tDiffuse;
 uniform vec2 uResolution;
@@ -83,7 +90,7 @@ const FinishShader = {
     uExposure: { value: 1.05 },
     uVignette: { value: 0.36 },
     uGrain: { value: 0.028 },
-    uAberration: { value: 0.9 },
+    uAberration: { value: 0.03 },
   },
   vertexShader: GLSL_FULLSCREEN_VERT,
   fragmentShader: FINISH_FRAG,
@@ -153,7 +160,7 @@ class Composed implements PostChain {
       new THREE.Vector2(size.x * this.bloomScale, size.y * this.bloomScale),
       palette.bloomStrength,
       0.5,
-      0.85,
+      BLOOM_THRESHOLD,
     );
     this.composer.addPass(this.bloom);
 
@@ -161,7 +168,7 @@ class Composed implements PostChain {
     this.finish.uniforms.uVignette.value = palette.vignette;
     this.finish.uniforms.uExposure.value = palette.exposure;
     this.finish.uniforms.uGrain.value = tier === 'high' ? 0.028 : 0;
-    this.finish.uniforms.uAberration.value = tier === 'high' ? 0.9 : 0;
+    this.finish.uniforms.uAberration.value = tier === 'high' ? 0.03 : 0;
     this.composer.addPass(this.finish);
   }
 

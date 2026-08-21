@@ -129,9 +129,9 @@ function paintLightPool(size: number): THREE.Texture | null {
   const ctx = s.ctx;
   const half = size / 2;
   const g = ctx.createRadialGradient(half, half, 0, half, half, half);
-  g.addColorStop(0, '#ffffff');
-  g.addColorStop(0.35, '#efefef');
-  g.addColorStop(1, '#b4b4b4');
+  g.addColorStop(0, '#e6e6e6');
+  g.addColorStop(0.35, '#d2d2d2');
+  g.addColorStop(1, '#8c8c8c');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
   const tex = new THREE.CanvasTexture(s.source);
@@ -201,7 +201,7 @@ export class Backdrop {
         uVignette: { value: 0.22 },
         uDirect: { value: opts.direct ? 1 : 0 },
         uExposure: { value: 1.05 },
-        uMaxLinear: { value: 1.15 },
+        uMaxLinear: { value: 1.0 },
         uAcesInInv: { value: inIn },
         uAcesOutInv: { value: outIn },
       },
@@ -308,7 +308,7 @@ export class Backdrop {
     this.toGlow.setHex(p.key, THREE.SRGBColorSpace);
     // The floor is lifted slightly toward white so the baked pool of light has
     // headroom to read as light rather than as a stain.
-    this.toGround.setHex(p.ground, THREE.SRGBColorSpace).lerp(WHITE, 0.16);
+    this.toGround.setHex(p.ground, THREE.SRGBColorSpace).lerp(WHITE, 0.06);
     this.toVig = p.vignette * 0.6;
 
     this.setExposure(p.exposure);

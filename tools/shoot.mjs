@@ -73,20 +73,37 @@ const run = async () => {
     await page.waitForTimeout(700);
   }
   await shot(page, '03-game-stacked');
+  console.log('  stats@6', JSON.stringify(await readStats()));
 
   // Drop repeatedly until the run ends.
   for (let i = 0; i < 40; i++) {
     await tapCentre(page);
     await page.waitForTimeout(240);
   }
-  await page.waitForTimeout(2600);
+  console.log('  stats@deep', JSON.stringify(await readStats()));
+  await page.waitForTimeout(2800);
   await shot(page, '04-result');
 
-  const perf = await page.evaluate(() => {
-    const w = window;
-    return w.__snackeryStats ?? null;
-  });
-  if (perf) console.log('  stats', JSON.stringify(perf));
+  // Store and settings sheets.
+  const openSheet = async (pattern, name) => {
+    const btn = page.locator(`button[aria-label*="${pattern}" i], button:has-text("${pattern}")`).first();
+    if (await btn.count()) {
+      await btn.click();
+      await page.waitForTimeout(900);
+      await shot(page, name);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(600);
+    } else {
+      console.log(`  (no control matching "${pattern}")`);
+    }
+  };
+  const home = page.locator('button', { hasText: /home/i }).first();
+  if (await home.count()) { await home.click(); await page.waitForTimeout(1200); }
+  await shot(page, '05-home-after');
+  await openSheet('Shop', '06-store');
+  await openSheet('Settings', '07-settings');
+
+  const readStats = () => page.evaluate(() => window.__snackeryStats ?? null);
 
   await browser.close();
   if (errors.length) {
