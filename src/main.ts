@@ -58,10 +58,16 @@ async function boot(): Promise<void> {
     return chosen === 'auto' ? device.suggestedQuality : chosen;
   };
 
+  // Resolve the saved theme before the renderer exists, so the very first
+  // frame is already in the player's palette rather than flashing the default.
+  let theme: ThemeDef = themes.byId(meta.data.selectedTheme);
+
   const kit = createSceneKit({
     canvas,
     quality: resolveQuality(),
     pixelRatio: Math.min(window.devicePixelRatio || 1, device.maxPixelRatio),
+    palette: theme.palette,
+    reducedMotion: settings().reducedMotion,
   });
 
   const rig = new CameraRig(kit.camera);
@@ -69,7 +75,6 @@ async function boot(): Promise<void> {
   const audio = createAudioEngine();
 
   let state: AppState = 'boot';
-  let theme: ThemeDef = themes.byId(meta.data.selectedTheme);
   let lastResult: RunResult | null = null;
   /** Mirrors the run's live HUD numbers so a partial refresh never blanks them. */
   const hud = { score: 0, layers: 0, combo: 0 };

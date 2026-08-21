@@ -225,7 +225,9 @@ const riceGrainMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const salmonMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.physical('sushi.salmon', {
-    color: 0xff7a55,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('sushi.salmon.albedo', paintSalmon, { size: 256 }),
     roughness: 0.32,
     metalness: 0,
@@ -243,7 +245,9 @@ const salmonMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const noriMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('sushi.nori', {
-    color: 0x1b2b1e,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('sushi.nori.albedo', paintNori, { size: 128 }),
     bumpMap: ctx.materials.dataTexture('sushi.nori.bump', paintNoriBump, { size: 128 }),
     bumpScale: 0.006,
@@ -254,7 +258,9 @@ const noriMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const tamagoMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('sushi.tamago', {
-    color: 0xf5c542,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('sushi.tamago.albedo', paintTamago, { size: 128 }),
     roughness: 0.5,
     metalness: 0,

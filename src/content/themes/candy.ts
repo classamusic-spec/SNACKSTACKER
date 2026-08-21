@@ -222,7 +222,9 @@ const sugarMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const marshmallowMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('candy.marshmallow', {
-    color: 0xfff3f7,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('candy.marshmallow.albedo', paintMarshmallow, { size: 128 }),
     roughness: 0.95,
     metalness: 0,
@@ -230,7 +232,9 @@ const marshmallowMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const chocolateMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('candy.chocolate', {
-    color: 0x4a2618,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('candy.chocolate.albedo', paintChocolate, { size: 128 }),
     roughness: 0.28,
     metalness: 0,
@@ -238,7 +242,9 @@ const chocolateMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const biscuitMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('candy.wafer.biscuit', {
-    color: 0xe8c489,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('candy.wafer.albedo', paintWafer, { size: 128 }),
     bumpMap: ctx.materials.dataTexture('candy.wafer.bump', paintWaffleBump, { size: 128 }),
     bumpScale: 0.012,
@@ -306,7 +312,9 @@ const stickMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const nougatMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('candy.nougat', {
-    color: 0xf3e3c2,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('candy.nougat.albedo', paintNougat, { size: 128 }),
     roughness: 0.72,
     metalness: 0,

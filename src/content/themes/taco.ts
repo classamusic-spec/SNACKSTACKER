@@ -142,7 +142,9 @@ function paintSerape(c: CanvasRenderingContext2D, size: number): void {
 
 const shellMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('taco.shell', {
-    color: 0xe0a040,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('taco.shell.albedo', paintShell, { size: 256 }),
     bumpMap: ctx.materials.dataTexture('taco.shell.bump', paintShellBump, { size: 128 }),
     bumpScale: 0.02,
@@ -177,7 +179,9 @@ const beefBedMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const guacMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.standard('taco.guac', {
-    color: 0x7fa84b,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('taco.guac.albedo', paintGuac, { size: 128 }),
     roughness: 0.85,
     metalness: 0,
@@ -212,7 +216,9 @@ const picoMat = (ctx: FoodBuildCtx): THREE.Material =>
 
 const quesoMat = (ctx: FoodBuildCtx): THREE.Material =>
   ctx.materials.physical('taco.queso', {
-    color: 0xf2b93b,
+    // The painted albedo already carries this food's hue; three multiplies
+    // color by map, so tinting here too would square it toward black.
+    color: 0xffffff,
     map: ctx.materials.texture('taco.queso.albedo', paintQueso, { size: 128 }),
     roughness: 0.22,
     metalness: 0,
