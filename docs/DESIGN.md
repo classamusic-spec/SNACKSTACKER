@@ -60,9 +60,15 @@ This document is the single source of truth. Every subsystem must conform to it.
 | `PERFECT_REGROW` | `0.06` | footprint returned per perfect |
 | `START_SPEED` | `1.55` | units/sec |
 | `MAX_SPEED` | `4.60` | reached ~layer 55 |
-| `TRAVEL` | `3.10 → 3.60` | slide amplitude |
+| `TRAVEL` | `1.70 → 2.00` | slide amplitude; the camera grants only what fits |
 | `COURSE_LENGTH` | `8` | layers per course |
 | `Y_ORIGIN` | plate top = `y = 0` | towers grow +Y |
+| `CAM_FOV` | `46` | portrait is narrow; a longer lens pushed the food too far away |
+| `CAM_LOOK_LIFT` | `0.25` | how far above the tower top the camera aims |
+
+The camera derives its distance from the viewport aspect so the sliding layer
+is always fully on screen, then hands back only as much travel as actually
+fits. Do not hard-code a framing distance.
 
 ---
 
@@ -73,6 +79,7 @@ This document is the single source of truth. Every subsystem must conform to it.
 - **Light:** three-point studio rig. Warm key at 35° with soft shadows, cool fill, bright rim to separate the tower from the backdrop. ACES Filmic tonemapping, exposure ≈ 1.05. Never flat-lit.
 - **Backdrop:** infinite seamless gradient sweep (a photographer's cyclorama), tinted per theme, with a soft vignette. No skyboxes, no horizons, no clutter. The tower is the hero.
 - **Materials:** physically-based and *specific*. Bread is rough with sheen. Glaze and syrup use clearcoat. Gummies use transmission. Chocolate is smooth and dark with a tight highlight. Cheese has subsurface warmth. Never use a default gray.
+- **Albedo maps carry hue OR the material does — never both.** Three multiplies `color` by `map`, so a painted texture that already contains the food's colour must sit on `color: 0xffffff`. Tinting both squares the colour: it is what turned nori into a black void and chocolate into a black slab. A map that only *modulates* (char flecks, crumb, dust) is painted near-white and may sit over a tinted base.
 - **Silhouette:** every food must be identifiable as a black silhouette at 120px. This is the test.
 - **Colour:** food is saturated and warm; the world is desaturated and cool. Contrast makes it edible.
 - **Depth of field:** subtle. Foreground/background falloff via fog, not an expensive DOF pass.
@@ -100,6 +107,13 @@ This document is the single source of truth. Every subsystem must conform to it.
 | **Breakfast Rush** | $1.99 | Pancakes, bacon, and a lake of syrup. | pancake, syrup pool, butter pat, crisp bacon, fried egg, hash brown, blueberry scatter, waffle |
 | **Pizza Piazza** | $1.99 | Deep dish, thin crust, endless cheese. | dough base, tomato sauce, mozzarella, pepperoni, basil leaves, olives, bell pepper, parmesan dust |
 | **Full Menu bundle** | $4.99 | Every theme, forever. | — grants all five paid themes, badged *Best value* |
+
+Every paid theme is also unlockable with coins earned by playing (1,200 for
+the first three, 1,500 for Breakfast Rush and Pizza Piazza). Coins have no
+other sink, so when a player can afford a theme with coins that is strictly
+the better deal and the store's single action takes it — the card must then
+say so rather than showing a price we will not charge. There is deliberately
+no "remove ads" SKU: the game has no ads.
 
 ---
 
