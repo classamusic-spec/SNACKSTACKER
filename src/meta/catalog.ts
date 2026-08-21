@@ -49,7 +49,6 @@ const TABLE: Sku[] = [
     badge: 'Best value',
     grants: [...PAID_THEME_SKUS],
   },
-  { id: 'remove_ads', themeId: null, priceUsd: 2.99, coinPrice: null },
 ];
 
 function freezeSku(sku: Sku): Sku {
@@ -145,10 +144,5 @@ export const SKU_COPY: Readonly<Partial<Record<SkuId, SkuCopy>>> = Object.freeze
     name: 'Full Menu',
     tagline: 'Every theme, forever. One tap, done.',
     glyph: '🍱',
-  }),
-  remove_ads: Object.freeze({
-    name: 'No Interruptions',
-    tagline: 'Never break a run again.',
-    glyph: '🤫',
   }),
 });

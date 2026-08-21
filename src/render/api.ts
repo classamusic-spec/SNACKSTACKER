@@ -92,6 +92,14 @@ export interface SceneKit {
   applyPalette(palette: ThemePaletteLike): void;
   /** Kick a short screen-shake; magnitude in world units. */
   shake(magnitude: number, duration?: number): void;
+  /** 0 kills shake entirely (reduced motion), 1 is the authored amount. */
+  setShakeScale(scale: number): void;
+  /** Pin the shadow frustum to a height; null tracks the camera. */
+  setFocusY(y: number | null): void;
+  /** Tell the backdrop where the plate sits, for the contact shadow. */
+  setGround(y: number, contactRadius?: number, contactStrength?: number): void;
+  /** Apply tier-correct shadow flags to anything the game adds to the scene. */
+  applyShadowFlags(root: THREE.Object3D, cast?: boolean, receive?: boolean): void;
   /** Momentary bloom/exposure punch, 0..1. */
   flash(amount: number): void;
   resize(width: number, height: number): void;

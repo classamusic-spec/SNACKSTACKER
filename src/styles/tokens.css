@@ -1,0 +1,94 @@
+/* ==========================================================================
+   Snackery design tokens.
+
+   Theme-driven properties (--accent, --bg-top, ...) are written onto .sn-root
+   at runtime by ui/theme.ts from ThemeDef.palette. The values here are the
+   neutral fallbacks used before the first applyTheme() call.
+   ========================================================================== */
+
+.sn-root {
+  /* ---- type ------------------------------------------------------------ */
+  --font-ui: -apple-system, "SF Pro Display", "Segoe UI Variable", Inter,
+    system-ui, sans-serif;
+
+  --t-12: 12px;
+  --t-14: 14px;
+  --t-17: 17px;
+  --t-22: 22px;
+  --t-34: 34px;
+  --t-56: 56px;
+  --t-88: 88px;
+
+  /* ---- 8pt spine ------------------------------------------------------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --gutter: 16px;
+
+  /* ---- radii ----------------------------------------------------------- */
+  --r-control: 14px;
+  --r-card: 22px;
+  --r-sheet: 30px;
+  --r-pill: 999px;
+
+  /* ---- safe areas ------------------------------------------------------ */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  /* ---- material -------------------------------------------------------- */
+  --glass-blur: blur(30px) saturate(180%);
+  --glass-bg: rgba(18, 15, 14, 0.34);
+  --glass-bg-strong: rgba(16, 13, 12, 0.5);
+  --glass-solid: rgba(24, 20, 18, 0.9);
+  --hairline: rgba(255, 255, 255, 0.18);
+  --hairline-soft: rgba(255, 255, 255, 0.12);
+  --highlight: rgba(255, 255, 255, 0.3);
+
+  --ink: rgba(255, 255, 255, 0.96);
+  --ink-2: rgba(255, 255, 255, 0.62);
+  --ink-3: rgba(255, 255, 255, 0.42);
+  --ink-4: rgba(255, 255, 255, 0.28);
+
+  --shadow-lift: 0 10px 30px rgba(0, 0, 0, 0.24);
+  --shadow-sheet: 0 -18px 60px rgba(0, 0, 0, 0.42);
+
+  /* ---- motion ---------------------------------------------------------- */
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.52, 1);
+  --dur-sheet: 380ms;
+  --dur-tint: 420ms;
+  --dur-press: 90ms;
+
+  /* ---- theme fallbacks (overwritten by applyTheme) --------------------- */
+  --accent: #e23e57;
+  --accent-rgb: 226, 62, 87;
+  --accent-ink: #ffffff;
+  --accent-soft: #ffb4a2;
+  --accent-soft-rgb: 255, 180, 162;
+  --accent-soft-ink: #1a1208;
+  --bg-top: #ffe7c4;
+  --bg-top-rgb: 255, 231, 196;
+  --bg-bottom: #e07a5f;
+  --bg-bottom-rgb: 224, 122, 95;
+  --fog: #f2b48c;
+  --fog-rgb: 242, 180, 140;
+  --ground: #b4523c;
+  --ground-rgb: 180, 82, 60;
+  --key: #fff1dc;
+  --fill: #8fb8de;
+  --rim: #ffd9a0;
+  --rim-rgb: 255, 217, 160;
+  --sheet-tint: rgba(224, 122, 95, 0.34);
+  --scrim-tint: rgba(180, 82, 60, 0.46);
+
+  /* ---- boot (brand-neutral, theme independent) ------------------------- */
+  --boot-bg: #151210;
+  --boot-ink: rgba(255, 250, 244, 0.94);
+}

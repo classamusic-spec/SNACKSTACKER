@@ -8,6 +8,7 @@ import { clamp01 } from './core/math';
 import { Ticker } from './core/ticker';
 import type { QualityTier, RunResult, Settings, SkuId, ThemeId } from './core/types';
 import { CameraRig } from './game/CameraRig';
+import { TUNING } from './game/constants';
 import { StackGame } from './game/StackGame';
 import { createMeta } from './meta';
 import { createSceneKit } from './render';
@@ -52,6 +53,8 @@ async function boot(): Promise<void> {
   let state: AppState = 'boot';
   let theme: ThemeDef = themes.byId(meta.data.selectedTheme);
   let lastResult: RunResult | null = null;
+  /** Mirrors the run's live HUD numbers so a partial refresh never blanks them. */
+  const hud = { score: 0, layers: 0, combo: 0 };
 
   const game = new StackGame({
     scene: kit.scene,
@@ -60,9 +63,7 @@ async function boot(): Promise<void> {
     vfx,
     audio,
     quality: kit.quality.tier,
-    shake: (m, d) => {
-      if (!settings().reducedMotion) kit.shake(m, d);
-    },
+    shake: (m, d) => kit.shake(m, d),
     flash: (a) => kit.flash(a),
   });
 
@@ -77,13 +78,9 @@ async function boot(): Promise<void> {
       return {
         sku: sku.id,
         themeId: sku.themeId,
-        name: themeDef?.name ?? (sku.id === 'bundle_all' ? 'The Full Menu' : 'Remove Ads'),
-        tagline:
-          themeDef?.tagline ??
-          (sku.id === 'bundle_all'
-            ? 'Every theme, forever. One tap.'
-            : 'Play uninterrupted, forever.'),
-        glyph: themeDef?.glyph ?? (sku.id === 'bundle_all' ? '🍱' : '✨'),
+        name: themeDef?.name ?? 'Full Menu',
+        tagline: themeDef?.tagline ?? 'Every theme, forever. One tap, done.',
+        glyph: themeDef?.glyph ?? '🍱',
         priceLabel: priceLabel(sku.priceUsd, sku.coinPrice, owned),
         owned,
         selected: themeDef ? meta.data.selectedTheme === themeDef.id : false,
@@ -189,6 +186,7 @@ async function boot(): Promise<void> {
     onSettingChange: <K extends keyof Settings>(key: K, value: Settings[K]) => {
       meta.setSetting(key, value);
       const s = settings();
+      kit.setShakeScale(s.reducedMotion ? 0 : 1);
       audio.setSfxEnabled(s.sfx);
       audio.setMusicEnabled(s.music);
       setHapticsEnabled(s.haptics);
@@ -211,13 +209,18 @@ async function boot(): Promise<void> {
     },
   });
 
+  const TIER_RANK: Record<QualityTier, number> = { low: 0, medium: 1, high: 2 };
+
   function applyQuality(): void {
     const want = resolveQuality();
-    while (
-      (want === 'low' && kit.quality.tier !== 'low') ||
-      (want === 'medium' && kit.quality.tier === 'high')
-    ) {
+    let guard = 4;
+    while (TIER_RANK[want] < TIER_RANK[kit.quality.tier] && guard-- > 0) {
       kit.degrade();
+    }
+    // The render pipeline can shed work live but cannot rebuild shadow maps and
+    // the post chain upward, so raising the tier needs a fresh launch.
+    if (TIER_RANK[want] > TIER_RANK[kit.quality.tier]) {
+      ui.toast('Higher quality applies next launch', 'info');
     }
   }
 
@@ -238,6 +241,9 @@ async function boot(): Promise<void> {
     void audio.unlock();
     state = 'playing';
     lastResult = null;
+    hud.score = 0;
+    hud.layers = 0;
+    hud.combo = 0;
     game.start();
     ui.goGame();
     ui.setHud({
@@ -269,9 +275,13 @@ async function boot(): Promise<void> {
   // ---------------------------------------------------------------------------
 
   game.events.on('score', ({ score, pop, delta }) => {
+    hud.score = score;
     ui.setScore(score, { pop, delta });
   });
-  game.events.on('combo', (combo) => ui.setCombo(combo));
+  game.events.on('combo', (combo) => {
+    hud.combo = combo;
+    ui.setCombo(combo);
+  });
   game.events.on('perfect', ({ label, tier }) => {
     ui.showPerfect(label, tier);
     haptic(tier >= 2 ? 'heavy' : 'medium');
@@ -281,10 +291,11 @@ async function boot(): Promise<void> {
     haptic('success');
   });
   game.events.on('layer', ({ layers }) => {
+    hud.layers = layers;
     ui.setHud({
-      score: 0,
+      score: hud.score,
       layers,
-      combo: 0,
+      combo: hud.combo,
       best: meta.data.best,
       coins: meta.data.coins,
     });
@@ -316,7 +327,7 @@ async function boot(): Promise<void> {
     }
     audio.setIntensity(0.1);
     ui.setBest(result.best);
-    ui.setCoins(result.best >= 0 ? meta.data.coins : 0, { animate: true });
+    ui.setCoins(meta.data.coins, { animate: true });
     ui.goResult(result);
   });
 
@@ -404,23 +415,25 @@ async function boot(): Promise<void> {
   applyTheme(theme, false);
   onResize();
   ui.setSettings(settings());
+  kit.setShakeScale(settings().reducedMotion ? 0 : 1);
+  // The plate's top surface is the world's y = 0; the contact shadow sits there.
+  kit.setGround(0, TUNING.BASE_FOOTPRINT * 0.78, 0.42);
   setHapticsEnabled(settings().haptics);
   audio.setSfxEnabled(settings().sfx);
   audio.setMusicEnabled(settings().music);
   ui.setStoreView(buildStoreView());
   ui.setLoadProgress(0.75);
 
-  // Render one frame before dismissing the boot veil so the first thing the
-  // player sees is the tower, not an empty canvas.
-  game.attract();
+  // Build the home state and render one frame before dismissing the boot veil,
+  // so the first thing the player sees is the tower, not an empty canvas.
+  goHome();
   rig.update(1 / 60, 1e6);
   kit.update(1 / 60, 0);
   kit.render();
   ui.setLoadProgress(1);
 
   ticker.start(({ dt, elapsed }) => {
-    if (state === 'playing') game.update(dt, elapsed);
-    else if (state !== 'paused') game.update(dt, elapsed);
+    if (state !== 'paused') game.update(dt, elapsed);
 
     if (state === 'home' || state === 'boot') rig.update(dt, 2.2);
     else if (game.phase === 'toppling' || game.phase === 'over') rig.update(dt, 1.8);
@@ -431,10 +444,7 @@ async function boot(): Promise<void> {
     kit.render();
   });
 
-  requestAnimationFrame(() => {
-    ui.dismissBoot();
-    goHome();
-  });
+  requestAnimationFrame(() => ui.dismissBoot());
 }
 
 boot().catch((err) => {

@@ -10,8 +10,12 @@ export type ThemeId =
   | 'breakfast'
   | 'pizza';
 
-/** Every purchasable SKU in the shop. */
-export type SkuId = ThemeId | 'bundle_all' | 'remove_ads';
+/**
+ * Every purchasable SKU in the shop. Snackery has no ads, so there is
+ * deliberately no "remove ads" SKU — selling the removal of something the game
+ * does not do would misrepresent the product.
+ */
+export type SkuId = ThemeId | 'bundle_all';
 
 export type GamePhase =
   | 'boot'
