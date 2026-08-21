@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Rng } from '../core/rng';
 import { TAU, clamp, clamp01, lerp } from '../core/math';
+import { BASE_FOOTPRINT } from '../core/world';
 
 // ---------------------------------------------------------------------------
 // noise
@@ -66,6 +67,43 @@ export function fbm2(x: number, y: number, octaves = 3): number {
     freq *= 2.03;
   }
   return sum / norm;
+}
+
+// ---------------------------------------------------------------------------
+// cut faces
+// ---------------------------------------------------------------------------
+
+/**
+ * How rectangular a footprint should read, 0 (untouched) to 1 (heavily cut).
+ *
+ * A whole pancake is a disc. A pancake the player sliced is a disc with a flat
+ * chord where the knife went — and after a few slices, a rectangle. Since the
+ * tower tracks an axis-aligned width x depth, the honest silhouette for a cut
+ * layer is a rounded rectangle, and stretching the original ellipse instead is
+ * what makes a cut layer read as a squashed blob rather than a cross-section.
+ */
+export function squareness(width: number, depth: number): number {
+  const smaller = Math.min(width, depth);
+  const larger = Math.max(width, depth);
+  // Cut away from the base footprint at all -> some flat faces.
+  const shrunk = clamp01(1 - smaller / BASE_FOOTPRINT);
+  // Non-square -> definitely cut on one axis.
+  const stretched = larger > 1e-5 ? clamp01(1 - smaller / larger) : 0;
+  return clamp01(Math.max(shrunk, stretched) * 1.25);
+}
+
+/**
+ * Radius multiplier that morphs a unit circle into a superellipse.
+ * `square` 0 leaves a circle untouched; 1 gives an almost-square with softly
+ * rounded corners.
+ */
+export function superRadius(angle: number, square: number): number {
+  if (square <= 1e-4) return 1;
+  const n = 2 + clamp01(square) * 6;
+  const c = Math.abs(Math.cos(angle));
+  const s = Math.abs(Math.sin(angle));
+  const sum = Math.pow(c, n) + Math.pow(s, n);
+  return sum > 1e-9 ? Math.pow(sum, -1 / n) : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +172,8 @@ export function puck(
     seed?: number;
     /** Pinch the top face inwards, e.g. a bun crown. */
     taper?: number;
+    /** Override the auto-detected cut squareness, 0 (round) to 1 (rectangle). */
+    square?: number;
   } = {},
 ): THREE.BufferGeometry {
   const {
@@ -148,6 +188,8 @@ export function puck(
   const geo = new THREE.CylinderGeometry(0.5, 0.5, 1, radial, rings, false);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const v = new THREE.Vector3();
+  // A cut puck must show flat faces, not stretch into an ellipse.
+  const square = opts.square ?? squareness(width, depth);
 
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
@@ -161,7 +203,7 @@ export function puck(
         Math.sin(angle) * 2.4 + seed * 3.1,
         2,
       );
-      let scale = 1 + n * wobble;
+      let scale = (1 + n * wobble * (1 - square * 0.7)) * superRadius(angle, square);
       // taper the top so the silhouette reads as baked, not machined
       scale *= 1 - taper * yNorm * yNorm;
       // soften the bottom edge slightly — food sits, it doesn't clip
@@ -226,9 +268,16 @@ export function ruffle(
   width: number,
   height: number,
   depth: number,
-  opts: { folds?: number; amplitude?: number; seed?: number; segments?: number } = {},
+  opts: {
+    folds?: number;
+    amplitude?: number;
+    seed?: number;
+    segments?: number;
+    square?: number;
+  } = {},
 ): THREE.BufferGeometry {
   const { folds = 9, amplitude = 0.45, seed = 5, segments = 96 } = opts;
+  const square = opts.square ?? squareness(width, depth);
   const geo = new THREE.CylinderGeometry(0.5, 0.52, 1, segments, 4, true);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const v = new THREE.Vector3();
@@ -241,7 +290,8 @@ export function ruffle(
       Math.sin(angle * folds + seed) * 0.5 +
       Math.sin(angle * (folds * 2.3) + seed * 2) * 0.24 +
       fbm2(Math.cos(angle) * 3 + seed, Math.sin(angle) * 3, 2) * 0.3;
-    const scale = 1 + wave * amplitude * (0.35 + yNorm * 0.9);
+    const scale =
+      (1 + wave * amplitude * (0.35 + yNorm * 0.9)) * superRadius(angle, square);
     v.x *= scale;
     v.z *= scale;
     v.y += wave * 0.16;
@@ -262,9 +312,16 @@ export function pour(
   width: number,
   height: number,
   depth: number,
-  opts: { drips?: number; dripLength?: number; seed?: number; radial?: number } = {},
+  opts: {
+    drips?: number;
+    dripLength?: number;
+    seed?: number;
+    radial?: number;
+    square?: number;
+  } = {},
 ): THREE.BufferGeometry {
   const { drips = 5, dripLength = 2.6, seed = 11, radial = 56 } = opts;
+  const square = opts.square ?? squareness(width, depth);
   const geo = new THREE.CylinderGeometry(0.5, 0.5, 1, radial, 10, false);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const v = new THREE.Vector3();
@@ -303,6 +360,11 @@ export function pour(
       const bulge = 1 + drop * 0.06;
       v.x *= bulge;
       v.z *= bulge;
+    }
+    if (radius > 1e-4) {
+      const sr = superRadius(angle, square);
+      v.x *= sr;
+      v.z *= sr;
     }
     const n = fbm2(v.x * 4 + seed, v.z * 4, 2);
     v.y += n * 0.02;
@@ -364,7 +426,9 @@ export function pillow(
   depth: number,
   opts: { round?: number; segments?: number; squash?: number } = {},
 ): THREE.BufferGeometry {
-  const { round = 0.55, segments = 18, squash = 0.35 } = opts;
+  const { segments = 18, squash = 0.35 } = opts;
+  // A cut pillow reads as a block with soft corners, not a stretched egg.
+  const round = (opts.round ?? 0.55) * (1 - squareness(width, depth) * 0.8);
   const geo = new THREE.SphereGeometry(0.5, segments, Math.max(6, segments >> 1));
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const v = new THREE.Vector3();

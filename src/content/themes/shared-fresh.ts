@@ -13,14 +13,15 @@ import * as THREE from 'three';
 import type { FoodBuildCtx } from '../api';
 import { Rng } from '../../core/rng';
 import { TAU, clamp, clamp01 } from '../../core/math';
-import { fbm2, mergeAll } from '../kit';
+import { fbm2, mergeAll, squareness, superRadius } from '../kit';
+import { BASE_FOOTPRINT as FULL } from '../../core/world';
 
 // ---------------------------------------------------------------------------
 // footprint maths
 // ---------------------------------------------------------------------------
 
 /** The full plate footprint a theme is authored against (DESIGN.md §2). */
-export const BASE_FOOTPRINT = 2.4;
+export { BASE_FOOTPRINT } from '../../core/world';
 
 /** A dimension below this makes degenerate triangles and NaN normals. */
 export const MIN_DIM = 0.05;
@@ -31,7 +32,7 @@ export const safeH = (ctx: FoodBuildCtx): number => Math.max(ctx.height, MIN_DIM
 
 /** Footprint area as a fraction of the full plate, 0..1. */
 export function areaRatio(ctx: FoodBuildCtx): number {
-  return clamp01((safeW(ctx) * safeD(ctx)) / (BASE_FOOTPRINT * BASE_FOOTPRINT));
+  return clamp01((safeW(ctx) * safeD(ctx)) / (FULL * FULL));
 }
 
 /** Quality + offcut multiplier applied to every decoration budget. */
@@ -69,6 +70,31 @@ export function seg(ctx: FoodBuildCtx, high: number, medium: number, low: number
 /** 'x' when the cut is wider than it is deep. Fans/rings orient along it. */
 export function longAxis(ctx: FoodBuildCtx): 'x' | 'z' {
   return safeW(ctx) >= safeD(ctx) ? 'x' : 'z';
+}
+
+/**
+ * Pre-compensate a `pillow` round factor.
+ *
+ * kit's `pillow` squares off shapes automatically as their footprint shrinks,
+ * which is right for a whole layer that got cut but wrong for a sub-part that
+ * is small BY DESIGN — an avocado shard or a jelly log is a soft lens at every
+ * layer size. This inverts that reduction so the intended roundness survives.
+ */
+export function softRound(want: number, width: number, depth: number): number {
+  const k = Math.max(1 - squareness(width, depth) * 0.8, 0.2);
+  return clamp(want / k, 0, 1);
+}
+
+/**
+ * Morph a rectangular footprint onto the same superellipse kit's `puck` and
+ * `pour` use, so a bed built from a box lines up with the round layers above
+ * and below it instead of poking its corners out.
+ */
+function squareFactor(nx: number, nz: number, square: number): number {
+  const rr = Math.hypot(nx, nz);
+  if (rr < 1e-6) return 1;
+  const angle = Math.atan2(nz, nx);
+  return superRadius(angle, square) * (Math.max(Math.abs(nx), Math.abs(nz)) / rr);
 }
 
 /** A radius that can never exceed half of the smallest dimension it rounds. */
@@ -240,6 +266,8 @@ export interface SheetOpts {
   rakeFreq?: number;
   seed?: number;
   segments?: number;
+  /** 0 = ellipse, 1 = rounded rectangle. Defaults to kit's cut detection. */
+  square?: number;
 }
 
 /**
@@ -268,6 +296,7 @@ export function sheet(
   const w = Math.max(width, MIN_DIM);
   const d = Math.max(depth, MIN_DIM);
   const t = Math.max(thickness, 0.004);
+  const square = clamp01(opts.square ?? squareness(w, d));
   const geo = new THREE.BoxGeometry(w, t, d, s, 1, s);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const v = new THREE.Vector3();
@@ -284,7 +313,8 @@ export function sheet(
     if (curlEdges !== 0) dy += curlEdges * r * r * r;
     if (rake !== 0) dy += rake * Math.sin(nx * rakeFreq + seed) * (1 - r * r * 0.5);
     v.y += dy;
-    pos.setXYZ(i, v.x, v.y, v.z);
+    const f = squareFactor(nx, nz, square);
+    pos.setXYZ(i, v.x * f, v.y, v.z * f);
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
@@ -322,20 +352,36 @@ export function ribbon(
  * A flat elliptical disc lying in the XZ plane, UV-mapped 0..1 across its
  * bounding square so a painted texture (a lollipop swirl) lands square on it.
  */
-export function discXZ(width: number, depth: number, segments = 32): THREE.BufferGeometry {
+export function discXZ(
+  width: number,
+  depth: number,
+  segments = 32,
+  square?: number,
+): THREE.BufferGeometry {
+  const w = Math.max(width, MIN_DIM);
+  const d = Math.max(depth, MIN_DIM);
+  const sq = clamp01(square ?? squareness(w, d));
   const geo = new THREE.CircleGeometry(0.5, Math.max(6, Math.round(segments)));
   geo.rotateX(-Math.PI / 2);
-  geo.scale(Math.max(width, MIN_DIM), 1, Math.max(depth, MIN_DIM));
+  if (sq > 1e-3) {
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const rr = Math.hypot(x, z);
+      if (rr < 1e-6) continue;
+      const f = superRadius(Math.atan2(z, x), sq);
+      pos.setXYZ(i, x * f, pos.getY(i), z * f);
+    }
+    pos.needsUpdate = true;
+  }
+  geo.scale(w, 1, d);
   return geo;
 }
 
 // ---------------------------------------------------------------------------
 // canvas painting helpers (albedo + bump textures)
 // ---------------------------------------------------------------------------
-
-export function hexCss(color: number): string {
-  return `#${(color >>> 0).toString(16).padStart(6, '0')}`;
-}
 
 export function fillFlat(c: CanvasRenderingContext2D, size: number, color: string): void {
   c.fillStyle = color;

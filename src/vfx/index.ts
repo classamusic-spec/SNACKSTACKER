@@ -41,6 +41,7 @@ const _dir = new THREE.Vector3();
 const _t1 = new THREE.Vector3();
 const _t2 = new THREE.Vector3();
 const _out = new THREE.Vector3();
+const _bias = new THREE.Vector3();
 const _colA = new THREE.Color();
 const _colB = new THREE.Color();
 const _up = new THREE.Vector3(0, 1, 0);
@@ -144,6 +145,14 @@ class Vfx implements VfxSystem {
   /** Own clock, advanced by clamped dt so a tab-switch cannot warp effects. */
   private time = 0;
   private disposed = false;
+  /**
+   * Live query, per the design bible's reduced-motion rule: confetti and the
+   * lingering additive layers are cut, functional feedback is kept.
+   */
+  private readonly motionQuery: MediaQueryList | null =
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null;
 
   constructor(
     scene: THREE.Scene,
@@ -169,6 +178,10 @@ class Vfx implements VfxSystem {
     return Math.max(min, Math.round(base * this.cfg.countScale));
   }
 
+  private get calm(): boolean {
+    return this.motionQuery !== null && this.motionQuery.matches;
+  }
+
   /* ------------------------------------------------------------- effects */
 
   /** Crumbs and chunks with real gravity. Fires on every drop, so keep it cheap. */
@@ -182,10 +195,18 @@ class Vfx implements VfxSystem {
     const life = opts.life ?? 0.78;
     const p = opts.position;
 
-    // The game passes the slice direction; crumbs spray that way, plus up.
+    // The game passes the slice direction. The cone tilts that way AND every
+    // crumb gets an additive push along it, so the spray reads directionally
+    // even with a wide spread.
+    let bx = 0;
+    let by = 0;
+    let bz = 0;
     if (opts.direction !== undefined && opts.direction.lengthSq() > 1e-8) {
-      _dir.copy(opts.direction).normalize().multiplyScalar(0.82);
-      _dir.addScaledVector(_up, 0.6).normalize();
+      _bias.copy(opts.direction).normalize();
+      bx = _bias.x * 0.85;
+      by = _bias.y * 0.85;
+      bz = _bias.z * 0.85;
+      _dir.copy(_bias).multiplyScalar(0.55).addScaledVector(_up, 0.85).normalize();
     } else {
       _dir.set(0, 1, 0);
     }
@@ -205,13 +226,13 @@ class Vfx implements VfxSystem {
         p.x + _out.x * 0.06,
         p.y + _out.y * 0.06,
         p.z + _out.z * 0.06,
-        _out.x * speed,
-        _out.y * speed + rng.range(0.3, 1.9),
-        _out.z * speed,
+        _out.x * speed + bx * speed,
+        _out.y * speed + by * speed + rng.range(0.3, 1.9),
+        _out.z * speed + bz * speed,
         lerp(_colA.r, _colB.r, m),
         lerp(_colA.g, _colB.g, m),
         lerp(_colA.b, _colB.b, m),
-        scale * rng.range(0.042, 0.115),
+        scale * rng.range(0.05, 0.125),
         rng.next(),
         gravity,
         0.55,
@@ -317,7 +338,7 @@ class Vfx implements VfxSystem {
         rng.next(),
         gravity,
         0.32,
-        fat ? 0.03 : 0.06,
+        fat ? 0.045 : 0.085,
         0,
       );
     }
@@ -420,9 +441,11 @@ class Vfx implements VfxSystem {
 
     // --- tier 1+: a soft radial flash --------------------------------------
     if (t >= 1) {
-      this.flash(now, x, y + 0.06, z, hr, hg, hb, 1.5 + 0.5 * t, 0.2 + 0.03 * t);
-      if (cfg.layers) {
-        this.flash(now + 0.02, x, y + 0.06, z, hr, hg, hb, 2.6 + 0.9 * t, 0.34);
+      // Dim, tight core + a wide, very faint halo. Bloom does the rest.
+      this.flash(now, x, y + 0.06, z, hr * 0.38, hg * 0.38, hb * 0.38, 0.7 + 0.18 * t, 0.19 + 0.03 * t);
+      if (cfg.layers && !this.calm) {
+        const h = 0.13;
+        this.flash(now + 0.02, x, y + 0.06, z, hr * h, hg * h, hb * h, 1.7 + 0.4 * t, 0.3);
       }
     }
 
@@ -514,7 +537,7 @@ class Vfx implements VfxSystem {
           0,
         );
       }
-      if (cfg.layers) {
+      if (cfg.layers && !this.calm) {
         const q = this.count(10, 4);
         for (let i = 0; i < q; i++) {
           const a = rng.next() * TAU;
@@ -546,34 +569,38 @@ class Vfx implements VfxSystem {
   /** Celebratory paper raining from above the frustum, fluttering on air drag. */
   confetti(position: THREE.Vector3, colors: number[]): void {
     const rng = this.rng;
-    const n = this.count(96, 20);
+    const calm = this.calm;
+    const n = this.count(calm ? 24 : 96, calm ? 8 : 20);
     const now = this.time;
     const palette = colors.length > 0 ? colors : null;
-    // Start above whatever the camera can currently see.
-    const top = Math.max(position.y + 7.5, this.camera.position.y + 5.5);
+    // Just above the top of frame: high enough to fall in, low enough that it
+    // actually crosses the frustum inside its lifetime.
+    const top = Math.max(position.y + 4.4, this.camera.position.y + 2.6);
 
     for (let i = 0; i < n; i++) {
       if (palette !== null) _colA.setHex(palette[i % palette.length]);
       else _colA.setRGB(1, 1, 1);
       const a = rng.next() * TAU;
-      const r = Math.sqrt(rng.next()) * 3.4;
+      const r = Math.sqrt(rng.next()) * 3.2;
       this.confettiPool.push(
-        now + (i / n) * 1.05 + rng.range(0, 0.12),
-        rng.range(2.2, 3.4),
+        // Staggered births: the rain keeps arriving instead of dumping at once.
+        now + (i / n) * 1.35 + rng.range(0, 0.14),
+        rng.range(2.4, 3.6),
         position.x + Math.cos(a) * r,
-        top + rng.range(0, 2.2),
+        top + rng.range(0, 2.4),
         position.z + Math.sin(a) * r,
-        rng.range(-0.5, 0.5),
-        rng.range(-1.6, -0.3),
-        rng.range(-0.5, 0.5),
+        rng.range(-0.6, 0.6),
+        rng.range(-2.4, -1),
+        rng.range(-0.6, 0.6),
         _colA.r,
         _colA.g,
         _colA.b,
-        rng.range(0.1, 0.2),
+        rng.range(0.13, 0.26),
         rng.next(),
-        3.4,
-        1.5,
-        rng.range(0.16, 0.62),
+        // Terminal velocity ~3.4u/s: paper flutters down, it does not drop.
+        5.4,
+        1.6,
+        rng.range(0.18, 0.7),
         rng.range(2.5, 8),
       );
     }

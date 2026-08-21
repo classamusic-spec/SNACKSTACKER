@@ -19,7 +19,7 @@ import type { FoodBuildCtx } from '../api';
 import type { CanvasPainter, MaterialLibrary as MaterialLibraryRef } from '../../render/api';
 import { Rng } from '../../core/rng';
 import { TAU, clamp, clamp01, lerp } from '../../core/math';
-import { fbm2, fitHeight, mergeAll, roughen } from '../kit';
+import { fbm2, fitHeight, mergeAll, roughen, roundedBox, squareness, superRadius } from '../kit';
 
 // ===========================================================================
 // quality tiers
@@ -84,6 +84,19 @@ export function coverCount(
   const n = Math.round((coverage * safe(width) * safe(depth)) / (p * p));
   return clamp(Number.isFinite(n) ? n : 1, 1, Math.max(1, max));
 }
+
+/**
+ * How rectangular this layer's cut is, 0..1 — hand it to every kit shape that
+ * accepts `square` (and to `ringTorus`). Computed from the TRUE footprint, so a
+ * shape built at 0.9x its layer still reads as the same cross-section, and a
+ * prop that just happens to be small is never mistaken for a heavy cut.
+ */
+export const cutSquare = (ctx: FoodBuildCtx): number =>
+  squareness(safe(ctx.width), safe(ctx.depth));
+
+/** superRadius re-exported so themes can place decoration on a cut surface. */
+export const cutRadius = (angle: number, square: number): number =>
+  superRadius(angle, square);
 
 /** Prop diameter: a fraction of the short axis, hard-capped for big footprints. */
 export function propSize(ctx: FoodBuildCtx, frac: number, cap: number): number {
@@ -161,6 +174,42 @@ export function mergeSafe(
 }
 
 /**
+ * `roundedBox` from the kit is an ExtrudeGeometry bevel, and three's bevel
+ * grows the profile OUTWARD by `bevelSize` — a 0.15-wide box comes back 0.192
+ * wide. Height is unaffected. That 28% overshoot is invisible at 2.4 and
+ * catastrophic on a sliver, so this wrapper measures the result and rescales
+ * X/Z to land exactly on the requested footprint.
+ */
+export function boxAt(
+  width: number,
+  height: number,
+  depth: number,
+  radius: number,
+  segments = 3,
+): THREE.BufferGeometry {
+  const w = safe(width);
+  const h = safe(height);
+  const d = safe(depth);
+  const geo = roundedBox(w, h, d, Math.min(radius, Math.min(w, h, d) * 0.24), segments);
+  const bb = bounds(geo);
+  const ex = bb.max.x - bb.min.x;
+  const ez = bb.max.z - bb.min.z;
+  if (ex > 1e-6 && ez > 1e-6) geo.scale(w / ex, 1, d / ez);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * A roughen amplitude that is safe at any aspect ratio. Char and crumb are an
+ * ABSOLUTE displacement along the normal, so an amount tied only to the layer
+ * height would shove a 0.44-thick hash brown a third of the way past a 0.15
+ * cut. Clamped against the short footprint axis as well.
+ */
+export function roughAmt(ctx: FoodBuildCtx, frac: number): number {
+  return Math.min(safe(ctx.height) * frac, minDim(ctx) * 0.04);
+}
+
+/**
  * An elliptical ring hugging the footprint edge — plate rims, pizza cornicione,
  * olive slices. `tubeFrac` is the tube radius as a fraction of the footprint
  * radius, so the outer edge always lands exactly on width/2 and depth/2 and the
@@ -175,6 +224,7 @@ export function ringTorus(
   tubeHeight: number,
   radialSeg = 8,
   tubularSeg = 40,
+  square = 0,
 ): THREE.BufferGeometry {
   const tf = clamp(tubeFrac, 0.02, 0.24);
   const th = safe(tubeHeight);
@@ -185,7 +235,25 @@ export function ringTorus(
     Math.max(8, Math.round(tubularSeg)),
   );
   geo.rotateX(-Math.PI / 2);
+  // A cut layer's body becomes a rounded rectangle (kit `squareness`), so a rim
+  // that stayed elliptical would sink into the corners. Morph the ring the same
+  // way and a cut crust still hugs the cut edge.
+  if (square > 1e-4) {
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      const r = Math.hypot(v.x, v.z);
+      if (r > 1e-5) {
+        const sr = superRadius(Math.atan2(v.z, v.x), square);
+        v.x *= sr;
+        v.z *= sr;
+      }
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+  }
   geo.scale(safe(width), th / tf, safe(depth));
+  geo.computeVertexNormals();
   return geo;
 }
 
@@ -851,7 +919,6 @@ export const paintFlourDust: CanvasPainter = (g, size) => {
   g.globalAlpha = 1;
 };
 
-export { THREE };
 
 // ===========================================================================
 // shared texture accessors (stable keys — one bake for all three themes)

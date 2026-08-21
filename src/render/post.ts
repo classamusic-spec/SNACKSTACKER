@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import type { QualityTier } from '../core/types';
 import type { ThemePaletteLike } from './api';
 import { GLSL_ACES, GLSL_DITHER, GLSL_FULLSCREEN_VERT, GLSL_SRGB } from './shaders';
+import { bloomThresholdFor } from './tonemap';
 
 /**
  * Post chain, per tier:
@@ -22,13 +23,6 @@ import { GLSL_ACES, GLSL_DITHER, GLSL_FULLSCREEN_VERT, GLSL_SRGB } from './shade
  * grade for the price of a single fullscreen blit. On a phone every fullscreen
  * pass is real money.
  */
-
-/**
- * Threshold sits just above the brightest the cyclorama can reach (see
- * backdrop.ts) so bloom is fed by specular highlights and glaze, not by a
- * cream-coloured wall filling most of the frame.
- */
-const BLOOM_THRESHOLD = 1.02;
 
 const FINISH_FRAG = /* glsl */ `
 uniform sampler2D tDiffuse;
@@ -65,7 +59,11 @@ void main() {
   float aspect = uResolution.x / max( uResolution.y, 1.0 );
   vec2 q = vec2( c.x * aspect, c.y );
   float d = length( q ) / max( length( vec2( 0.5 * aspect, 0.5 ) ), 0.0001 );
-  col *= 1.0 - uVignette * smoothstep( 0.42, 1.0, d );
+  // Normalised so d == 1 at the frame corner whatever the aspect. The window
+  // starts late on purpose: a portrait phone's top edge sits at d ~= 0.9, and
+  // an early falloff there reads as a grey band across the sky rather than as
+  // a lens.
+  col *= 1.0 - uVignette * smoothstep( 0.62, 1.35, d );
 
   if ( uGrain > 0.0001 ) {
     float t = mod( uTime, 64.0 );
@@ -89,8 +87,8 @@ const FinishShader = {
     uTime: { value: 0 },
     uExposure: { value: 1.05 },
     uVignette: { value: 0.36 },
-    uGrain: { value: 0.028 },
-    uAberration: { value: 0.03 },
+    uGrain: { value: 0.018 },
+    uAberration: { value: 0.009 },
   },
   vertexShader: GLSL_FULLSCREEN_VERT,
   fragmentShader: FINISH_FRAG,
@@ -160,21 +158,24 @@ class Composed implements PostChain {
       new THREE.Vector2(size.x * this.bloomScale, size.y * this.bloomScale),
       palette.bloomStrength,
       0.5,
-      BLOOM_THRESHOLD,
+      bloomThresholdFor(palette),
     );
     this.composer.addPass(this.bloom);
 
     this.finish = new ShaderPass(FinishShader);
     this.finish.uniforms.uVignette.value = palette.vignette;
     this.finish.uniforms.uExposure.value = palette.exposure;
-    this.finish.uniforms.uGrain.value = tier === 'high' ? 0.028 : 0;
-    this.finish.uniforms.uAberration.value = tier === 'high' ? 0.03 : 0;
+    this.finish.uniforms.uGrain.value = tier === 'high' ? 0.018 : 0;
+    this.finish.uniforms.uAberration.value = tier === 'high' ? 0.009 : 0;
     this.composer.addPass(this.finish);
   }
 
   applyPalette(p: ThemePaletteLike): void {
     this.baseBloom = p.bloomStrength;
     this.bloom.strength = p.bloomStrength;
+    // Derived per theme: a cream diner wall sits far higher in linear space
+    // than a midnight sushi one, and neither should glow.
+    this.bloom.threshold = bloomThresholdFor(p);
     this.finish.uniforms.uVignette.value = p.vignette;
   }
 

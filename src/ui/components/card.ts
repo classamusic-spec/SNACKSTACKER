@@ -59,6 +59,7 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
   if (selected) classes.push('is-selected');
   if (pending) classes.push('is-pending');
   if (!item.owned) classes.push('is-locked');
+  if (item.badge) classes.push('has-badge');
 
   const card = h('button', {
     class: classes.join(' '),
@@ -81,11 +82,12 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
     h('span', { class: 'sn-card__name', text: item.name }),
     h('span', { class: 'sn-card__tag', text: item.tagline }),
   );
-  const top = h('span', { class: 'sn-card__top' }, thumb(item, hero), meta);
+  // The badge is an in-flow eyebrow rather than a corner overlay: at 320px a
+  // "Best value" ribbon would otherwise crush the name into three lines.
   if (item.badge) {
-    top.appendChild(h('span', { class: 'sn-card__badge', text: item.badge }));
+    card.appendChild(h('span', { class: 'sn-card__badge', text: item.badge }));
   }
-  card.appendChild(top);
+  card.appendChild(h('span', { class: 'sn-card__top' }, thumb(item, hero), meta));
 
   // --- palette preview ---------------------------------------------------
   card.appendChild(swatchStrip(item.swatches));

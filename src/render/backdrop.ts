@@ -3,6 +3,7 @@ import type { ThemePaletteLike } from './api';
 import { PALETTE_FADE } from './palette';
 import { GLSL_ACES_INVERSE, GLSL_DITHER, GLSL_SRGB } from './shaders';
 import { makeSurface } from './surface';
+import { acesInMatrixInverse, acesOutMatrixInverse } from './tonemap';
 
 /**
  * The cyclorama.
@@ -37,11 +38,11 @@ uniform vec3 uFloor;
 uniform vec3 uGlow;
 uniform vec2 uResolution;
 uniform vec2 uRange;
+uniform float uParallax;
 uniform float uGlowStrength;
 uniform float uVignette;
 uniform float uDirect;
 uniform float uExposure;
-uniform float uMaxLinear;
 uniform mat3 uAcesInInv;
 uniform mat3 uAcesOutInv;
 
@@ -57,48 +58,42 @@ void main() {
   d.x *= uResolution.x / max( uResolution.y, 1.0 );
   float r = length( d );
 
-  // Vertical sweep, driven by view elevation so it drifts with the camera
-  // instead of feeling like wallpaper glued to the lens.
-  float t = smoothstep( uRange.x, uRange.y, vDir.y );
+  // The sweep is anchored to the frame, with a slice of view direction mixed
+  // in so it breathes as the camera pitches. Pure world elevation was tried
+  // and rejected: the game frames the top of a growing tower, so the camera
+  // pitch varies, and a world-locked gradient slid the whole palette off the
+  // top of the screen.
+  float sweep = uv.y + uParallax * vDir.y;
+  float t = smoothstep( uRange.x, uRange.y, sweep );
   vec3 col = mix( uBottom, uTop, t );
 
-  // Where the sweep rolls into the floor it takes on the ground tint.
-  float f = smoothstep( uRange.x + 0.06, uRange.x - 0.42, vDir.y );
-  col = mix( col, uFloor, f * 0.6 );
+  // The very bottom of frame rolls into the floor tint, the way a real
+  // cyclorama's curve does.
+  float f = smoothstep( 0.08, -0.22, sweep );
+  col = mix( col, uFloor, f * 0.5 );
 
-  // The softbox behind the subject.
-  col += uGlow * uGlowStrength * ( 1.0 - smoothstep( 0.0, 0.95, r ) );
-
-  // Vignette. Kept gentle here because the finishing pass adds its own.
-  col *= 1.0 - uVignette * smoothstep( 0.30, 1.05, r );
+  // The softbox behind the subject, and the lens falloff. Both are gains, not
+  // additions: an addition here would push the pre-divided colour into the
+  // ACES shoulder, where the inverse is wildly ill-conditioned.
+  float glow = 1.0 + uGlowStrength * ( 1.0 - smoothstep( 0.0, 0.95, r ) );
+  // Kept gentle — the finishing pass adds its own.
+  float vig = 1.0 - uVignette * smoothstep( 0.30, 1.05, r );
 
   if ( uDirect > 0.5 ) {
     // No composer: this shader writes the final pixel itself.
+    col = clamp( col * glow * vig, 0.0, 1.0 );
     col = encodeSRGB( col );
     col = ditherTPDF( col, gl_FragCoord.xy, 1.0 / 255.0 );
   } else {
-    // A tone mapper is downstream. Pre-divide so it lands on the palette hex,
-    // then rein in the peak so the backdrop glows rather than blows out bloom.
-    col = acesInverse( col, uExposure, uAcesInInv, uAcesOutInv );
-    float m = max( max( col.r, col.g ), col.b );
-    col *= min( 1.0, uMaxLinear / max( m, 0.0001 ) );
+    // A tone mapper is downstream. Pre-divide so the sweep lands on the exact
+    // palette hex instead of being tone-mapped into mush. See tonemap.ts for
+    // how the bloom threshold is kept above whatever this produces.
+    col = acesInverse( col, uExposure, uAcesInInv, uAcesOutInv ) * glow * vig;
   }
 
   gl_FragColor = vec4( col, 1.0 );
 }
 `;
-
-/** Inverses of three's ACES matrices, derived rather than transcribed. */
-function acesInverseMatrices(): { inIn: THREE.Matrix3; outIn: THREE.Matrix3 } {
-  // three declares these in GLSL column-major; Matrix3.set() takes row-major.
-  const inIn = new THREE.Matrix3()
-    .set(0.59719, 0.35458, 0.04823, 0.076, 0.90834, 0.01566, 0.0284, 0.13383, 0.83777)
-    .invert();
-  const outIn = new THREE.Matrix3()
-    .set(1.60475, -0.53108, -0.07367, -0.10208, 1.10813, -0.00605, -0.00327, -0.07276, 1.07602)
-    .invert();
-  return { inIn, outIn };
-}
 
 function paintBlob(size: number, hardness: number): THREE.Texture | null {
   const s = makeSurface(size);
@@ -178,7 +173,8 @@ export class Backdrop {
 
   constructor(opts: BackdropOpts) {
     this.group.name = 'cyclorama';
-    const { inIn, outIn } = acesInverseMatrices();
+    const inIn = acesInMatrixInverse();
+    const outIn = acesOutMatrixInverse();
 
     const skyGeo = new THREE.SphereGeometry(1, 32, 20);
     this.skyMat = new THREE.ShaderMaterial({
@@ -196,12 +192,12 @@ export class Backdrop {
         uFloor: { value: new THREE.Color(0xb4523c) },
         uGlow: { value: new THREE.Color(0xfff1dc) },
         uResolution: { value: new THREE.Vector2(1, 1) },
-        uRange: { value: new THREE.Vector2(-0.55, 0.3) },
-        uGlowStrength: { value: 0.1 },
+        uRange: { value: new THREE.Vector2(-0.1, 1.04) },
+        uParallax: { value: 0.18 },
+        uGlowStrength: { value: 0.14 },
         uVignette: { value: 0.22 },
         uDirect: { value: opts.direct ? 1 : 0 },
         uExposure: { value: 1.05 },
-        uMaxLinear: { value: 1.0 },
         uAcesInInv: { value: inIn },
         uAcesOutInv: { value: outIn },
       },
@@ -272,9 +268,13 @@ export class Backdrop {
     this.skyMat.uniforms.uExposure.value = exposure;
   }
 
-  /** Elevation window the gradient spans, in view-direction Y. */
-  setGradientRange(low: number, high: number): void {
+  /**
+   * Window the gradient spans, in sweep units (0 = bottom of frame, 1 = top,
+   * plus `parallax` times the view direction's Y).
+   */
+  setGradientRange(low: number, high: number, parallax?: number): void {
     (this.skyMat.uniforms.uRange.value as THREE.Vector2).set(low, high);
+    if (parallax !== undefined) this.skyMat.uniforms.uParallax.value = parallax;
   }
 
   setGroundY(y: number): void {

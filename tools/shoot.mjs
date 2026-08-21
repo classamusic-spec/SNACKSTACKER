@@ -1,12 +1,18 @@
 /**
- * Screenshot harness: boots the built game in headless Chromium, drives it
- * through real taps, and writes PNGs for visual review.
+ * Screenshot harness: boots the built game in headless Chromium, plays it
+ * properly (timing drops off the live offset the game exposes rather than
+ * tapping blind), and writes PNGs for visual review.
  *
  *   node tools/shoot.mjs [outDir]
  */
 import { chromium } from 'playwright';
 import { mkdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+const OUT = resolve(process.argv[2] ?? 'shots');
+const URL = process.env.SNACKERY_URL ?? 'http://localhost:4173/';
+const PHONE = { width: 393, height: 852 }; // iPhone 15 Pro logical size
+mkdirSync(OUT, { recursive: true });
 
 /**
  * The container ships a pinned Chromium that may not match this Playwright
@@ -18,20 +24,44 @@ const CHROME_CANDIDATES = [
 ];
 const executablePath = CHROME_CANDIDATES.find((p) => existsSync(p));
 
-const OUT = resolve(process.argv[2] ?? 'shots');
-const URL = process.env.SNACKERY_URL ?? 'http://localhost:4173/';
-const PHONE = { width: 393, height: 852 }; // iPhone 15 Pro logical size
-mkdirSync(OUT, { recursive: true });
-
 const errors = [];
-
 const shot = async (page, name) => {
   await page.screenshot({ path: resolve(OUT, `${name}.png`) });
   console.log(`  shot ${name}`);
 };
+const stats = (page) => page.evaluate(() => window.__snackeryStats ?? null);
+const tap = (page, y = 0.55) => page.mouse.click(PHONE.width / 2, PHONE.height * y);
 
-const tapCentre = async (page) => {
-  await page.mouse.click(PHONE.width / 2, PHONE.height * 0.62);
+/** Tap when the sliding layer is close to aligned — i.e. actually play well. */
+async function playWell(page, { drops, tolerance = 0.07, budgetMs = 20000 }) {
+  const deadline = Date.now() + budgetMs;
+  let made = 0;
+  while (made < drops && Date.now() < deadline) {
+    const s = await stats(page);
+    if (!s || s.state !== 'playing') break;
+    if (s.offset !== null && Math.abs(s.offset) <= tolerance) {
+      await tap(page);
+      made++;
+      await page.waitForTimeout(90);
+    } else {
+      await page.waitForTimeout(16);
+    }
+  }
+  return made;
+}
+
+const openAndShoot = async (page, name, label) => {
+  const btn = page
+    .locator(`button[aria-label="${label}" i], button:has-text("${label}")`)
+    .first();
+  if (!(await btn.count())) {
+    console.log(`  (no control "${label}")`);
+    return false;
+  }
+  await btn.click();
+  await page.waitForTimeout(1000);
+  await shot(page, name);
+  return true;
 };
 
 const run = async () => {
@@ -50,7 +80,6 @@ const run = async () => {
     isMobile: true,
     hasTouch: true,
   });
-
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(`console: ${m.text()}`);
   });
@@ -60,50 +89,41 @@ const run = async () => {
   await page.waitForTimeout(2500);
   await shot(page, '01-home');
 
-  // Start a run via the play button if present, else keyboard.
-  const play = page.locator('button', { hasText: /play/i }).first();
+  await openAndShoot(page, '02-store', 'Shop');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(500);
+  await openAndShoot(page, '03-settings', 'Settings');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(500);
+
+  const play = page.locator('button', { hasText: /^play$/i }).first();
   if (await play.count()) await play.click();
   else await page.keyboard.press('Space');
-  await page.waitForTimeout(1400);
-  await shot(page, '02-game-start');
+  await page.waitForTimeout(1300);
+  await shot(page, '04-game-start');
 
-  // Play a handful of layers with real taps.
-  for (let i = 0; i < 6; i++) {
-    await tapCentre(page);
-    await page.waitForTimeout(700);
+  const made = await playWell(page, { drops: 5 });
+  console.log(`  clean drops: ${made}`);
+  await page.waitForTimeout(400);
+  await shot(page, '05-game-early');
+  console.log('  stats', JSON.stringify(await stats(page)));
+
+  const more = await playWell(page, { drops: 16, budgetMs: 30000 });
+  console.log(`  clean drops (total): ${made + more}`);
+  await page.waitForTimeout(400);
+  await shot(page, '06-game-tall');
+  console.log('  stats', JSON.stringify(await stats(page)));
+
+  // Now miss on purpose to reach the result screen.
+  for (let i = 0; i < 25; i++) {
+    const s = await stats(page);
+    if (!s || s.state !== 'playing') break;
+    await tap(page);
+    await page.waitForTimeout(160);
   }
-  await shot(page, '03-game-stacked');
-  console.log('  stats@6', JSON.stringify(await readStats()));
-
-  // Drop repeatedly until the run ends.
-  for (let i = 0; i < 40; i++) {
-    await tapCentre(page);
-    await page.waitForTimeout(240);
-  }
-  console.log('  stats@deep', JSON.stringify(await readStats()));
-  await page.waitForTimeout(2800);
-  await shot(page, '04-result');
-
-  // Store and settings sheets.
-  const openSheet = async (pattern, name) => {
-    const btn = page.locator(`button[aria-label*="${pattern}" i], button:has-text("${pattern}")`).first();
-    if (await btn.count()) {
-      await btn.click();
-      await page.waitForTimeout(900);
-      await shot(page, name);
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(600);
-    } else {
-      console.log(`  (no control matching "${pattern}")`);
-    }
-  };
-  const home = page.locator('button', { hasText: /home/i }).first();
-  if (await home.count()) { await home.click(); await page.waitForTimeout(1200); }
-  await shot(page, '05-home-after');
-  await openSheet('Shop', '06-store');
-  await openSheet('Settings', '07-settings');
-
-  const readStats = () => page.evaluate(() => window.__snackeryStats ?? null);
+  await page.waitForTimeout(3000);
+  await shot(page, '07-result');
+  console.log('  stats', JSON.stringify(await stats(page)));
 
   await browser.close();
   if (errors.length) {

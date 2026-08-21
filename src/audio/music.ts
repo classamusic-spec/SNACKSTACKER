@@ -111,18 +111,34 @@ export class MusicScheduler {
 
   start(): void {
     this.wanted = true;
+    const wasStopping = this.stopAt !== null;
     this.stopAt = null;
     if (!this.enabled || this.disposed) return;
-    if (this.timer !== null) return;
+    if (this.timer !== null) {
+      // Already running. If we caught it mid fade-out — a restart inside the
+      // stop fade, which this game does constantly — fade it back in rather
+      // than leaving a scheduler running into a closed gain.
+      if (wasStopping && !this.pendingProfile) this.fadeIn(0.35);
+      return;
+    }
     const now = this.rack.ctx.currentTime;
     this.step = 0;
     this.nextTime = now + 0.08;
-    const g = this.fade.gain;
-    g.cancelScheduledValues(now);
-    g.setValueAtTime(Math.max(g.value, 0.0001), now);
-    g.linearRampToValueAtTime(1, now + 0.6);
+    this.fadeIn(0.6);
     this.applyIntensity(true);
     this.run();
+  }
+
+  private fadeIn(seconds: number): void {
+    try {
+      const now = this.rack.ctx.currentTime;
+      const g = this.fade.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(Math.max(g.value, 0.0001), now);
+      g.linearRampToValueAtTime(1, now + seconds);
+    } catch {
+      /* ignore */
+    }
   }
 
   stop(fadeSeconds = 0.6): void {
@@ -144,9 +160,11 @@ export class MusicScheduler {
     if (this.enabled === v) return;
     this.enabled = v;
     if (!v) {
-      // Silence AND stop scheduling — no CPU burnt while muted.
+      // Silence AND stop scheduling — no CPU burnt while muted. stop() clears
+      // `wanted`, but muting must not lose the game's intent to play.
+      const wasWanted = this.wanted;
       this.stop(0.25);
-      this.wanted = this.wanted || false;
+      this.wanted = wasWanted;
     } else if (this.wanted) {
       this.start();
     }

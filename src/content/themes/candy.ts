@@ -11,7 +11,18 @@ import * as THREE from 'three';
 import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import { Rng } from '../../core/rng';
 import { TAU, clamp } from '../../core/math';
-import { mergeAll, mesh, pillow, pour, puck, roughen, roundedBox, ruffle, tintGeometry } from '../kit';
+import {
+  mergeAll,
+  mesh,
+  pillow,
+  pour,
+  puck,
+  roughen,
+  roundedBox,
+  ruffle,
+  squareness,
+  tintGeometry,
+} from '../kit';
 import {
   discXZ,
   fillFlat,
@@ -28,6 +39,7 @@ import {
   scatterOnSurface,
   seg,
   sheet,
+  softRound,
   speckle,
   topSampler,
 } from './shared-fresh';
@@ -336,9 +348,9 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   g.add(mesh(bottom, shellMat));
 
   // "the feet" — the ruffled frill that makes a macaron a macaron
-  const feetLow = ruffle(w * 0.99, footH, d * 0.99, {
+  const feetLow = ruffle(w * 1.01, footH, d * 1.01, {
     folds: 22,
-    amplitude: 0.1,
+    amplitude: 0.16,
     seed: ctx.index * 2 + 1,
     segments: frillSegs,
   });
@@ -346,9 +358,9 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   flm.position.y = shellH - footH * 0.92;
   g.add(flm);
 
-  const filling = puck(w * 0.97, fillH, d * 0.97, {
+  const filling = puck(w * 0.87, fillH, d * 0.87, {
     domed: 0,
-    wobble: 0.2,
+    wobble: 0.22,
     radial: seg(ctx, 32, 22, 14),
     rings: 3,
     seed: ctx.index + 8,
@@ -358,9 +370,9 @@ function buildMacaron(ctx: FoodBuildCtx): THREE.Object3D {
   g.add(fm);
 
   const topBase = shellH * 0.94 + fillH * 0.86;
-  const feetHigh = ruffle(w * 0.99, footH, d * 0.99, {
+  const feetHigh = ruffle(w * 1.01, footH, d * 1.01, {
     folds: 22,
-    amplitude: 0.1,
+    amplitude: 0.16,
     seed: ctx.index * 2 + 5,
     segments: frillSegs,
   });
@@ -402,12 +414,13 @@ function buildGummy(ctx: FoodBuildCtx): THREE.Object3D {
   const logs: THREE.BufferGeometry[] = [];
   for (let i = 0; i < n; i++) {
     const at = -L / 2 + step * (i + 0.5);
-    const log = pillow(
-      alongX ? step * 0.9 : S * 0.99,
-      h * 0.99,
-      alongX ? S * 0.99 : step * 0.9,
-      { round: 0.88, segments: seg(ctx, 20, 15, 10), squash: 0.2 },
-    );
+    const lw = alongX ? step * 0.9 : S * 0.99;
+    const ld = alongX ? S * 0.99 : step * 0.9;
+    const log = pillow(lw, h * 0.99, ld, {
+      round: softRound(0.88, lw, ld),
+      segments: seg(ctx, 20, 15, 10),
+      squash: 0.2,
+    });
     log.translate(alongX ? at : 0, 0, alongX ? 0 : at);
     logs.push(log);
   }
@@ -460,7 +473,7 @@ function buildMarshmallow(ctx: FoodBuildCtx): THREE.Object3D {
   roughen(low, Math.min(w, d) * 0.004, 6, ctx.index);
   g.add(mesh(low, mat));
 
-  const highH = h * 0.52;
+  const highH = h * 0.45;
   const high = puck(w * 0.985, highH, d * 0.985, {
     domed: 0.42,
     wobble: 0.05,
@@ -494,13 +507,14 @@ function buildChocolate(ctx: FoodBuildCtx): THREE.Object3D {
     baseH,
     d,
     safeRadius(Math.min(w, d) * 0.035, w, d, baseH),
-    seg(ctx, 3, 2, 2),
+    seg(ctx, 3, 2, 1),
   );
   g.add(mesh(base, mat));
 
   // The moulding grid IS the identity — always at least one raised square.
-  const cols = clamp(Math.round(w / 0.55), 1, 5);
-  const rows = clamp(Math.round(d / 0.55), 1, 5);
+  const maxCells = ctx.offcut ? 2 : ctx.quality === 'low' ? 3 : ctx.quality === 'medium' ? 4 : 5;
+  const cols = clamp(Math.round(w / 0.55), 1, maxCells);
+  const rows = clamp(Math.round(d / 0.55), 1, maxCells);
   const cw = w / cols;
   const cd = d / rows;
   const bumpH = h * 0.5;
@@ -514,7 +528,7 @@ function buildChocolate(ctx: FoodBuildCtx): THREE.Object3D {
         bumpH,
         bd,
         safeRadius(Math.min(bw, bd) * 0.16, bw, bd, bumpH),
-        seg(ctx, 3, 2, 2),
+        seg(ctx, 3, 2, 1),
       );
       cell.translate(-w / 2 + cw * (cIdx + 0.5), baseH * 0.92, -d / 2 + cd * (r + 0.5));
       bumps.push(cell);
@@ -544,14 +558,14 @@ function buildWafer(ctx: FoodBuildCtx): THREE.Object3D {
   for (let i = 0; i < 5; i++) {
     const isBiscuit = i % 2 === 0;
     const t = isBiscuit ? biscuitT : creamT;
-    const inset = isBiscuit ? 1 : 0.955;
+    const inset = isBiscuit ? 1 : 0.88;
     const leaf = sheet(w * inset, t, d * inset, {
       wave: t * 0.16,
       waveFreq: 3.4,
       seed: ctx.index * 3 + i,
       segments: segs,
     });
-    if (isBiscuit) roughen(leaf, t * 0.07, 14, ctx.index + i);
+    if (isBiscuit) roughen(leaf, t * 0.16, 11, ctx.index + i);
     const m = mesh(leaf, isBiscuit ? biscuitMat(ctx) : waferCreamMat(ctx));
     m.position.y = y;
     g.add(m);
@@ -571,9 +585,9 @@ function buildIcing(ctx: FoodBuildCtx): THREE.Object3D {
   const h = safeH(ctx);
   const g = new THREE.Group();
 
-  const body = pour(w * 0.99, h * 0.68, d * 0.99, {
+  const body = pour(w * 0.99, h * 0.54, d * 0.99, {
     drips: ctx.offcut ? 3 : 6,
-    dripLength: 0.42,
+    dripLength: 0.4,
     seed: ctx.index * 5 + 3,
     radial: seg(ctx, 52, 38, 20),
   });
@@ -588,12 +602,12 @@ function buildIcing(ctx: FoodBuildCtx): THREE.Object3D {
   const ps = propScale(ctx);
   const sr = 0.017 * ps;
   const sprinkles = scatterOnSurface(
-    propCount(ctx, 90, 3),
+    propCount(ctx, 72, 3),
     w * 0.92,
     d * 0.92,
     surface,
     (_i, rng) => {
-      const cap = new THREE.CapsuleGeometry(sr, sr * rng.range(2.6, 4.2), 2, seg(ctx, 6, 5, 4));
+      const cap = new THREE.CapsuleGeometry(sr, sr * rng.range(2.6, 4.2), 2, seg(ctx, 5, 4, 4));
       cap.rotateZ(Math.PI / 2);
       return tintGeometry(cap, SPRINKLE_COLORS[rng.int(0, SPRINKLE_COLORS.length)]);
     },
@@ -632,7 +646,7 @@ function buildLollipop(ctx: FoodBuildCtx): THREE.Object3D {
   g.add(mesh(body, lollyMat(ctx)));
 
   // painted swirl on the top face
-  const face = discXZ(w * 0.9, d * 0.9, radial);
+  const face = discXZ(w * 0.9, d * 0.9, radial, squareness(w, d));
   const fm = mesh(face, lollyFaceMat(ctx), { cast: false });
   fm.position.y = bodyH * 1.09;
   g.add(fm);
@@ -666,7 +680,7 @@ function buildNougat(ctx: FoodBuildCtx): THREE.Object3D {
   const h = safeH(ctx);
   const g = new THREE.Group();
 
-  const body = pillow(w, h * 0.94, d, {
+  const body = pillow(w, h * 0.84, d, {
     round: 0.22,
     segments: seg(ctx, 26, 18, 12),
     squash: 0.15,
@@ -722,7 +736,7 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 
   // The stand's top surface is EXACTLY y = 0 so the tower's first layer lands
   // flush on it; everything else hangs below in y in [-PLATE_T, 0].
-  const top = puck(w, STAND_TOP, d, { domed: 0, wobble: 0.008, radial: 52, rings: 2, seed: 2 });
+  const top = puck(w, STAND_TOP, d, { domed: 0, wobble: 0.008, radial: 52, rings: 2, seed: 2, square: 0 });
   top.translate(0, -STAND_TOP, 0);
   g.add(mesh(top, acrylic));
 
@@ -734,11 +748,11 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
   rim.translate(0, -tube, 0);
   g.add(mesh(rim, acrylic));
 
-  const stem = puck(w * 0.26, STAND_STEM, d * 0.26, { domed: 0, wobble: 0.02, taper: -0.25, radial: 30, rings: 3, seed: 3 });
+  const stem = puck(w * 0.26, STAND_STEM, d * 0.26, { domed: 0, wobble: 0.02, taper: -0.25, radial: 30, rings: 3, seed: 3, square: 0 });
   stem.translate(0, -STAND_TOP - STAND_STEM, 0);
   g.add(mesh(stem, acrylic));
 
-  const foot = puck(w * 0.52, STAND_FOOT, d * 0.52, { domed: 0, wobble: 0.01, taper: 0.35, radial: 36, rings: 2, seed: 4 });
+  const foot = puck(w * 0.52, STAND_FOOT, d * 0.52, { domed: 0, wobble: 0.01, taper: 0.35, radial: 36, rings: 2, seed: 4, square: 0 });
   foot.translate(0, -PLATE_T, 0);
   g.add(mesh(foot, acrylic));
 

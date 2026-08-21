@@ -41,9 +41,12 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
     role: 'status',
     aria: { live: 'polite', label: 'Score 0' },
   });
-  const comboEl = h('div', { class: 'sn-combo', aria: { hidden: 'true' } }, h('span', { text: '×2' }));
+  // The combo pill lives in its own full-width slot directly under the score so
+  // it stays centred and can never collide with the pause button.
+  const comboPill = h('span', { class: 'sn-combo__pill', text: '×2' });
+  const comboEl = h('div', { class: 'sn-combo', aria: { hidden: 'true' } }, comboPill);
   const deltaEl = h('div', { class: 'sn-delta', aria: { hidden: 'true' } });
-  const scoreLine = h('div', { class: 'sn-hud__scoreline' }, scoreEl, comboEl, deltaEl);
+  const scoreLine = h('div', { class: 'sn-hud__scoreline' }, scoreEl, deltaEl, comboEl);
 
   const layersEl = h('span', { class: 'sn-hud__layers', text: '0 layers' });
   const bestEl = h('span', { class: 'sn-hud__best', text: 'best 0' });
@@ -112,7 +115,7 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
   const paintCombo = (next: number, previous: number): void => {
     const visible = next >= 2;
     const wasVisible = previous >= 2;
-    setText(comboEl.firstElementChild as HTMLElement, `×${next}`);
+    setText(comboPill, `×${next}`);
     if (visible) {
       comboEl.classList.add('is-on');
       if (!wasVisible) {
@@ -130,11 +133,12 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
     } else if (wasVisible) {
       const node = comboEl;
       node.classList.remove('is-on');
+      // Keep it painted through the exit; the resting CSS state hides it again.
       animate(
         node,
         [
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
-          { transform: 'translate3d(22px, 0, 0) scale(0.86)', opacity: 0 },
+          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1, visibility: 'visible' },
+          { transform: 'translate3d(0, -14px, 0) scale(0.86)', opacity: 0, visibility: 'visible' },
         ],
         { duration: 260, easing: EASE_IOS },
       );

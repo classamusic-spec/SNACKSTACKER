@@ -77,6 +77,11 @@ export class CameraRig {
     this.orbitSpeed = speed;
   }
 
+  /** Jump straight back to the play angle, discarding any accumulated turn. */
+  snapOrbit(): void {
+    this.orbit = 0;
+  }
+
   /** Extra pull-back, e.g. while the tower collapses. */
   setLift(lift: number): void {
     this.lift = lift;

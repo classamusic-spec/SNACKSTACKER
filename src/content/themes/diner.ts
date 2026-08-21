@@ -23,7 +23,8 @@ import {
   checkerPainter,
   coverCount,
   crumbBumpTex,
-  cuppedDisc,
+  cutRadius,
+  cutSquare,
   discFace,
   finishLayer,
   fitGeoY,
@@ -32,12 +33,12 @@ import {
   ceilGeo,
   leafVeinTex,
   mergeSafe,
-  minDim,
   paintTomatoFlesh,
   pickQ,
   propSize,
   rasherRun,
   ringTorus,
+  roughAmt,
   safe,
   specklePainter,
 } from './shared-savory';
@@ -181,6 +182,7 @@ const bunCrown: FoodDef = {
   build(ctx) {
     const g = new THREE.Group();
     const h = safe(ctx.height, 1e-3);
+    const sq = cutSquare(ctx);
     const body = puck(safe(ctx.width), h, safe(ctx.depth), {
       wobble: 0.055 + ctx.rng.range(-0.012, 0.012),
       domed: CROWN_DOME,
@@ -189,7 +191,7 @@ const bunCrown: FoodDef = {
       rings: pickQ(ctx, 3, 5, 7),
       seed: 3.1 + ctx.index * 0.37,
     });
-    roughen(body, h * 0.016, 7, ctx.index * 1.7);
+    roughen(body, roughAmt(ctx, 0.016), 7, ctx.index * 1.7);
     fitGeoY(body, h);
     g.add(mesh(body, bunMat(ctx.materials)));
 
@@ -202,7 +204,9 @@ const bunCrown: FoodDef = {
       for (let i = 0; i < n; i++) {
         const q = Math.sqrt(rng.next()) * 0.84;
         const a = rng.range(0, TAU);
-        const spread = 1 - CROWN_TAPER * q * q;
+        // follow the superellipse the kit morphs a cut puck into, so seeds sit
+        // on the bread out to the corners instead of stopping at an ellipse
+        const spread = (1 - CROWN_TAPER * q * q) * cutRadius(a, sq);
         const s = new THREE.SphereGeometry(0.5, 6, 4);
         s.scale(len, len * 0.4, len * 0.6);
         s.rotateY(rng.range(0, TAU));
@@ -241,7 +245,7 @@ const beefPatty: FoodDef = {
       rings: pickQ(ctx, 3, 4, 6),
       seed: 7.7 + ctx.index * 0.61,
     });
-    roughen(body, h * 0.055, 8, ctx.index * 2.3);
+    roughen(body, roughAmt(ctx, 0.055), 8, ctx.index * 2.3);
     fitGeoY(body, h);
     g.add(mesh(body, pattyMat(ctx.materials)));
 
@@ -253,8 +257,9 @@ const beefPatty: FoodDef = {
       radial,
       rings: 2,
       seed: 2.2 + ctx.index * 0.9,
+      square: cutSquare(ctx),
     });
-    roughen(rim, h * 0.07, 11, ctx.index * 3.1);
+    roughen(rim, roughAmt(ctx, 0.07), 11, ctx.index * 3.1);
     groundGeo(rim, h * 0.2);
     g.add(mesh(rim, searMat(ctx.materials)));
     return finishLayer(ctx, g);
@@ -291,12 +296,14 @@ const tomatoRound: FoodDef = {
   build(ctx) {
     const g = new THREE.Group();
     const h = safe(ctx.height, 1e-3);
+    const sq = cutSquare(ctx);
     const flesh = puck(safe(ctx.width) * 0.96, h, safe(ctx.depth) * 0.96, {
       wobble: 0.026,
       domed: 0.1,
       radial: pickQ(ctx, 20, 32, 46),
       rings: pickQ(ctx, 2, 3, 4),
       seed: 4.4 + ctx.index * 0.29,
+      square: sq,
     });
     fitGeoY(flesh, h);
     g.add(mesh(flesh, tomatoMat(ctx.materials)));
@@ -309,6 +316,7 @@ const tomatoRound: FoodDef = {
       h * 0.44,
       pickQ(ctx, 5, 6, 8),
       pickQ(ctx, 20, 32, 48),
+      sq,
     );
     skin.translate(0, h * 0.48, 0);
     g.add(mesh(skin, tomatoSkinMat(ctx.materials)));
@@ -330,11 +338,13 @@ const lettuceRuffle: FoodDef = {
     // The frill is built at 86% and peaks at ~1.33x, so it feathers ~14% past
     // the footprint — a lettuce leaf should peek out of a burger, but the
     // centre of mass stays well inside the cut.
+    const sq = cutSquare(ctx);
     const band = ruffle(w * 0.86, h * 0.82, d * 0.86, {
       folds: 7 + (ctx.index % 4),
       amplitude: 0.26,
       seed: 5 + ctx.index * 0.7,
       segments: pickQ(ctx, 28, 48, 72),
+      square: sq,
     });
     const heart = puck(w * 0.78, h * 0.4, d * 0.78, {
       wobble: 0.16,
@@ -342,8 +352,9 @@ const lettuceRuffle: FoodDef = {
       radial: pickQ(ctx, 14, 22, 32),
       rings: 2,
       seed: 9.1 + ctx.index * 0.4,
+      square: sq,
     });
-    roughen(heart, h * 0.07, 9, ctx.index * 1.3);
+    roughen(heart, roughAmt(ctx, 0.07), 9, ctx.index * 1.3);
     const geo = mergeSafe([band, heart]);
     if (!geo) return finishLayer(ctx, new THREE.Group());
     fitGeoY(geo, h);
@@ -377,9 +388,11 @@ const pickleChips: FoodDef = {
           radial,
           rings: 2,
           seed: 3 + i * 1.7,
+          // a chip is small because a chip is small — never a cut cross-section
+          square: 0,
         });
         // crinkle cut — the ridge is the whole point of a pickle chip
-        roughen(chip, h * 0.1, 15, i * 2.9);
+        roughen(chip, Math.min(h * 0.1, chipD * 0.08), 15, i * 2.9);
         return chip;
       },
       {
@@ -441,7 +454,7 @@ const bottomBun: FoodDef = {
       rings: pickQ(ctx, 3, 4, 6),
       seed: 12.3 + ctx.index * 0.53,
     });
-    roughen(body, h * 0.014, 7, ctx.index * 1.1);
+    roughen(body, roughAmt(ctx, 0.014), 7, ctx.index * 1.1);
     fitGeoY(body, h);
     g.add(mesh(body, bunMat(ctx.materials)));
 
@@ -452,6 +465,7 @@ const bottomBun: FoodDef = {
       radial,
       rings: 2,
       seed: 5.5 + ctx.index * 0.31,
+      square: cutSquare(ctx),
     });
     ceilGeo(face, h);
     g.add(mesh(face, bunCrumbMat(ctx.materials)));
@@ -467,7 +481,7 @@ const plateThickness = (ctx: FoodBuildCtx): number =>
   ctx.height > 0.02 ? ctx.height : 0.17;
 
 const chromeMat = (m: MaterialLibrary): THREE.Material =>
-  m.standard('diner.chrome', { color: 0xd9dee4, metalness: 0.92, roughness: 0.18 });
+  m.standard('diner.chrome', { color: 0xc9d0d8, metalness: 0.88, roughness: 0.34 });
 
 function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
   const g = new THREE.Group();
@@ -485,6 +499,8 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
     radial,
     rings: 2,
     seed: 1.1,
+    // a plate is never cut, so it stays round whatever the footprint does
+    square: 0,
   });
   groundGeo(body, -t);
   g.add(

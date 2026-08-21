@@ -147,8 +147,18 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
     return stack.length > 0 ? stack[stack.length - 1] : null;
   }
 
+  let focusBeforeModal: HTMLElement | null = null;
+
   function pushModal(entry: ModalEntry): void {
     if (stack.some((m) => m.id === entry.id)) return;
+    if (stack.length === 0) {
+      const active = document.activeElement;
+      focusBeforeModal =
+        active instanceof HTMLElement && stage.contains(active) ? active : null;
+      focusBeforeModal?.blur();
+      // Hide the screen behind the sheet from assistive tech.
+      stage.setAttribute('aria-hidden', 'true');
+    }
     stack.push(entry);
     rootEl.appendChild(entry.el);
     rootEl.dataset['modal'] = entry.id;
@@ -161,8 +171,21 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
     const entry = stack[index];
     stack.splice(index, 1);
     const next = topModal();
-    if (next) rootEl.dataset['modal'] = next.id;
-    else delete rootEl.dataset['modal'];
+    if (next) {
+      rootEl.dataset['modal'] = next.id;
+    } else {
+      delete rootEl.dataset['modal'];
+      stage.removeAttribute('aria-hidden');
+      const restore = focusBeforeModal;
+      focusBeforeModal = null;
+      if (restore && restore.isConnected) {
+        try {
+          restore.focus({ preventScroll: true });
+        } catch {
+          /* focus restore is best-effort */
+        }
+      }
+    }
     if (instant) {
       entry.el.remove();
       entry.teardown?.();
@@ -298,6 +321,14 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
   rootEl.appendChild(boot.el);
 
   applyLocalSettings();
+
+  // Keep JS motion in step with a mid-session OS accessibility change.
+  if (typeof window.matchMedia === 'function') {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onChange = (): void => applyLocalSettings();
+    mq.addEventListener('change', onChange);
+    bag.own(() => mq.removeEventListener('change', onChange));
+  }
 
   const ui: Ui = {
     get root(): HTMLElement {

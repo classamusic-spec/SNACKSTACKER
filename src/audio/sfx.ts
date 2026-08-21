@@ -151,7 +151,7 @@ export const PATCHES: Record<Exclude<SfxId, 'combo'>, SfxPatch> = {
       drop: f * 0.42,
       dropTime: 0.055,
       type: 'triangle',
-      gain: 0.26,
+      gain: 0.24,
       attack: 0.003,
       decay: 0.105,
     });
@@ -159,7 +159,7 @@ export const PATCHES: Record<Exclude<SfxId, 'combo'>, SfxPatch> = {
     thump(v, t, {
       freq: f * 0.5,
       type: 'sine',
-      gain: 0.1,
+      gain: 0.09,
       attack: 0.004,
       decay: 0.085,
     });
@@ -168,7 +168,7 @@ export const PATCHES: Record<Exclude<SfxId, 'combo'>, SfxPatch> = {
       type: 'bandpass',
       freq: 2600 * wobble,
       q: 0.9,
-      gain: 0.075,
+      gain: 0.065,
       attack: 0.001,
       decay: 0.022,
       highpass: 900,
@@ -178,7 +178,7 @@ export const PATCHES: Record<Exclude<SfxId, 'combo'>, SfxPatch> = {
       type: 'bandpass',
       freq: 400 * c.mul * wobble,
       q: 4.5,
-      gain: 0.085,
+      gain: 0.075,
       attack: 0.002,
       decay: 0.13,
     });

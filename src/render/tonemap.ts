@@ -1,0 +1,104 @@
+import * as THREE from 'three';
+import type { ThemePaletteLike } from './api';
+
+/**
+ * CPU side of the tone-mapping deal the backdrop makes with the finishing pass.
+ *
+ * The cyclorama wants to appear as the exact palette hex, but everything in the
+ * post path gets ACES'd on the way out. So the backdrop shader pre-divides
+ * itself by the curve. That means the backdrop can sit at a *linear* value well
+ * above 1 — a cream sweep needs about 3.4 — which would otherwise sail past the
+ * bloom threshold and turn the whole wall into a glow. Hence `backdropPeakLuma`:
+ * the bloom threshold is set from the palette itself, just above the brightest
+ * the wall can be, so bloom only ever picks up real highlights.
+ */
+
+/** Matches the clamp inside `acesInverse` in shaders.ts. */
+export const TARGET_CLAMP = 0.97;
+
+/** Inverse of three's ACES_IN. Derived, not transcribed. */
+export function acesInMatrixInverse(): THREE.Matrix3 {
+  return new THREE.Matrix3()
+    .set(0.59719, 0.35458, 0.04823, 0.076, 0.90834, 0.01566, 0.0284, 0.13383, 0.83777)
+    .invert();
+}
+
+/** Inverse of three's ACES_OUT. */
+export function acesOutMatrixInverse(): THREE.Matrix3 {
+  return new THREE.Matrix3()
+    .set(1.60475, -0.53108, -0.07367, -0.10208, 1.10813, -0.00605, -0.00327, -0.07276, 1.07602)
+    .invert();
+}
+
+const IN_INV = /* @__PURE__ */ acesInMatrixInverse();
+const OUT_INV = /* @__PURE__ */ acesOutMatrixInverse();
+
+const tmpVec = /* @__PURE__ */ new THREE.Vector3();
+const tmpColor = /* @__PURE__ */ new THREE.Color();
+
+function rrtInverse(v: THREE.Vector3): void {
+  const solve = (y: number): number => {
+    const a = 1 - 0.983729 * y;
+    const b = 0.0245786 - 0.432951 * y;
+    const c = -(0.000090537 + 0.238081 * y);
+    const disc = Math.max(b * b - 4 * a * c, 0);
+    return (-b + Math.sqrt(disc)) / (2 * a);
+  };
+  v.set(solve(v.x), solve(v.y), solve(v.z));
+}
+
+/**
+ * The linear value that, after ACES at `exposure`, displays as `target`.
+ * Writes into `out` and returns it. No allocation.
+ */
+export function acesInverse(
+  target: THREE.Color,
+  exposure: number,
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  out.set(
+    THREE.MathUtils.clamp(target.r, 0, TARGET_CLAMP),
+    THREE.MathUtils.clamp(target.g, 0, TARGET_CLAMP),
+    THREE.MathUtils.clamp(target.b, 0, TARGET_CLAMP),
+  );
+  out.applyMatrix3(OUT_INV);
+  rrtInverse(out);
+  out.applyMatrix3(IN_INV);
+  out.set(Math.max(out.x, 0), Math.max(out.y, 0), Math.max(out.z, 0));
+  out.multiplyScalar(0.6 / Math.max(exposure, 0.0001));
+  return out;
+}
+
+const REC709 = { r: 0.2126, g: 0.7152, b: 0.0722 };
+
+function lumaOfHex(hex: number, exposure: number, gain: number): number {
+  tmpColor.setHex(hex, THREE.SRGBColorSpace);
+  acesInverse(tmpColor, exposure, tmpVec).multiplyScalar(gain);
+  return tmpVec.x * REC709.r + tmpVec.y * REC709.g + tmpVec.z * REC709.b;
+}
+
+/**
+ * Brightest luminance the cyclorama can reach for this palette, in the linear
+ * units the bloom high-pass sees.
+ *
+ * @param glowGain the multiplicative lift the sweep's softbox applies.
+ */
+export function backdropPeakLuma(
+  p: ThemePaletteLike,
+  exposure = p.exposure,
+  glowGain = 1.14,
+): number {
+  return Math.max(
+    lumaOfHex(p.bgTop, exposure, glowGain),
+    lumaOfHex(p.bgBottom, exposure, glowGain),
+    lumaOfHex(p.ground, exposure, glowGain),
+  );
+}
+
+/**
+ * Bloom threshold that keeps the backdrop out of the glow while leaving real
+ * specular highlights — glaze, syrup, sugar — well inside it.
+ */
+export function bloomThresholdFor(p: ThemePaletteLike): number {
+  return Math.max(1.0, backdropPeakLuma(p) * 1.12);
+}

@@ -111,6 +111,8 @@ export class Voice {
   private readonly sources: AudioScheduledSourceNode[] = [];
   private pending = 0;
   private dead = false;
+  /** Stolen voices are fading out; they no longer count against the pool. */
+  private stealing = false;
   /** Latest scheduled stop time — the pool's watchdog uses it. */
   endsAt: number;
 
@@ -144,6 +146,10 @@ export class Voice {
 
   get isDead(): boolean {
     return this.dead;
+  }
+
+  get isStealing(): boolean {
+    return this.stealing;
   }
 
   track<T extends AudioNode>(n: T): T {
@@ -216,9 +222,15 @@ export class Voice {
     }
   }
 
-  /** Fast fade + hard stop, used when the pool steals this slot. */
+  /**
+   * Release this slot with an 18ms fade rather than a hard disconnect —
+   * yanking a ringing oscillator out of the graph clicks, and stealing happens
+   * exactly when the game is loudest. The voice tears itself down from the
+   * resulting `onended`; the pool stops counting it immediately.
+   */
   steal(now: number): void {
-    if (this.dead) return;
+    if (this.dead || this.stealing) return;
+    this.stealing = true;
     try {
       const g = this.out.gain;
       g.cancelScheduledValues(now);
@@ -229,11 +241,14 @@ export class Voice {
     }
     for (const s of this.sources) {
       try {
-        s.stop(now + 0.02);
+        s.stop(now + 0.025);
       } catch {
         /* ignore */
       }
     }
+    // If onended never arrives (an interrupted context), the pool watchdog
+    // reclaims this slot shortly after.
+    this.endsAt = now + 0.05;
   }
 
   /** Disconnect everything and release the pool slot. Idempotent. */
@@ -281,25 +296,61 @@ export class VoicePool {
     const now = this.ctx.currentTime;
     // Watchdog: reclaim anything whose scheduled end is well past. onended
     // normally does this, but a suspended/interrupted context can swallow it.
+    let live = 0;
     for (let i = this.voices.length - 1; i >= 0; i--) {
       const v = this.voices[i];
-      if (v.endsAt + 1.5 < now) v.kill();
+      if (v.endsAt + 1.5 < now) {
+        v.kill();
+        continue;
+      }
+      if (!v.isStealing) live++;
     }
-    if (this.voices.length >= this.limit) {
+    if (live >= this.limit) {
       let oldest: Voice | null = null;
       for (const v of this.voices) {
-        if (v.protectedVoice) continue;
+        if (v.isStealing || v.protectedVoice) continue;
         if (!oldest || v.startedAt < oldest.startedAt) oldest = v;
       }
-      if (!oldest) oldest = this.voices[0];
-      if (oldest) {
-        oldest.steal(now);
-        oldest.kill();
+      if (!oldest) {
+        // Everything is protected (a wall of music pads): take the oldest one.
+        for (const v of this.voices) {
+          if (v.isStealing) continue;
+          if (!oldest || v.startedAt < oldest.startedAt) oldest = v;
+        }
       }
+      oldest?.steal(now);
+    }
+    // Hard ceiling. A stolen voice needs ~25ms of *context* time to fade out
+    // and release itself, and context time does not advance inside a single
+    // JS frame — so a caller that fires hundreds of sounds in one frame would
+    // otherwise pile up fading voices without bound. Past 1.5x the pool, the
+    // oldest fading voices are torn down immediately instead.
+    while (this.voices.length >= Math.ceil(this.limit * 1.5)) {
+      let victim: Voice | null = null;
+      for (const v of this.voices) {
+        if (v.isStealing) {
+          victim = v;
+          break;
+        }
+      }
+      if (!victim) {
+        for (const v of this.voices) {
+          if (v.protectedVoice) continue;
+          if (!victim || v.startedAt < victim.startedAt) victim = v;
+        }
+      }
+      if (!victim) break;
+      victim.kill();
     }
     const voice = new Voice(this, this.ctx, dest, when, pan, gain, protectedVoice);
     this.voices.push(voice);
     return voice;
+  }
+
+  /** Fade every voice out and let it clean itself up. Used when muting SFX. */
+  stealAll(): void {
+    const now = this.ctx.currentTime;
+    for (const v of this.voices.slice()) v.steal(now);
   }
 
   release(v: Voice): void {

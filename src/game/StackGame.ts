@@ -127,6 +127,18 @@ export class StackGame {
     return this.theme;
   }
 
+  /**
+   * Signed misalignment of the sliding layer against the tower top, on the
+   * active axis; null when nothing is sliding. Exposed so automated play (the
+   * screenshot harness) can time a drop instead of tapping blind.
+   */
+  get dropOffset(): number | null {
+    if (this.state !== 'playing' || !this.moving) return null;
+    const top = this.layers[this.layers.length - 1];
+    if (!top) return null;
+    return this.moving.axis === 'x' ? this.moving.x - top.x : this.moving.z - top.z;
+  }
+
   // -------------------------------------------------------------------------
   // lifecycle
   // -------------------------------------------------------------------------
@@ -209,6 +221,7 @@ export class StackGame {
     this.topY = height;
 
     this.deps.rig.setOrbit(0);
+    this.deps.rig.snapOrbit();
     this.deps.rig.setLift(0);
     this.deps.rig.setTop(this.topY, true);
     this.deps.rig.snap();

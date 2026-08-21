@@ -13,16 +13,13 @@ import { TAU, clamp } from '../../core/math';
 import { mergeAll, mesh, pillow, puck, roughen, roundedBox, droopSlab, tintGeometry } from '../kit';
 import {
   areaRatio,
-  discXZ,
   fillFlat,
   fillGradient,
   finalize,
-  hexCss,
   longAxis,
   noiseWash,
   propCount,
   propScale,
-  ribbon,
   safeD,
   safeH,
   safeRadius,
@@ -30,6 +27,7 @@ import {
   scatterOnSurface,
   seg,
   sheet,
+  softRound,
   softStroke,
   speckle,
   topSampler,
@@ -361,7 +359,7 @@ function buildRice(ctx: FoodBuildCtx): THREE.Object3D {
   const ps = propScale(ctx);
   const gr = 0.019 * ps;
   const grains = scatterOnSurface(
-    propCount(ctx, 120, 4),
+    propCount(ctx, 105, 4),
     w,
     d,
     surface,
@@ -370,7 +368,7 @@ function buildRice(ctx: FoodBuildCtx): THREE.Object3D {
         gr * rng.range(0.8, 1.15),
         gr * rng.range(2, 3.2),
         2,
-        seg(ctx, 7, 6, 4),
+        seg(ctx, 6, 5, 4),
       );
       cap.rotateZ(Math.PI / 2);
       return cap;
@@ -548,7 +546,7 @@ function buildAvocado(ctx: FoodBuildCtx): THREE.Object3D {
   const maxShards = ctx.quality === 'low' ? 4 : 6;
   const n = clamp(Math.round(L / 0.48), 1, ctx.offcut ? 3 : maxShards);
   const step = L / n;
-  const shardLen = step * 1.9;
+  const shardLen = step * (n === 1 ? 1.15 : 1.7);
   const shardThk = h * 0.46;
   const shardWid = S * 0.94;
   const tilt = clamp((h - shardThk) / Math.max(shardLen, 1e-4), 0.06, 0.5);
@@ -559,12 +557,13 @@ function buildAvocado(ctx: FoodBuildCtx): THREE.Object3D {
 
   for (let i = 0; i < n; i++) {
     const at = -L / 2 + step * (i + 0.5);
-    const body = pillow(
-      alongX ? shardLen : shardWid,
-      shardThk,
-      alongX ? shardWid : shardLen,
-      { round: 0.8, segments: seg(ctx, 18, 13, 9), squash: 0.55 },
-    );
+    const bw = alongX ? shardLen : shardWid;
+    const bd = alongX ? shardWid : shardLen;
+    const body = pillow(bw, shardThk, bd, {
+      round: softRound(0.8, bw, bd),
+      segments: seg(ctx, 18, 13, 9),
+      squash: 0.55,
+    });
     body.translate(0, -shardThk / 2, 0);
     if (alongX) body.rotateZ(angle);
     else body.rotateX(-angle);
@@ -572,12 +571,13 @@ function buildAvocado(ctx: FoodBuildCtx): THREE.Object3D {
     bodies.push(body);
 
     if (!ctx.offcut) {
-      const inner = pillow(
-        alongX ? shardLen * 0.9 : shardWid * 0.34,
-        shardThk * 0.5,
-        alongX ? shardWid * 0.34 : shardLen * 0.9,
-        { round: 0.85, segments: seg(ctx, 12, 9, 6), squash: 0.6 },
-      );
+      const iw = alongX ? shardLen * 0.9 : shardWid * 0.34;
+      const idp = alongX ? shardWid * 0.34 : shardLen * 0.9;
+      const inner = pillow(iw, shardThk * 0.5, idp, {
+        round: softRound(0.85, iw, idp),
+        segments: seg(ctx, 12, 9, 6),
+        squash: 0.6,
+      });
       inner.translate(0, -shardThk * 0.25, 0);
       if (alongX) inner.rotateZ(angle);
       else inner.rotateX(-angle);
@@ -620,11 +620,11 @@ function buildTobiko(ctx: FoodBuildCtx): THREE.Object3D {
 
   const ps = propScale(ctx);
   const r = 0.044 * ps;
-  const rad = seg(ctx, 8, 6, 5);
-  const ring = seg(ctx, 6, 5, 4);
+  const rad = seg(ctx, 6, 5, 4);
+  const ring = seg(ctx, 4, 4, 3);
 
   const lower = scatterOnSurface(
-    propCount(ctx, 150, 5),
+    propCount(ctx, 118, 5),
     w,
     d,
     surface,
@@ -634,7 +634,7 @@ function buildTobiko(ctx: FoodBuildCtx): THREE.Object3D {
   const upper = ctx.offcut
     ? null
     : scatterOnSurface(
-        propCount(ctx, 62, 2),
+        propCount(ctx, 46, 2),
         w * 0.88,
         d * 0.88,
         (x, z) => surface(x, z) + r * 0.95,
@@ -745,6 +745,7 @@ function buildWasabi(ctx: FoodBuildCtx): THREE.Object3D {
     domed: 1.2,
     taper: 0.68,
     wobble: 0.08,
+    square: 0.2,
     radial: seg(ctx, 26, 18, 12),
     rings: 5,
     seed: ctx.index + 3,
@@ -805,11 +806,12 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 
   // The board occupies y in [-PLATE_T, 0] so its TOP SURFACE IS EXACTLY y = 0
   // and the tower's first layer lands flush on it.
+  // The lacquered field is recessed a hair below the polished inlay so the
+  // board reads with a fine bevel around its edge.
   const board = roundedBox(w, PLATE_SLAB, d, safeRadius(Math.min(w, d) * 0.035, w, d, PLATE_SLAB), 3);
-  board.translate(0, -PLATE_SLAB, 0);
+  board.translate(0, -PLATE_SLAB - 0.004, 0);
   g.add(mesh(board, lacquer));
 
-  // a fine inset bevel that catches the rim light
   const inlayT = PLATE_SLAB * 0.34;
   const inlay = roundedBox(
     w * 0.955,
@@ -818,7 +820,7 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
     safeRadius(Math.min(w, d) * 0.03, w, d, inlayT),
     2,
   );
-  inlay.translate(0, -inlayT + 0.0015, 0);
+  inlay.translate(0, -inlayT, 0);
   g.add(mesh(inlay, sheen));
 
   // geta feet

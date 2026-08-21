@@ -51,21 +51,21 @@ export function paintGlint(ctx: CanvasRenderingContext2D, size: number): void {
 
   const core = ctx.createRadialGradient(c, c, 0, c, c, c);
   core.addColorStop(0.0, 'rgba(255,255,255,1)');
-  core.addColorStop(0.11, 'rgba(255,255,255,0.88)');
-  core.addColorStop(0.3, 'rgba(255,255,255,0.32)');
-  core.addColorStop(0.62, 'rgba(255,255,255,0.07)');
+  core.addColorStop(0.08, 'rgba(255,255,255,0.9)');
+  core.addColorStop(0.22, 'rgba(255,255,255,0.34)');
+  core.addColorStop(0.5, 'rgba(255,255,255,0.06)');
   core.addColorStop(1.0, 'rgba(255,255,255,0)');
   ctx.fillStyle = core;
   ctx.fillRect(0, 0, size, size);
 
   const flare = ctx.createRadialGradient(c, c, 0, c, c, c);
-  flare.addColorStop(0.0, 'rgba(255,255,255,0.55)');
-  flare.addColorStop(0.25, 'rgba(255,255,255,0.16)');
+  flare.addColorStop(0.0, 'rgba(255,255,255,0.30)');
+  flare.addColorStop(0.22, 'rgba(255,255,255,0.08)');
   flare.addColorStop(1.0, 'rgba(255,255,255,0)');
 
   ctx.globalCompositeOperation = 'lighter';
   const arms = [0, Math.PI * 0.5, Math.PI * 0.25, -Math.PI * 0.25];
-  const squash = [0.075, 0.075, 0.04, 0.04];
+  const squash = [0.05, 0.05, 0.028, 0.028];
   for (let i = 0; i < arms.length; i++) {
     ctx.save();
     ctx.translate(c, c);
@@ -129,7 +129,9 @@ export function createCrumbPool(scene: THREE.Scene, capacity: number): ParticleP
     depthWrite: false,
     depthTest: true,
     fog: true,
-    side: THREE.DoubleSide,
+    // The shard is a closed, consistently wound tetra, so backfaces are pure
+    // waste: FrontSide halves the fragment cost of the cheapest-must-be effect.
+    side: THREE.FrontSide,
   });
   const pool = new ParticlePool({
     name: 'vfx.crumbs',

@@ -442,8 +442,12 @@ async function boot(): Promise<void> {
     layers: 0,
     tier: kit.quality.tier as string,
     state: state as string,
+    offset: null as number | null,
   };
   (window as unknown as { __snackeryStats?: typeof stats }).__snackeryStats = stats;
+  // The post chain renders several passes per frame and each one resets
+  // renderer.info, so accumulate manually and reset once at the frame end.
+  kit.renderer.info.autoReset = false;
 
   ticker.start(({ dt, elapsed, fps }) => {
     if (state !== 'paused') game.update(dt, elapsed);
@@ -463,6 +467,8 @@ async function boot(): Promise<void> {
     stats.layers = game.layerCount;
     stats.tier = kit.quality.tier;
     stats.state = state;
+    stats.offset = game.dropOffset;
+    kit.renderer.info.reset();
   });
 
   requestAnimationFrame(() => ui.dismissBoot());

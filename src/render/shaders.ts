@@ -50,7 +50,7 @@ vec3 rrtAndOdtFitInverse( vec3 y ) {
 // inIn / outIn are the inverses of ACES_IN / ACES_OUT, supplied as uniforms so
 // there are no transcribed magic numbers to drift out of sync.
 vec3 acesInverse( vec3 target, float exposure, mat3 inIn, mat3 outIn ) {
-  vec3 v = outIn * clamp( target, vec3( 0.0 ), vec3( 0.995 ) );
+  vec3 v = outIn * clamp( target, vec3( 0.0 ), vec3( 0.97 ) );
   v = rrtAndOdtFitInverse( v );
   vec3 lin = inIn * v;
   return max( lin, vec3( 0.0 ) ) * ( 0.6 / max( exposure, 0.0001 ) );

@@ -283,6 +283,7 @@ class SnackeryAudio implements AudioEngine {
   private disposed = false;
   private manuallySuspended = false;
   private visibilityHandler: (() => void) | null = null;
+  private silentSource: AudioBufferSourceNode | null = null;
 
   get ready(): boolean {
     const g = this.graph;
@@ -321,6 +322,7 @@ class SnackeryAudio implements AudioEngine {
       }
       // The iOS Safari ritual: play one silent sample from inside the gesture.
       try {
+        this.releaseSilentSource();
         const src = g.ctx.createBufferSource();
         src.buffer = g.buffers.silent();
         src.onended = () => {
@@ -329,9 +331,18 @@ class SnackeryAudio implements AudioEngine {
           } catch {
             /* ignore */
           }
+          if (this.silentSource === src) this.silentSource = null;
         };
         src.connect(g.ctx.destination);
         src.start(0);
+        // The buffer is one sample long, but an explicit stop guarantees the
+        // teardown even if the context is interrupted before it plays out.
+        try {
+          src.stop(g.ctx.currentTime + 0.05);
+        } catch {
+          /* ignore */
+        }
+        this.silentSource = src;
       } catch {
         /* ignore */
       }
@@ -368,6 +379,18 @@ class SnackeryAudio implements AudioEngine {
       // ends here, silently. The game keeps running.
       this.failed = true;
       this.graph = null;
+    }
+  }
+
+  private releaseSilentSource(): void {
+    const prev = this.silentSource;
+    this.silentSource = null;
+    if (!prev) return;
+    try {
+      prev.onended = null;
+      prev.disconnect();
+    } catch {
+      /* ignore */
     }
   }
 
@@ -495,7 +518,8 @@ class SnackeryAudio implements AudioEngine {
       const now = g.ctx.currentTime;
       holdParam(g.sfxBus.gain, now);
       g.sfxBus.gain.setTargetAtTime(this.sfxEnabled ? SFX_BUS_LEVEL : 0, now, 0.02);
-      if (!this.sfxEnabled) g.sfxPool.killAll();
+      // Fade the tails out with the bus rather than cutting them dead.
+      if (!this.sfxEnabled) g.sfxPool.stealAll();
     } catch {
       /* ignore */
     }
@@ -588,6 +612,7 @@ class SnackeryAudio implements AudioEngine {
         document.removeEventListener('visibilitychange', this.visibilityHandler);
       }
       this.visibilityHandler = null;
+      this.releaseSilentSource();
       this.music?.dispose();
       this.music = null;
       this.ladder = null;

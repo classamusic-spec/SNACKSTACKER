@@ -391,9 +391,9 @@ void main() {
   if (vAlpha <= 0.002) discard;
   // Gaussian band around the radius: soft on both sides, no aliased rim.
   float d = (length(vLocal) - vRadius) / vThick;
-  float band = exp(-d * d * 2.1);
+  float band = exp(-d * d * 2.9);
   if (band <= 0.004) discard;
-  vec3 rgb = vColor * band + vec3(band * band * band) * 0.5;
+  vec3 rgb = vColor * band + vec3(band * band * band) * 0.28;
   gl_FragColor = vec4(rgb, vAlpha);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

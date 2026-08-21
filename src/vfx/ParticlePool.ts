@@ -99,6 +99,10 @@ export class ParticlePool {
     this.mesh.renderOrder = opts.renderOrder;
     this.mesh.visible = false;
     this.mesh.raycast = noopRaycast;
+    // Explicit: the shader owns vertex placement, so a depth-material shadow
+    // pass would draw this pool as a blob at the origin. Never shadow-cast.
+    this.mesh.castShadow = false;
+    this.mesh.receiveShadow = false;
   }
 
   get live(): number {

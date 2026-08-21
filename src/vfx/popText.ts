@@ -137,6 +137,8 @@ export class PopTextPool {
     this.group = new THREE.Group();
     this.group.name = 'vfx.popText';
     this.group.matrixAutoUpdate = false;
+    this.group.castShadow = false;
+    this.group.receiveShadow = false;
     this.scene.add(this.group);
 
     for (let i = 0; i < capacity; i++) {
