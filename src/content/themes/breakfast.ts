@@ -649,6 +649,7 @@ export const breakfastTheme: ThemeDef = {
     blueberryScatter,
     waffle,
   ],
+  hero: [7, 0, 3, 4, 2, 1],
   plate: breakfastPlate,
   scenery: breakfastScenery,
   ambience: 'breakfast',

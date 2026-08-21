@@ -277,6 +277,11 @@ export class Backdrop {
     if (parallax !== undefined) this.skyMat.uniforms.uParallax.value = parallax;
   }
 
+  /** Hide the studio floor when a theme brings its own table or tatami. */
+  setGroundVisible(visible: boolean): void {
+    this.ground.visible = visible;
+  }
+
   setGroundY(y: number): void {
     this.ground.position.y = y;
     this.contact.position.y = y + 0.012;

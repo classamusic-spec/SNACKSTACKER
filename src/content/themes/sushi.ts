@@ -1003,6 +1003,7 @@ export const sushiTheme: ThemeDef = {
     vignette: 0.4,
   },
   foods,
+  hero: [0, 2, 3, 4, 5, 1],
   plate: buildPlate,
   scenery: buildScenery,
   ambience: 'sushi',

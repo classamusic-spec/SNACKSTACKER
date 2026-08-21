@@ -54,6 +54,14 @@ export interface ThemeDef {
   palette: ThemePaletteLike;
   /** Foods cycle in order so towers read as a recipe, not noise. */
   foods: FoodDef[];
+  /**
+   * Indices into `foods`, bottom to top, for the hero tower on the home
+   * screen. The gameplay run cycles in authored order, which is right for the
+   * game but not necessarily an appetising assembly — a burger is authored
+   * top-down and would otherwise be built upside down with loose pickle chips
+   * on the summit. Defaults to the first six foods.
+   */
+  hero?: number[];
   /** The plate/board/tray the tower is built on. */
   plate(ctx: FoodBuildCtx): THREE.Object3D;
   /** Scenery ring placed around the plate (booth seats, tatami, etc). Optional. */

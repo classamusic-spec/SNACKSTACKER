@@ -24,6 +24,24 @@ const CHROME_CANDIDATES = [
 ];
 const executablePath = CHROME_CANDIDATES.find((p) => existsSync(p));
 
+/**
+ * Software rasterisation (SwiftShader) renders this scene at roughly 1fps at
+ * retina density, which is far too slow to play. Drop to 1x and force the low
+ * quality tier so the harness gets a playable frame rate. Merges into any
+ * existing save rather than replacing it, so purchases survive a reload.
+ */
+const SEED_SAVE = () => {
+  const KEY = 'snackery.save.v1';
+  try {
+    const raw = window.localStorage.getItem(KEY);
+    const save = raw ? JSON.parse(raw) : { version: 1 };
+    save.settings = { ...(save.settings ?? {}), quality: 'low' };
+    window.localStorage.setItem(KEY, JSON.stringify(save));
+  } catch {
+    /* private mode or a corrupt blob — the game falls back to defaults */
+  }
+};
+
 const errors = [];
 const shot = async (page, name) => {
   await page.screenshot({ path: resolve(OUT, `${name}.png`) });
@@ -97,10 +115,11 @@ const run = async () => {
   });
   const page = await browser.newPage({
     viewport: PHONE,
-    deviceScaleFactor: 2,
+    deviceScaleFactor: 1,
     isMobile: true,
     hasTouch: true,
   });
+  await page.addInitScript(SEED_SAVE);
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(`console: ${m.text()}`);
   });

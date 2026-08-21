@@ -899,6 +899,7 @@ export const candyTheme: ThemeDef = {
     vignette: 0.32,
   },
   foods,
+  hero: [7, 4, 3, 2, 1, 0],
   plate: buildPlate,
   scenery: buildScenery,
   ambience: 'candy',

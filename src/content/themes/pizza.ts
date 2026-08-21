@@ -766,6 +766,7 @@ export const pizzaTheme: ThemeDef = {
     bellPepper,
     parmesanDust,
   ],
+  hero: [0, 1, 2, 3, 5, 4],
   plate: pizzaPlate,
   scenery: pizzaScenery,
   ambience: 'pizza',

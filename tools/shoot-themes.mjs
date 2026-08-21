@@ -28,6 +28,24 @@ const THEMES = [
   'Pizza Piazza',
 ];
 
+/**
+ * Software rasterisation (SwiftShader) renders this scene at roughly 1fps at
+ * retina density, which is far too slow to play. Drop to 1x and force the low
+ * quality tier so the harness gets a playable frame rate. Merges into any
+ * existing save rather than replacing it, so purchases survive a reload.
+ */
+const SEED_SAVE = () => {
+  const KEY = 'snackery.save.v1';
+  try {
+    const raw = window.localStorage.getItem(KEY);
+    const save = raw ? JSON.parse(raw) : { version: 1 };
+    save.settings = { ...(save.settings ?? {}), quality: 'low' };
+    window.localStorage.setItem(KEY, JSON.stringify(save));
+  } catch {
+    /* private mode or a corrupt blob — the game falls back to defaults */
+  }
+};
+
 const errors = [];
 
 /** Decide inside the page at frame rate; CDP polling misses the window. */
@@ -69,10 +87,11 @@ const run = async () => {
   });
   const page = await browser.newPage({
     viewport: PHONE,
-    deviceScaleFactor: 2,
+    deviceScaleFactor: 1,
     isMobile: true,
     hasTouch: true,
   });
+  await page.addInitScript(SEED_SAVE);
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(`console: ${m.text()}`);
   });
@@ -95,41 +114,36 @@ const run = async () => {
 
   for (const name of THEMES) {
     const slug = name.toLowerCase().replace(/\s+/g, '-');
-    // Reopen the shop if a purchase auto-selected a theme and closed it.
-    if (!(await page.locator('.sn-sheet', { hasText: 'Shop' }).count())) {
-      await page.locator('button[aria-label="Shop" i]').first().click();
-      await page.waitForTimeout(800);
-    }
+    // A reload is far more reliable than hunting for a Home button that may be
+    // below the fold on the result sheet. Purchases persist in the save.
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+
+    await page.locator('button[aria-label="Shop" i]').first().click();
+    await page.waitForTimeout(900);
     const card = page.locator('button.sn-card', { hasText: name }).first();
-    if (await card.count()) {
-      await card.scrollIntoViewIfNeeded().catch(() => undefined);
-      if (!(await card.isDisabled())) {
-        await card.click();
-        await page.waitForTimeout(900);
-      }
-    } else {
+    if (!(await card.count())) {
       console.log(`  !! no card for ${name}`);
       continue;
     }
+    await card.scrollIntoViewIfNeeded().catch(() => undefined);
+    if (!(await card.isDisabled())) {
+      await card.click();
+      await page.waitForTimeout(900);
+    }
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(800);
 
     const play = page.locator('button', { hasText: /^play$/i }).first();
     if (await play.count()) await play.click();
     else await page.keyboard.press('Space');
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1400);
 
     const made = await playWell(page, 6);
     await page.waitForTimeout(500);
     await page.screenshot({ path: resolve(OUT, `${slug}.png`) });
-    console.log(`  ${name}: ${made} clean drops`);
-
-    // Back to home for the next theme.
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(400);
-    const home = page.locator('button', { hasText: /^home$/i }).first();
-    if (await home.count()) await home.click();
-    await page.waitForTimeout(1400);
+    const st = await page.evaluate(() => window.__snackeryStats ?? null);
+    console.log(`  ${name}: ${made} clean drops`, JSON.stringify(st));
   }
 
   await browser.close();

@@ -617,6 +617,7 @@ export const dinerTheme: ThemeDef = {
     baconRashers,
     bottomBun,
   ],
+  hero: [7, 1, 2, 3, 4, 0],
   plate: dinerPlate,
   scenery: dinerScenery,
   ambience: 'diner',

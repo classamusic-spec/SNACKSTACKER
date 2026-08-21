@@ -154,9 +154,10 @@ export class StackGame {
     if (!this.theme) return;
     this.buildPlate();
 
-    const showcase = 6;
+    const showcase = Math.min(6, this.theme.foods.length);
+    const order = this.heroOrder(showcase);
     for (let i = 0; i < showcase; i++) {
-      const food = this.foodFor(i);
+      const food = order[i];
       const height = food.thickness;
       const object = this.buildFood(food, TUNING.BASE_FOOTPRINT, TUNING.BASE_FOOTPRINT, height, i, false);
       object.position.set(0, this.topY, 0);
@@ -553,6 +554,20 @@ export class StackGame {
       phase: startSide ? 1 : 0,
     };
     this.deps.audio.play('whoosh', { gain: 0.22 });
+  }
+
+  /** The bottom-to-top run used for the attract tower. */
+  private heroOrder(count: number): FoodDef[] {
+    const foods = this.theme!.foods;
+    const declared = this.theme!.hero;
+    if (declared?.length) {
+      const picked = declared
+        .map((i) => foods[i])
+        .filter((f): f is FoodDef => !!f)
+        .slice(0, count);
+      if (picked.length) return picked;
+    }
+    return foods.slice(0, count);
   }
 
   private foodFor(index: number): FoodDef {

@@ -65,12 +65,17 @@ export class Ticker {
     if (!this.running) return;
     this.raf = requestAnimationFrame(this.loop);
 
-    // 0.05s == 20fps floor. Anything worse is treated as a hitch, not slow-mo.
-    const dt = clamp((now - this.last) / 1000, 0, 0.05);
+    // 0.05s == 20fps floor. Anything worse is treated as a hitch: the game
+    // slows down rather than teleporting.
+    const rawDt = (now - this.last) / 1000;
+    const dt = clamp(rawDt, 0, 0.05);
     this.last = now;
     this.frame++;
 
-    this.fpsAccum += dt;
+    // The FPS meter must use REAL elapsed time, not the clamped step — summing
+    // clamped dt makes any device below 20fps report exactly 20, which would
+    // hide genuine slowness from the frame governor.
+    this.fpsAccum += rawDt;
     this.fpsFrames++;
     this.fpsTimer += dt;
     if (this.fpsTimer >= 0.5) {

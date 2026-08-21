@@ -926,6 +926,7 @@ export const tacoTheme: ThemeDef = {
     vignette: 0.36,
   },
   foods,
+  hero: [0, 1, 5, 2, 3, 4],
   plate: buildPlate,
   scenery: buildScenery,
   ambience: 'taco',

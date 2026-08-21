@@ -244,6 +244,11 @@ class Kit implements SceneKit {
     this.backdrop.setContactShadow(contactRadius, contactStrength);
   }
 
+  /** Extra: hide the studio floor when a theme supplies its own surface. */
+  setGroundVisible(visible: boolean): void {
+    this.backdrop.setGroundVisible(visible);
+  }
+
   /** Extra: tier-correct shadow flags for anything the game adds to the scene. */
   applyShadowFlags(root: THREE.Object3D, cast = true, receive = true): void {
     const on = this.quality.shadows;
