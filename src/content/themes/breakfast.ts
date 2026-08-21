@@ -548,7 +548,7 @@ function breakfastPlate(ctx: FoodBuildCtx): THREE.Object3D {
   );
 
   const lip = ringTorus(w, d, 0.045, t * 0.44, pickQ(ctx, 6, 8, 10), pickQ(ctx, 24, 40, 64));
-  lip.translate(0, -t * 0.44 - 0.005, 0);
+  lip.translate(0, -t * 0.44 - 0.03, 0);
   g.add(mesh(lip, ceramicMat(m), { cast: false }));
   return g;
 }

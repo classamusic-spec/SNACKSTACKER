@@ -42,9 +42,9 @@
   --safe-l: env(safe-area-inset-left, 0px);
 
   /* ---- material -------------------------------------------------------- */
-  --glass-blur: blur(30px) saturate(180%);
-  --glass-bg: rgba(18, 15, 14, 0.34);
-  --glass-bg-strong: rgba(16, 13, 12, 0.5);
+  --glass-blur: blur(30px) saturate(135%);
+  --glass-bg: rgba(17, 14, 13, 0.46);
+  --glass-bg-strong: rgba(15, 12, 11, 0.62);
   --glass-solid: rgba(24, 20, 18, 0.9);
   --hairline: rgba(255, 255, 255, 0.18);
   --hairline-soft: rgba(255, 255, 255, 0.12);

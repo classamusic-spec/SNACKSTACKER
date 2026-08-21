@@ -291,23 +291,47 @@ function buildShell(ctx: FoodBuildCtx): THREE.Object3D {
   // kit's foldedShell is an ARCH extruded along Z: the fold sits at the top and
   // the two solid cross-section faces are at x = +/-w/2. That is a folded
   // tortilla seen end-on, which is exactly the read we want.
-  const shell = foldedShell(w, h, d, {
+  const archH = h * 0.93;
+  const shell = foldedShell(w, archH, d, {
     openness: 0.5,
     segments: seg(ctx, 30, 22, 13),
     thickness: 0.11,
   });
   roughen(shell, Math.min(d, h) * 0.02, 13, ctx.index * 3 + 2);
   // Normalise the shell itself instead of letting finalize stretch the whole
-  // group, so the filling below is placed against its real height.
+  // group, so the crease and filling below are placed against its real height.
   shell.computeBoundingBox();
   const sbb = shell.boundingBox;
   if (sbb) {
     const ext = sbb.max.y - sbb.min.y;
-    if (ext > 1e-5) shell.scale(1, h / ext, 1);
+    if (ext > 1e-5) shell.scale(1, archH / ext, 1);
     shell.computeBoundingBox();
     if (shell.boundingBox) shell.translate(0, -shell.boundingBox.min.y, 0);
   }
   g.add(mesh(shell, shellMat(ctx)));
+
+  // The folded crease along the top. An extruded arch has no vertices between
+  // its two end faces, so its top edge is dead straight; this rounded crease is
+  // what stops the long side reading as a plain slab.
+  const cr = Math.min(h * 0.13, d * 0.08, w * 0.18);
+  const crest: THREE.Vector3[] = [];
+  const steps = ctx.offcut ? 4 : 8;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const dip = 0.1 + 0.95 * (0.5 + 0.5 * Math.sin(t * Math.PI * 2.3 + ctx.index * 1.7));
+    crest.push(
+      new THREE.Vector3(
+        (t - 0.5) * w * 0.99,
+        archH - cr * dip,
+        Math.sin(t * Math.PI * 1.6 + ctx.index) * d * 0.025,
+      ),
+    );
+  }
+  const ridge = ribbon(crest, cr, {
+    tubular: seg(ctx, 30, 20, 12),
+    radial: seg(ctx, 8, 6, 5),
+  });
+  if (ridge) g.add(mesh(ridge, shellMat(ctx)));
 
   // Lettuce and cheese spilling out of the two open ends. They straddle the end
   // faces so half the bit is inside the fold and half pokes out — placing them

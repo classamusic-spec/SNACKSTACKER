@@ -25,6 +25,8 @@ export interface StoreItemView {
   tagline: string;
   glyph: string;
   priceLabel: string;
+  /** Secondary line under the action, e.g. progress toward the coin price. */
+  subLabel?: string;
   owned: boolean;
   selected: boolean;
   /** e.g. "Best value" / "New" */

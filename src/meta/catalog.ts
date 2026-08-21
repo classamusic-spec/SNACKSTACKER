@@ -36,11 +36,11 @@ export const PAID_THEME_SKUS: readonly SkuId[] = Object.freeze([
 
 const TABLE: Sku[] = [
   { id: 'diner', themeId: 'diner', priceUsd: 0, coinPrice: null },
-  { id: 'sushi', themeId: 'sushi', priceUsd: 1.99, coinPrice: 2500 },
-  { id: 'candy', themeId: 'candy', priceUsd: 1.99, coinPrice: 2500 },
-  { id: 'taco', themeId: 'taco', priceUsd: 1.99, coinPrice: 2500 },
-  { id: 'breakfast', themeId: 'breakfast', priceUsd: 1.99, coinPrice: 3000 },
-  { id: 'pizza', themeId: 'pizza', priceUsd: 1.99, coinPrice: 3000 },
+  { id: 'sushi', themeId: 'sushi', priceUsd: 1.99, coinPrice: 1200 },
+  { id: 'candy', themeId: 'candy', priceUsd: 1.99, coinPrice: 1200 },
+  { id: 'taco', themeId: 'taco', priceUsd: 1.99, coinPrice: 1200 },
+  { id: 'breakfast', themeId: 'breakfast', priceUsd: 1.99, coinPrice: 1500 },
+  { id: 'pizza', themeId: 'pizza', priceUsd: 1.99, coinPrice: 1500 },
   {
     id: 'bundle_all',
     themeId: null,

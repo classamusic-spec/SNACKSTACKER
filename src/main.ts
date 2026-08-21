@@ -18,11 +18,29 @@ import { createVfx } from './vfx';
 
 type AppState = 'boot' | 'home' | 'playing' | 'paused' | 'result';
 
-function priceLabel(priceUsd: number, coinPrice: number | null, owned: boolean): string {
-  if (owned) return 'Owned';
-  if (priceUsd <= 0) return 'Free';
+/**
+ * The card is a single button, so its label must name the action that tap will
+ * take. Coins have no other sink, so whenever the player can afford a theme
+ * with coins that is strictly the better deal and the tap takes it — the label
+ * says so rather than showing a money price we are not going to charge.
+ */
+function actionLabel(
+  priceUsd: number,
+  coinPrice: number | null,
+  coins: number,
+  owned: boolean,
+): { priceLabel: string; subLabel?: string } {
+  if (owned) return { priceLabel: 'Owned' };
+  if (priceUsd <= 0) return { priceLabel: 'Free' };
+  if (coinPrice !== null && coins >= coinPrice) {
+    return { priceLabel: `Unlock · ${coinPrice.toLocaleString()} coins` };
+  }
   const money = `$${priceUsd.toFixed(2)}`;
-  return coinPrice ? `${money} · ${coinPrice.toLocaleString()} coins` : money;
+  if (coinPrice === null) return { priceLabel: money };
+  return {
+    priceLabel: money,
+    subLabel: `or ${coins.toLocaleString()} / ${coinPrice.toLocaleString()} coins earned`,
+  };
 }
 
 async function boot(): Promise<void> {
@@ -75,13 +93,15 @@ async function boot(): Promise<void> {
     const items: StoreItemView[] = meta.skus.map((sku) => {
       const themeDef = sku.themeId ? themes.byId(sku.themeId) : null;
       const owned = meta.isOwned(sku.id);
+      const action = actionLabel(sku.priceUsd, sku.coinPrice, meta.data.coins, owned);
       return {
         sku: sku.id,
         themeId: sku.themeId,
         name: themeDef?.name ?? 'Full Menu',
         tagline: themeDef?.tagline ?? 'Every theme, forever. One tap, done.',
         glyph: themeDef?.glyph ?? '🍱',
-        priceLabel: priceLabel(sku.priceUsd, sku.coinPrice, owned),
+        priceLabel: action.priceLabel,
+        subLabel: action.subLabel,
         owned,
         selected: themeDef ? meta.data.selectedTheme === themeDef.id : false,
         badge: sku.badge,

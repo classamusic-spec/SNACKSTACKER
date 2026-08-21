@@ -122,7 +122,7 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
         animate(
           comboEl,
           [
-            { transform: 'translate3d(14px, 0, 0) scale(0.8)', opacity: 0 },
+            { transform: 'translate3d(0, -10px, 0) scale(0.8)', opacity: 0 },
             { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
           ],
           { duration: 320, easing: EASE_IOS },

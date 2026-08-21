@@ -60,6 +60,7 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
   if (pending) classes.push('is-pending');
   if (!item.owned) classes.push('is-locked');
   if (item.badge) classes.push('has-badge');
+  if (opts.locked && !pending) classes.push('is-inert');
 
   const card = h('button', {
     class: classes.join(' '),
@@ -70,7 +71,10 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
   let ariaLabel = `${item.name}. ${item.tagline}`;
   if (selected) ariaLabel += ' Currently selected.';
   else if (usable) ariaLabel += ' Owned. Activate to use.';
-  else ariaLabel += ` Price ${item.priceLabel}.`;
+  else {
+    ariaLabel += ` ${item.priceLabel}.`;
+    if (item.subLabel) ariaLabel += ` ${item.subLabel}.`;
+  }
   card.setAttribute('aria-label', ariaLabel);
 
   if (selected || pending || opts.locked) card.disabled = true;
@@ -124,6 +128,10 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
     cta.appendChild(h('span', { class: 'sn-card__cta-text', text: item.priceLabel }));
   }
   card.appendChild(cta);
+  // Progress toward the coin price, so the free route is always visible.
+  if (!item.owned && !pending && item.subLabel) {
+    card.appendChild(h('span', { class: 'sn-card__sub', text: item.subLabel }));
+  }
   card.appendChild(h('span', { class: 'sn-btn__dim', aria: { hidden: 'true' } }));
 
   // --- press feedback ----------------------------------------------------

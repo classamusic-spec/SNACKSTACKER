@@ -49,7 +49,7 @@ export const TUNING = {
   /** World width that must always be visible; drives the auto-fit distance. */
   CAM_FIT_MARGIN: 0.28,
   /** How far above the tower top the camera aims. */
-  CAM_LOOK_LIFT: 0.6,
+  CAM_LOOK_LIFT: 0.25,
   /** Vertical framing: fraction of the view the tower top sits at. */
   CAM_FOLLOW_LAMBDA: 5.5,
   CAM_INTRO_LAMBDA: 2.2,

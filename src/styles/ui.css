@@ -1321,7 +1321,12 @@
 }
 
 .sn-card.is-pending {
-  opacity: 0.86;
+  opacity: 0.9;
+}
+
+/* Every other card steps back while a purchase is in flight. */
+.sn-card.is-inert {
+  opacity: 0.42;
 }
 
 .sn-card.is-selected {
@@ -1610,4 +1615,16 @@
   .sn-wm__tagline {
     margin-top: 10px;
   }
+}
+
+/* Coin-progress line under a locked card's action. */
+.sn-card__sub {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 590;
+  letter-spacing: 0.01em;
+  text-align: center;
+  color: var(--sn-text-dim, rgba(255, 255, 255, 0.5));
+  font-variant-numeric: tabular-nums;
 }

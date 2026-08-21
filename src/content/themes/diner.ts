@@ -531,7 +531,7 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
 
   // the chrome rim: outer edge exactly on the footprint, crest exactly on y = 0
   const rim = ringTorus(w, d, 0.055, t * 0.46, pickQ(ctx, 6, 8, 10), pickQ(ctx, 24, 40, 64));
-  rim.translate(0, -t * 0.46 - 0.005, 0);
+  rim.translate(0, -t * 0.46 - 0.03, 0);
   g.add(mesh(rim, chromeMat(m), { cast: false }));
   return g;
 }
