@@ -3,18 +3,22 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Snackery — a premium 3D food stacking game.",
+  "description": "Snackery \u2014 a premium 3D food stacking game.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc src/game/slice.ts --outDir .test-build --module esnext --target es2022 --moduleResolution bundler && node --test \"tests/**/*.test.mjs\"",
+    "shots": "node tools/shoot.mjs",
+    "icons": "node tools/make-icons.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/three": "^0.185.0",
+    "playwright": "^1.62.1",
     "typescript": "^5.9.3",
     "vite": "^7.1.7"
   }

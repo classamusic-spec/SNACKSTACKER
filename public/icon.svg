@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Snackery">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a1f2e"/><stop offset="1" stop-color="#160f16"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#e23e57" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#e23e57" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd9a4"/><stop offset="1" stop-color="#dda257"/>
+    </linearGradient>
+    <linearGradient id="cheese" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd070"/><stop offset="1" stop-color="#efa62c"/>
+    </linearGradient>
+    <linearGradient id="patty" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#94572f"/><stop offset="1" stop-color="#6a3a22"/>
+    </linearGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#efb877"/><stop offset="1" stop-color="#cf9350"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
+  <ellipse cx="256" cy="404" rx="174" ry="23" fill="#000" opacity=".38"/>
+  <rect x="82"  y="181" width="338" height="94" rx="47" fill="url(#bun)"/>
+  <ellipse cx="251" cy="212" rx="149" ry="31" fill="#ffe3bb" opacity=".5"/>
+  <rect x="78"  y="267" width="376" height="45" rx="20" fill="url(#cheese)"/>
+  <rect x="88"  y="303" width="360" height="72" rx="15" fill="url(#patty)"/>
+  <rect x="87"  y="366" width="338" height="59" rx="27" fill="url(#base)"/>
+</svg>

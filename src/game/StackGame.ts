@@ -11,6 +11,7 @@ import type { AudioEngine } from '../audio/api';
 import { CameraRig } from './CameraRig';
 import { TUNING, type Axis, otherAxis } from './constants';
 import { Offcuts, disposeTree } from './Offcuts';
+import { sliceLayer, slidePosition } from './slice';
 import {
   createScoreState,
   milestoneFor,
@@ -238,40 +239,28 @@ export class StackGame {
     const prevCenter = axis === 'x' ? top.x : top.z;
     const prevSize = axis === 'x' ? top.width : top.depth;
     const curCenter = axis === 'x' ? moving.x : moving.z;
-    const delta = curCenter - prevCenter;
-    const overlap = prevSize - Math.abs(delta);
 
     if (!this.hasDropped) {
       this.hasDropped = true;
       this.events.emit('firstDrop', undefined);
     }
 
-    if (overlap <= 0.001) {
-      this.miss(moving);
-      return;
-    }
+    const cut = sliceLayer(prevCenter, prevSize, curCenter, {
+      tolerance: TUNING.PERFECT_TOLERANCE,
+      regrow: TUNING.PERFECT_REGROW,
+      maxSize: TUNING.BASE_FOOTPRINT,
+      minSize: TUNING.MIN_FOOTPRINT,
+    });
 
-    const perfect = Math.abs(delta) <= TUNING.PERFECT_TOLERANCE;
-    let keptSize: number;
-    let keptCenter: number;
-
-    if (perfect) {
-      keptSize = Math.min(prevSize + TUNING.PERFECT_REGROW, TUNING.BASE_FOOTPRINT);
-      keptCenter = prevCenter;
-    } else {
-      keptSize = overlap;
-      keptCenter = prevCenter + delta / 2;
-    }
-
-    if (keptSize < TUNING.MIN_FOOTPRINT) {
+    if (cut.kind === 'miss') {
       this.miss(moving);
       return;
     }
 
     // Rebuild the kept portion at its cut size. We never boolean-slice — the
     // food is regenerated, so a narrow cut reads as a genuine cross-section.
-    const keptWidth = axis === 'x' ? keptSize : moving.width;
-    const keptDepth = axis === 'z' ? keptSize : moving.depth;
+    const keptWidth = axis === 'x' ? cut.keptSize : moving.width;
+    const keptDepth = axis === 'z' ? cut.keptSize : moving.depth;
     this.root.remove(moving.object);
     disposeTree(moving.object);
 
@@ -283,8 +272,8 @@ export class StackGame {
       moving.index,
       false,
     );
-    const keptX = axis === 'x' ? keptCenter : moving.x;
-    const keptZ = axis === 'z' ? keptCenter : moving.z;
+    const keptX = axis === 'x' ? cut.keptCenter : moving.x;
+    const keptZ = axis === 'z' ? cut.keptCenter : moving.z;
     kept.position.set(keptX, moving.y, keptZ);
     this.root.add(kept);
 
@@ -307,8 +296,8 @@ export class StackGame {
     this.topY = moving.y + moving.height;
     this.moving = null;
 
-    if (perfect) this.onPerfect(layer);
-    else this.onSliced(layer, moving, axis, delta, prevSize);
+    if (cut.kind === 'perfect') this.onPerfect(layer);
+    else this.onSliced(layer, moving, axis, cut.cutSize, cut.cutCenter, cut.cutSign);
 
     this.score.layers = this.layers.length - 1;
     this.events.emit('layer', { layers: this.score.layers, height: this.topY });
@@ -363,21 +352,15 @@ export class StackGame {
     layer: TowerLayer,
     moving: MovingLayer,
     axis: Axis,
-    delta: number,
-    prevSize: number,
+    cutSize: number,
+    cutCenter: number,
+    sign: 1 | -1,
   ): void {
     this.score.combo = 0;
     const points = normalPoints(this.score.layers);
     this.score.score += points;
     this.events.emit('score', { score: this.score.score, delta: points, pop: false });
     this.events.emit('combo', 0);
-
-    const sign = Math.sign(delta) || 1;
-    const cutSize = Math.abs(delta);
-    // The kept layer sits at prevCentre + delta/2, so the previous centre — and
-    // from it the scrap's centre — falls straight out of the drop offset.
-    const prevCenter = (axis === 'x' ? layer.x : layer.z) - delta / 2;
-    const offCenter = prevCenter + delta / 2 + (sign * prevSize) / 2;
 
     const offWidth = axis === 'x' ? cutSize : moving.width;
     const offDepth = axis === 'z' ? cutSize : moving.depth;
@@ -392,9 +375,9 @@ export class StackGame {
         true,
       );
       tmpVec.set(
-        axis === 'x' ? offCenter : moving.x,
+        axis === 'x' ? cutCenter : moving.x,
         moving.y,
-        axis === 'z' ? offCenter : moving.z,
+        axis === 'z' ? cutCenter : moving.z,
       );
       this.offcuts.spawn(scrap, {
         position: tmpVec,
@@ -405,10 +388,12 @@ export class StackGame {
     this.deps.audio.play('drop', { gain: 0.9 });
     if (cutSize > 0.06) this.deps.audio.play('slice', { gain: clamp(cutSize, 0.25, 1) });
 
+    // Crumbs spray from the cut face, not from the centre of the layer.
+    const edge = (axis === 'x' ? layer.x : layer.z) + (sign * (axis === 'x' ? layer.width : layer.depth)) / 2;
     tmpVec.set(
-      axis === 'x' ? prevCenter + (sign * prevSize) / 2 : layer.x,
+      axis === 'x' ? edge : layer.x,
       layer.y + layer.height * 0.4,
-      axis === 'z' ? prevCenter + (sign * prevSize) / 2 : layer.z,
+      axis === 'z' ? edge : layer.z,
     );
     tmpVec2.set(axis === 'x' ? sign : 0, 0.35, axis === 'z' ? sign : 0);
     this.deps.vfx.burst({
@@ -464,12 +449,7 @@ export class StackGame {
       const travel = this.deps.rig.travel;
       const speed = this.speedFor(this.score.layers);
       m.phase += (speed / (2 * travel)) * dt;
-      const t = m.phase % 2;
-      const u = t < 1 ? t : 2 - t;
-      // Linear travel keeps aiming fair; a light cosine blend softens the
-      // turnaround so it never snaps.
-      const shaped = lerp(u, 0.5 - 0.5 * Math.cos(Math.PI * u), 0.35);
-      const pos = lerp(-travel, travel, shaped);
+      const pos = slidePosition(m.phase, travel);
       if (m.axis === 'x') {
         m.x = pos;
         m.object.position.x = pos;
