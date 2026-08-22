@@ -870,7 +870,7 @@ function paintMarble(c: CanvasRenderingContext2D, size: number): void {
   // The top is lit hard by the key, so the paint has to start a stop below
   // "white" and the veins a good deal stronger than they look on the canvas —
   // at exposure the first pass came out as a plain white disc.
-  c.fillStyle = '#DED9D2';
+  c.fillStyle = '#D2CFCA';
   c.fillRect(0, 0, size, size);
   const rng = new Rng(0x3a12);
 
@@ -1021,7 +1021,7 @@ function facade(
   // gets, which is the warm-on-warm problem restated; the second lerp pushes
   // it toward the cool blue of the distance, and that is what the crust and
   // the cheese finally have to separate against.
-  wall.lerp(HAZE_NEAR, fade).lerp(HAZE_FAR, fade * 0.5);
+  wall.lerp(HAZE_NEAR, fade).lerp(HAZE_FAR, fade * 0.42);
   terra.add(at(envBox(w, h, d), cx, y, cz, yaw), wall.getHex());
 
   const roof = new THREE.Color(0x9c4a33).lerp(HAZE_NEAR, fade * 0.86).lerp(HAZE_FAR, fade * 0.42);
@@ -1066,11 +1066,12 @@ function facade(
       const wy = y + 1.1 + r * 1.9;
       const px = cx + ax * u + inx * (d / 2 + 0.02);
       const pz = cz + az * u + inz * (d / 2 + 0.02);
-      const lit = rng.bool(0.4);
+      const lit = rng.bool(0.5);
       if (lit) bulbs.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0xffc07a);
       else terra.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0x241a18);
-      if (detail < 2) continue;
-      // shutters, one of them usually swung open
+      // shutters, one of them usually swung open. These run at EVERY tier:
+      // a terracotta box with dark holes in it is a warehouse, and two green
+      // slats either side of each hole is the whole of Italy.
       const shutter = new THREE.Color(rng.pick([0x41603f, 0x354a57, 0x6c4a35, 0x7a4b3c]))
         .lerp(HAZE_NEAR, fade * 0.62);
       for (const s of [-1, 1]) {
@@ -1087,6 +1088,7 @@ function facade(
         );
       }
       terra.add(at(envBox(ww * 1.28, 0.1, 0.16), px, wy - 0.1, pz, yaw), 0xe6d3b4);
+      if (detail < 2) continue;
       // A window box on some of them. Three geranium blobs over a terracotta
       // trough is four hundred pixels of Italy for twenty-six triangles, and
       // it is the one accent-red note allowed above the terrace line.
@@ -1294,9 +1296,14 @@ function tuscanRidge(
   const idx: number[] = [];
   const rows = 3;
   const crestAt = (a: number): number => {
-    const w1 = fbm2(Math.cos(a) * 4.5 + seed, Math.sin(a) * 4.5 - seed, 3);
-    const w2 = fbm2(Math.cos(a) * 11.5 - seed, Math.sin(a) * 11.5 + seed, 2);
-    return crestY + amp * (w1 * 0.85 + w2 * 0.3);
+    // Three scales, and they matter: one broad enough that a whole flank of
+    // the ring rises and falls, one that puts summits and saddles on it, and
+    // one fine enough to break the line into spurs. With only the first two
+    // the ridges came out as three flat coloured stripes across the sky.
+    const w1 = fbm2(Math.cos(a) * 2.2 + seed, Math.sin(a) * 2.2 - seed, 2);
+    const w2 = fbm2(Math.cos(a) * 6.5 - seed, Math.sin(a) * 6.5 + seed, 2);
+    const w3 = fbm2(Math.cos(a) * 15.5 + seed * 2, Math.sin(a) * 15.5 - seed * 2, 2);
+    return crestY + amp * ((w1 - 0.5) * 1.5 + (w2 - 0.5) * 0.85 + (w3 - 0.5) * 0.35);
   };
 
   for (let si = 0; si < seg; si++) {
@@ -1331,7 +1338,7 @@ function tuscanRidge(
     const rr = radius * (1 + 0.04 * fbm2(Math.cos(a) * 3 + seed, Math.sin(a) * 3 - seed, 2));
     const base = crestAt(a) + 0.05;
     const h = treeH * (0.7 + 0.6 * (0.5 + 0.5 * Math.sin(i * 7.13 + seed)));
-    const w = h * 0.19;
+    const w = h * 0.24;
     const tx = Math.cos(a) * rr;
     const tz = Math.sin(a) * rr;
     // tangent along the ring, so the spike always faces the camera edge-on
@@ -1345,7 +1352,10 @@ function tuscanRidge(
     col.push(cy.r, cy.g, cy.b, 1);
     col.push(cy.r, cy.g, cy.b, 1);
     col.push(cy.r, cy.g, cy.b, 0.55);
-    idx.push(n, n + 2, n + 1);
+    // Wound so the INWARD face is the front one, like the ring itself. The
+    // other way round every cypress is back-face culled and the ridges come
+    // out bare, which is a very quiet way for a feature to not exist.
+    idx.push(n, n + 1, n + 2);
   }
 
   const g = new THREE.BufferGeometry();
@@ -1396,10 +1406,10 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       repeat: [1, 1],
       wrap: THREE.ClampToEdgeWrapping,
     }),
-    roughness: 0.24,
+    roughness: 0.3,
     metalness: 0,
-    clearcoat: 0.4,
-    clearcoatRoughness: 0.18,
+    clearcoat: 0.28,
+    clearcoatRoughness: 0.2,
   });
   const ironMat = m.standard('pizza.env.iron', {
     color: 0xffffff,
@@ -1648,33 +1658,34 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     // one bearing per sector, then a small spread inside the stand: a lone
     // spike reads as a mistake, two or three read as a garden
     const a = (si / stands) * TAU + rng.range(-0.16, 0.16) + (i - (inStand - 1) / 2) * 0.075;
-    const r = rng.range(17.5, 20.5);
+    const r = rng.range(21, 25);
     const px = Math.cos(a) * r;
     const pz = Math.sin(a) * r;
     const s = rng.range(0.7, 1.2) * (i === 0 ? 1.15 : 0.85);
     const rim = pot(terra, px, floorY, pz, s, sides);
-    // Shorter than they were, and further out. At r 15 and four units tall a
-    // cypress tip landed 13% down the frame with the tower's own top at 52%,
-    // and no amount of "it obeys the clearance cylinder" changes what that
-    // reads as. At r 18-20 and 2.3-3.2 the tip lands level with the rooflines
-    // behind it, where it reads as a tree in a street.
-    const coneH = rng.range(2.3, 3.2) * s;
+    // Out among the buildings, not out on the terrace. At r 15 and four units
+    // tall a cypress tip landed 13% down the frame with the tower's own top at
+    // 52%, and no amount of "it obeys the clearance cylinder" changes what a
+    // lone black spike over the pizza reads as. At r 21-25 its tip lands
+    // inside the roofline band — 15% down, against the buildings rather than
+    // against the sky — and it reads as a tree in a street.
+    const coneH = rng.range(2.6, 3.6) * s;
     const cone = envCyl(0.03, 0.44 * s, coneH, envPick(q, 5, 7, 8));
     roughen(cone, 0.05, 5, i + 2);
     // Dusk green, not black: a true cypress colour turns into a hole in the
     // frame once the sky behind it is this bright. Hazed with distance too,
     // so the far ones sit back instead of all reading at the same depth.
-    const fadeC = clamp((r - 12) / 16, 0, 0.4);
+    const fadeC = clamp((r - 12) / 26, 0.16, 0.38);
     green.add(
       at(cone, px, rim - 0.05, pz, rng.range(0, TAU)),
-      new THREE.Color(0x4a6f4c).lerp(HAZE_FAR, fadeC).getHex(),
+      new THREE.Color(0x4a6f4c).lerp(HAZE_NEAR, fadeC * 0.7).lerp(HAZE_FAR, fadeC).getHex(),
     );
   }
   }
-  const pots = envPick(q, 4, 5, 6);
+  const pots = envPick(q, 6, 7, 8);
   for (let i = 0; i < pots; i++) {
     const a = (i / pots) * TAU + rng.range(-0.35, 0.35) + 0.4;
-    const r = rng.range(9.5, 12.4);
+    const r = rng.range(9.8, 13.6);
     const px = Math.cos(a) * r;
     const pz = Math.sin(a) * r;
     const s = rng.range(0.85, 1.2);
@@ -1710,7 +1721,7 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     facadeRadii.push(r);
     // Heavy wash toward the fog colour: the far wall has to sit BACK, and at
     // this density a saturated terracotta ring would shout over the food.
-    const fade = THREE.MathUtils.clamp((r - 11) / 13, 0.56, 0.86);
+    const fade = THREE.MathUtils.clamp((r - 13) / 18, 0.42, 0.7);
     facade(
       terra, wood, bulbs, green, rng, bearing, r,
       // A wide spread of heights: equal-height blocks merge into one band
@@ -1724,10 +1735,10 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // facades never closes exactly, and a gap with nothing behind it reads as a
   // missing tooth rather than a side street; twelve hazed boxes give the holes
   // something to look through to, for a couple of hundred triangles.
-  for (let i = 0; i < 10; i++) {
-    const bearing = ((i + 0.5) / 10) * TAU + rng.range(-0.16, 0.16);
+  for (let i = 0; i < 12; i++) {
+    const bearing = ((i + 0.5) / 12) * TAU + rng.range(-0.16, 0.16);
     const r = rng.range(30, 33.5);
-    const hz = new THREE.Color(0xd8b490).lerp(HAZE_NEAR, 0.6).lerp(HAZE_FAR, 0.3).getHex();
+    const hz = new THREE.Color(0xd8b490).lerp(HAZE_NEAR, 0.46).lerp(HAZE_FAR, 0.26).getHex();
     const bh = rng.range(2.2, 3.4);
     terra.add(
       at(envBox(rng.range(8, 14), bh, 2.4), Math.cos(bearing) * r, floorY, Math.sin(bearing) * r, -bearing + Math.PI / 2),
@@ -1743,21 +1754,26 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const br = 35;
     const bxr = Math.cos(ba) * br;
     const bzr = Math.sin(ba) * br;
-    const towerC = new THREE.Color(0xc08a63).lerp(HAZE_NEAR, 0.72).lerp(HAZE_FAR, 0.38).getHex();
-    terra.add(at(envBox(1.7, 5.4, 1.7), bxr, floorY, bzr, -ba), towerC);
-    const capC = new THREE.Color(0xcb9a7e).lerp(HAZE_FAR, 0.32).getHex();
-    terra.add(at(envBox(2.1, 0.28, 2.1), bxr, floorY + 5.3, bzr, -ba), capC);
-    terra.add(at(envCyl(0.18, 1.15, 1.1, 4), bxr, floorY + 5.55, bzr, -ba + Math.PI / 4), capC);
-    bulbs.add(at(envBox(0.5, 0.8, 0.1), bxr + Math.cos(ba + Math.PI) * 0.87, floorY + 3.8, bzr + Math.sin(ba + Math.PI) * 0.87, -ba), 0xffbe7a);
+    // Heights solved backwards from the frame, like everything else out here.
+    // At 5.4 and 3.4 the campanile's spire and the dome's finial landed inside
+    // the top ONE per cent of the frame and were cropped by the corner — a
+    // landmark thirty-five units out does not need to be tall, it needs to sit
+    // just above the rooflines at about 7% down, which is 3.6 and 2.2.
+    const towerC = new THREE.Color(0xc08a63).lerp(HAZE_NEAR, 0.78).lerp(HAZE_FAR, 0.46).getHex();
+    const capC = new THREE.Color(0xcb9a7e).lerp(HAZE_NEAR, 0.5).lerp(HAZE_FAR, 0.42).getHex();
+    terra.add(at(envBox(1.5, 3.6, 1.5), bxr, floorY, bzr, -ba), towerC);
+    terra.add(at(envBox(1.9, 0.24, 1.9), bxr, floorY + 3.52, bzr, -ba), capC);
+    terra.add(at(envCyl(0.15, 1.0, 0.9, 4), bxr, floorY + 3.74, bzr, -ba + Math.PI / 4), capC);
+    bulbs.add(at(envBox(0.44, 0.7, 0.1), bxr + Math.cos(ba + Math.PI) * 0.77, floorY + 2.5, bzr + Math.sin(ba + Math.PI) * 0.77, -ba), 0xffbe7a);
 
     const da = ba + rng.range(0.35, 0.6);
     const dxr = Math.cos(da) * (br - 1.5);
     const dzr = Math.sin(da) * (br - 1.5);
-    terra.add(at(envBox(4.4, 3.4, 4.4), dxr, floorY, dzr, -da), towerC);
-    terra.add(at(envCyl(2.1, 2.4, 0.7, 12), dxr, floorY + 3.4, dzr), capC);
-    const dome = new THREE.SphereGeometry(2.05, envPick(q, 10, 14, 18), envPick(q, 5, 7, 9), 0, TAU, 0, Math.PI / 2);
-    terra.add(at(dome, dxr, floorY + 4.05, dzr), new THREE.Color(0xbb9c88).lerp(HAZE_FAR, 0.36).getHex());
-    terra.add(at(envCyl(0.16, 0.3, 0.7, 8), dxr, floorY + 6.0, dzr), capC);
+    terra.add(at(envBox(4.0, 2.2, 4.0), dxr, floorY, dzr, -da), towerC);
+    terra.add(at(envCyl(1.75, 2.0, 0.55, 12), dxr, floorY + 2.2, dzr), capC);
+    const dome = new THREE.SphereGeometry(1.7, envPick(q, 10, 14, 18), envPick(q, 5, 7, 9), 0, TAU, 0, Math.PI / 2);
+    terra.add(at(dome, dxr, floorY + 2.72, dzr), new THREE.Color(0xbb9c88).lerp(HAZE_NEAR, 0.5).lerp(HAZE_FAR, 0.44).getHex());
+    terra.add(at(envCyl(0.14, 0.26, 0.5, 8), dxr, floorY + 4.4, dzr), capC);
   }
 
   // a striped awning over the nearest shopfront
@@ -1821,12 +1837,12 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // in the right two per cent of the frame.
   const ridgeSeg = envPick(q, 40, 60, 80);
   const hills = mergeAll([
-    tuscanRidge(ridgeSeg, 66, heightAtFrame(0.060, 66), 0.95, 4, 3.1,
-      new THREE.Color(0x9fa5bb), 0.26, envPick(q, 16, 22, 28), 0.5),
-    tuscanRidge(ridgeSeg, 54, heightAtFrame(0.082, 54), 1.2, 4, 11.7,
-      new THREE.Color(0x8b93ac), 0.32, envPick(q, 14, 19, 24), 0.6),
-    tuscanRidge(ridgeSeg, 42, heightAtFrame(0.105, 42), 1.5, 4, 22.3,
-      new THREE.Color(0x77829c), 0.38, envPick(q, 12, 16, 20), 0.75),
+    tuscanRidge(ridgeSeg, 58, heightAtFrame(0.056, 58), 1.7, 5, 3.1,
+      new THREE.Color(0x8b93ae), 0.22, envPick(q, 16, 22, 28), 0.6),
+    tuscanRidge(ridgeSeg, 45, heightAtFrame(0.078, 45), 2.1, 5, 11.7,
+      new THREE.Color(0x717c9c), 0.26, envPick(q, 14, 19, 24), 0.72),
+    tuscanRidge(ridgeSeg, 34, heightAtFrame(0.102, 34), 2.5, 5, 22.3,
+      new THREE.Color(0x556182), 0.3, envPick(q, 12, 16, 20), 0.9),
   ]);
   if (hills) {
     const hm = new THREE.Mesh(hills, hazeMat);
@@ -1889,10 +1905,13 @@ export const pizzaTheme: ThemeDef = {
     fog: 0xd99a72,
     // Down from 0.018. Exponential fog at 0.018 has eaten 85% of anything
     // sixty units out, which is fine for a theme whose distance IS the fog and
-    // fatal for one with three ridgelines in it — the Tuscan hills came out as
-    // a barely-there ripple in the sky. At 0.011 the far ridge still reads as
-    // atmosphere and the near one keeps its shape.
-    fogDensity: 0.011,
+    // fatal for one with three ridgelines in it. Worse than "faint": the fog
+    // colour is the palette's own hot 0xD99A72, so at that density every
+    // distant thing was 85% orange no matter what colour it was authored, and
+    // a COOL distance was arithmetically unreachable. At 0.010 the far ridge
+    // keeps three quarters of its own colour and aerial perspective can
+    // actually be authored instead of being overwritten.
+    fogDensity: 0.010,
     key: 0xfff3de,
     keyIntensity: 2.6,
     fill: 0x86a8c9,

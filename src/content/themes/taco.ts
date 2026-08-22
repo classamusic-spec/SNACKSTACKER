@@ -1058,9 +1058,9 @@ function shadeAdobe(
   const reach = Math.max(opts.lampReach ?? 1.5, 0.2);
   const coping = opts.coping ?? true;
 
-  const shadeLow = new THREE.Color(0x4c3a62).convertSRGBToLinear();
+  const shadeLow = new THREE.Color(0x5a4770).convertSRGBToLinear();
   const shadeHigh = new THREE.Color(0xab93ba).convertSRGBToLinear();
-  const sunLow = new THREE.Color(0x9c6a52).convertSRGBToLinear();
+  const sunLow = new THREE.Color(0xa2775e).convertSRGBToLinear();
   const sunHigh = new THREE.Color(0xecb289).convertSRGBToLinear();
   const lampColor = new THREE.Color(0xffbe7c).convertSRGBToLinear();
   const glowRim = new THREE.Color(0xe8a271).convertSRGBToLinear();

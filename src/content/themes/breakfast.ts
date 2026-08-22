@@ -691,7 +691,7 @@ const BAY_DOOR = 3;
 const PIER_HALF = 0.19;
 const BAY_HALF = BAY_STEP / 2 - PIER_HALF;
 /** Half the doorway, in radians, and how high its head sits above the floor. */
-const DOOR_HALF = 0.155;
+const DOOR_HALF = 0.185;
 const DOOR_UP = 4.3;
 
 /**
@@ -875,17 +875,17 @@ function sunMask(
   /** Height the ray was at when it crossed the plane of the wall. */
   const h = y + (along + WALL_R) / RUN;
   if (!Number.isFinite(h)) return 0;
-  let a = clamp01((h - sillY) / 0.7) * clamp01((topEdge - h) / 1.6);
+  let a = clamp01((h - sillY) / 1.4) * clamp01((topEdge - h) / 2.4);
   if (a <= 0) return 0;
   // the piers either side of the bay
-  a *= clamp01((across - acrossMin) / 0.9) * clamp01((acrossMax - across) / 0.9);
+  a *= clamp01((across - acrossMin) / 2.2) * clamp01((acrossMax - across) / 2.2);
   // horizontal glazing rails, cast as soft bands down the table
   for (let i = 0; i < rails.length; i++) {
-    a *= 1 - 0.8 * clamp01(1 - Math.abs(h - rails[i]) / 0.8) ** 1.4;
+    a *= 1 - 0.72 * clamp01(1 - Math.abs(h - rails[i]) / 1.5) ** 1.1;
   }
   // vertical mullions, cast as soft bands across it
   for (let i = 0; i < mulls.length; i++) {
-    a *= 1 - 0.76 * clamp01(1 - Math.abs(across - mulls[i]) / 0.5) ** 1.4;
+    a *= 1 - 0.68 * clamp01(1 - Math.abs(across - mulls[i]) / 0.95) ** 1.1;
   }
   return clamp01(a);
 }
@@ -1214,7 +1214,7 @@ function dresser(joinery: PropBatch, a: number, floorY: number, q: QualityTier, 
   // three shelves, and a cornice
   const upBase = floorY + 1.95;
   const upH = 3.05;
-  joinery.box(W - 0.5, upH, 0.1, mix(SAGE_D, 0x4c5c4e, 0.45), { ...at(0, 0.22, upBase), ground: true });
+  joinery.box(W - 0.5, upH, 0.1, mix(SAGE_D, 0x51624f, 0.16), { ...at(0, 0.22, upBase), ground: true });
   for (const s of [-1, 1]) {
     joinery.box(0.2, upH, 0.8, SAGE, { ...at((s * (W - 0.5)) / 2, 0.62, upBase), ground: true });
   }
@@ -1227,7 +1227,7 @@ function dresser(joinery: PropBatch, a: number, floorY: number, q: QualityTier, 
     const plates = pickE(q, 3, 4, 5);
     for (let k = 0; k < plates; k++) {
       const dx = ((k + 0.5) / plates - 0.5) * (W - 1.3) + rng.range(-0.1, 0.1);
-      const rp = rng.range(0.48, 0.66);
+      const rp = rng.range(0.42, 0.58);
       joinery.add(
         new THREE.CylinderGeometry(rp, rp, 0.08, 12).rotateX(Math.PI / 2),
         mix(CREAM, 0xdfe8ea, rng.next() * 0.7),
@@ -1276,8 +1276,9 @@ function doorway(
     place(hall, { y: floorY - 0.2, ground: true });
     tintEach(hall, (_x, y) => {
       const t = clamp01((y - floorY) / Math.max(headY - floorY, 0.2));
-      // dark at the skirting, warmer where light from a hall window would fall
-      return mix(0x6b5743, 0xcda87a, t * t);
+      // Dark at the head, warm and lit at the skirting: what you see through a
+      // door in the morning is the floor of the next room catching the sun.
+      return mix(0xdfc196, 0x6b5743, clamp01((t - 0.12) / 0.55) ** 0.85);
     });
     room.keep(hall);
   }
@@ -1307,7 +1308,10 @@ function doorway(
   // the leaf, standing open into the room
   const hinge = a - DOOR_HALF;
   const [hx, hz] = wallXZ(hinge, 0.4);
-  const open = 0.62;
+  // Wide enough that the leaf stands CLEAR of its own opening. At 0.62 rad it
+  // covered the hall it exists to reveal, and a door with nothing behind it is
+  // a cupboard.
+  const open = 1.15;
   const leafW = 2 * WALL_R * Math.sin(DOOR_HALF);
   const dirX = Math.sin(hinge + Math.PI / 2 + open);
   const dirZ = Math.cos(hinge + Math.PI / 2 + open);
@@ -1589,7 +1593,13 @@ function breakfastEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const h = w * rng.range(0.72, 1.24);
     const y = floorY + 3.0 + rng.range(-0.35, 0.6);
     joinery.box(w, h, 0.14, mix(0x8f7757, 0xb59a74, rng.next()), { x: ax, z: az, ry: a, y });
-    room.box(w - 0.34, h - 0.34, 0.07, mix(0xf3e7d2, 0xdcd2c4, rng.next()), {
+    // The mount is a PICTURE, not a blank card. Cream on cream turned every
+    // one of these into an empty frame hanging on an empty wall.
+    room.box(w - 0.34, h - 0.34, 0.07, mix(
+      mix(0x9fb6c4, 0xcdb98f, rng.next()),
+      0xf1e7d6,
+      0.28 + rng.next() * 0.3,
+    ), {
       x: ax - Math.sin(a) * 0.06,
       z: az - Math.cos(a) * 0.06,
       ry: a,

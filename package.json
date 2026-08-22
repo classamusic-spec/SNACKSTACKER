@@ -14,7 +14,8 @@
     "icons": "node tools/make-icons.mjs",
     "shots:themes": "node tools/shoot-themes.mjs",
     "shots:env": "node tools/shoot-env.mjs",
-    "build:single": "tsc --noEmit && SNACKERY_SINGLE=1 vite build"
+    "build:single": "tsc --noEmit && SNACKERY_SINGLE=1 vite build",
+    "deploy": "vercel deploy --prod"
   },
   "dependencies": {
     "three": "^0.185.1"

@@ -1519,19 +1519,25 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // treeline is a continuous silhouette and a ring of separated blobs is a
   // necklace. It also sits at two depths: an inner run just past the fence
   // that the rooflines rise out of, and a hazier outer run behind them.
-  const lineLobes = pickE(q, 26, 34, 44);
+  // Count and width are set by the ARC each lobe has to cover, not by taste.
+  // At 26 lobes the inner run left a seven-unit gap between four-unit crowns
+  // and the band read as a string of separate balloons floating over the
+  // fence — which is the treeline making exactly the mistake the kettle grill
+  // made. Denser, wider, and the outer run pulled in from 25.5 to 23.5 so it
+  // cannot project far enough above the inner one to detach from it.
+  const lineLobes = pickE(q, 36, 46, 58);
   for (let i = 0; i < lineLobes; i++) {
     const outer = i % 3 === 2;
-    const a = (i / lineLobes) * TAU + rng.range(-0.1, 0.1);
-    const d = (outer ? 25.5 : 19.4) + rng.range(-1.0, 2.0);
-    const r = outer ? rng.range(1.5, 2.3) : rng.range(1.3, 2.0);
+    const a = (i / lineLobes) * TAU + rng.range(-0.07, 0.07);
+    const d = (outer ? 23.5 : 19.4) + rng.range(-0.8, 1.6);
+    const r = outer ? rng.range(1.7, 2.5) : rng.range(1.5, 2.2);
     const squash = 0.62;
     // Sat exactly on the ground — centre at half its own squashed height — so
     // the band has a base and a top instead of hovering. The cap only ever
     // pulls it DOWN, never lifts it off the grass.
     const y = Math.min(yardY + r * squash, skyCap(d) - r * squash);
     far.add(
-      new THREE.SphereGeometry(r, pickE(q, 7, 9, 10), pickE(q, 4, 5, 5)).scale(1.3, squash, 1.3),
+      new THREE.SphereGeometry(r, pickE(q, 7, 8, 9), pickE(q, 4, 4, 5)).scale(1.55, squash, 1.55),
       mix(
         mix(0x6f9450, 0x8aa65f, rng.next()),
         HAZE,
