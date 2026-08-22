@@ -110,8 +110,41 @@ export interface SceneKit {
   dispose(): void;
 }
 
+/**
+ * The sky a theme sits under. The cyclorama is a studio sweep by default; an
+ * outdoor theme wants actual atmosphere behind it — a sun, cloud, a horizon
+ * that glows where the light is coming from.
+ */
+export interface SkyConfig {
+  /** 'studio' keeps the plain sweep. 'open' renders atmosphere. */
+  kind: 'studio' | 'open';
+  /** Where the light comes from, in radians. Elevation 0 is the horizon. */
+  sunAzimuth: number;
+  sunElevation: number;
+  /** Disc colour and how hot it burns. 0 hides the disc but keeps the glow. */
+  sunColor: number;
+  sunIntensity: number;
+  /** Bloom of light around the sun, spreading into the sky. */
+  glowColor: number;
+  glowSpread: number;
+  /** 0 clear, 1 overcast. */
+  cloudCover: number;
+  cloudColor: number;
+  /** Underside shading, which is what stops clouds reading as white blobs. */
+  cloudShadow: number;
+  /** How fast the cloud field drifts, in UV units per second. */
+  cloudDrift: number;
+  /** Haze band where sky meets ground. */
+  horizonColor: number;
+  horizonSoftness: number;
+  /** Night only: 0 none, 1 dense. */
+  stars: number;
+}
+
 /** Structural copy of ThemePalette so render/ does not import content/. */
 export interface ThemePaletteLike {
+  /** Optional; omitted means the plain studio sweep. */
+  sky?: SkyConfig;
   bgTop: number;
   bgBottom: number;
   fog: number;
