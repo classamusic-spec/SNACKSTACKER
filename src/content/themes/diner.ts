@@ -637,6 +637,56 @@ function skyCap(r: number): number {
   return CAM_EYE - (CAM_BACK + Math.max(r, 0)) * Math.tan(SKYLINE);
 }
 
+// --- hidden or clear: the OTHER half of the clearance rule ------------------
+//
+// The cylinder says where a prop may stand. It says nothing about whether the
+// tower will hide its FEET, and that is the failure the kettle grill shipped
+// with: a grill obeying the cylinder at r 12, parked on the opening bearing,
+// had its legs behind the bun crown and its lid above it, and read as a black
+// balloon floating over the fence.
+//
+// The mechanism is the same "the camera pitches down" note as `skyCap`, run
+// the other way. A prop's base projects HIGHER on screen the further away it
+// is, so at some radius the base crosses the tower's apex — and a prop whose
+// base is below the apex while its top is above it has no visible contact with
+// the ground.
+//
+// There are exactly two safe states, and the gap between them is the trap:
+//
+//   HIDDEN  the prop's whole silhouette sits below the apex, inside the
+//           tower's own outline. It simply vanishes for the few degrees of
+//           orbit that put it back there.
+//   CLEAR   the prop's base is above the apex, so it reads as standing in the
+//           far lawn with grass all round its feet.
+//
+// Both bounds are evaluated at the HOME framing, because the home screen is
+// the only camera that walks every prop through the dead-behind bearing. In a
+// run the camera never orbits, so only the handful of props near the opening
+// bearing can be caught — and those are placed off it deliberately.
+
+/** Total height of the six `hero` foods: the tower the turntable orbits. */
+const HERO_H =
+  bottomBun.thickness +
+  beefPatty.thickness +
+  cheddarSlice.thickness +
+  tomatoRound.thickness +
+  lettuceRuffle.thickness +
+  bunCrown.thickness;
+/** Camera Y on the home screen. The rig targets HALF the hero stack. */
+const HOME_EYE = HERO_H / 2 + CAM_EYE;
+/** Drop from the camera to the tower's apex — the thing feet must not cross. */
+const HOME_APEX_DROP = CAM_EYE - HERO_H / 2;
+
+/** Tallest a prop at radius `r` may be and still hide entirely behind the tower. */
+function hiddenCap(r: number, groundY: number): number {
+  return HOME_EYE - groundY - HOME_APEX_DROP * (1 + Math.max(r, 0) / CAM_BACK);
+}
+
+/** Radius past which a prop's feet clear the tower's apex and read as ground. */
+function clearRadius(groundY: number): number {
+  return CAM_BACK * ((HOME_EYE - groundY) / HOME_APEX_DROP - 1);
+}
+
 /** A caster whose shadow is painted into the lawn's vertex colours. */
 interface Caster {
   x: number;
@@ -1078,12 +1128,26 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
 
   // --- yard props, placed first: the lawn needs their shadows ---------------
   const props = new PropBatch();
-  const [grillX, grillZ] = atBearing(Math.PI + rng.range(-0.06, 0.06), 12.0);
-  const [coolX, coolZ] = atBearing(rng.range(-0.06, 0.06), 9.6);
-  const [chairX, chairZ] = atBearing(-Math.PI / 2 + rng.range(-0.1, 0.1), 7.4);
+  // Radii are set by `hiddenCap` (see above), not by taste: every one of these
+  // is an isolated object with legs, and every one of them passes behind the
+  // tower once per turn of the home screen. All six sit inside the HIDDEN
+  // band, so the moment their feet would disappear is the moment the rest of
+  // them does too.
+  //
+  //   grill  h 1.98  r 6.8  cap 2.25      chair h 1.98  r 6.9  cap 2.21
+  //   cooler h 1.00  r 8.6  cap 1.49      bath  h 1.29  r 8.4  cap 1.58
+  //   ball   h 0.60  r 6.4  cap 2.31      hose  h 0.55  r 8.2  cap 1.66
+  //
+  // The grill is the one that has to survive a RUN as well, because it is the
+  // only prop near the opening bearing — so it is pushed 0.44 rad off it, far
+  // enough that the tower never touches it at any tower height and the grass
+  // under its legs is always in shot.
+  const [grillX, grillZ] = atBearing(Math.PI - 0.44 + rng.range(-0.04, 0.04), 6.8);
+  const [coolX, coolZ] = atBearing(0.55 + rng.range(-0.06, 0.06), 8.6);
+  const [chairX, chairZ] = atBearing(-Math.PI / 2 + rng.range(-0.1, 0.1), 6.9);
   const [hoseX, hoseZ] = atBearing(0.34, 8.2);
-  const [bathX, bathZ] = atBearing(Math.PI / 2 + 0.1, 11.6);
-  const [ballX, ballZ] = atBearing(Math.PI - 0.95, 6.6);
+  const [bathX, bathZ] = atBearing(Math.PI / 2 + 0.12, 8.4);
+  const [ballX, ballZ] = atBearing(Math.PI - 1.05, 6.4);
 
   kettleGrill(props, grillX, grillZ, yardY, Math.atan2(grillX, grillZ) + Math.PI + 0.5);
   coolerBox(props, coolX, coolZ, yardY, Math.atan2(coolX, coolZ) + 1.25);
@@ -1104,7 +1168,9 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     { x: grillX, z: grillZ, r: 0.95, h: 1.98 },
     { x: coolX, z: coolZ, r: 0.85, h: 1.0 },
     { x: chairX, z: chairZ, r: 0.7, h: 1.98 },
-    { x: bathX, z: bathZ, r: 0.6, h: 1.55 },
+    { x: bathX, z: bathZ, r: 0.6, h: 1.29 },
+    { x: hoseX, z: hoseZ, r: 0.45, h: 0.55 },
+    { x: ballX, z: ballZ, r: 0.3, h: 0.6 },
   ];
 
   // --- ground: mown grass, raked by a low sun ------------------------------
@@ -1362,8 +1428,11 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const shrubs = pickE(q, 11, 16, 22);
   for (let i = 0; i < shrubs; i++) {
     const a = (i / shrubs) * TAU + rng.range(-0.22, 0.22);
-    // every fourth one wanders out onto the lawn, so no yaw is a bare green band
-    const d = i % 4 === 3 ? rng.range(9.8, 14.2) : FENCE_R - rng.range(0.4, 1.8);
+    // Every fourth one wanders out onto the lawn, so no yaw is a bare green
+    // band. They stop at 8.6: past that they are inside the floating band
+    // (`hiddenCap` 1.49 at 8.6, and the fattest shrub is 1.28 tall), and a
+    // shrub with its foot behind the bun is a green blob in mid-air.
+    const d = i % 4 === 3 ? rng.range(6.6, 8.6) : FENCE_R - rng.range(0.4, 1.8);
     const w = rng.range(0.75, 1.5);
     far.dome(
       w,
@@ -1501,7 +1570,11 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const POST_R = 13.2;
     const posts: THREE.Vector3[] = [];
     for (let i = 0; i < 4; i++) {
-      const a = 0.62 + (i / 4) * TAU;
+      // Offset a quarter-bay from the opening bearing so no post ever stands
+      // dead behind the tower: at 13.2 a post is past `clearRadius` on the
+      // home screen but back inside the floating band once a run is fifteen
+      // layers tall, and the swag is not enough on its own to sell its foot.
+      const a = CAM_BEARING + Math.PI / 4 + (i / 4) * TAU;
       const x = Math.sin(a) * POST_R;
       const z = Math.cos(a) * POST_R;
       const top = Math.min(yardY + 4.2, skyCap(POST_R));

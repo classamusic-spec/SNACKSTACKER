@@ -132,7 +132,8 @@ export function createBootScreen(): BootScreen {
   }
   resize();
   window.addEventListener('resize', resize);
-  bag.own(() => window.removeEventListener('resize', resize));
+  const dropResize = (): void => window.removeEventListener('resize', resize);
+  bag.own(dropResize);
 
   /**
    * Bites walk left to right the way a person eats, with vertical jitter so
@@ -194,7 +195,17 @@ export function createBootScreen(): BootScreen {
 
   function frame(now: number): void {
     raf = requestAnimationFrame(frame);
-    if (!ctx) return;
+    // Without a 2D context there is nothing to draw and nothing can ever set
+    // `fading`, so bail straight to the caller's teardown rather than spinning
+    // forever under an opaque, input-blocking overlay.
+    if (!ctx) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      const finishNow = onDone;
+      onDone = null;
+      finishNow?.();
+      return;
+    }
     if (!start) start = now;
     const elapsed = now - start;
     const dt = 1 / 60;
@@ -290,7 +301,10 @@ export function createBootScreen(): BootScreen {
 
       const finish = (): void => {
         el.classList.add('is-out');
-        window.setTimeout(() => {
+        // The splash is never destroy()ed in the normal flow, so release its
+        // resize listener here or it repaints a dead canvas all session.
+        dropResize();
+        bag.after(() => {
           el.remove();
           done();
         }, 340);

@@ -30,8 +30,11 @@ const CHROME = [
   '/opt/pw-browsers/chromium/chrome-linux/chrome',
 ].find((p) => existsSync(p));
 
-const W = 393;
-const H = 852;
+// SN_W / SN_H raise the viewport for fill-cost work: at the phone size the
+// low tier sits on the 60fps rAF cap, and a capped frame rate cannot measure
+// a fragment shader.
+const W = Number(process.env.SN_W ?? 393);
+const H = Number(process.env.SN_H ?? 852);
 
 /** Normalised sample points, origin top-left. */
 const POINTS = [
@@ -129,7 +132,7 @@ for (const id of THEMES) {
     if (m.type() === 'error') errors.push(`${id}: ${m.text()}`);
   });
   await page.addInitScript(
-    ({ id, tier, sky }) => {
+    ({ id, tier, sky, ovr }) => {
       try {
         localStorage.setItem(
           'snackery.save.v1',
@@ -141,11 +144,13 @@ for (const id of THEMES) {
           }),
         );
         localStorage.setItem('snackery.sky', sky);
+        if (ovr) localStorage.setItem('snackery.sky.override', ovr);
+        else localStorage.removeItem('snackery.sky.override');
       } catch {
         /* private mode */
       }
     },
-    { id, tier: TIER, sky: SKY },
+    { id, tier: TIER, sky: SKY, ovr: process.env.SN_SKY_OVERRIDE ?? '' },
   );
   await page.goto(process.env.SNACKERY_URL ?? 'http://localhost:4173/', {
     waitUntil: 'load',

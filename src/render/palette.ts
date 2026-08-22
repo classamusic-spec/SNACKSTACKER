@@ -102,7 +102,7 @@ export const SKY_PRESETS: Record<ThemeId, SkyConfig> = {
     glowSpread: 0.95,
     cloudCover: 0.34,
     cloudColor: 0xfff6e6,
-    cloudShadow: 0.3,
+    cloudShadow: 0.45,
     cloudDrift: 0.022,
     horizonColor: 0xffd5a8,
     horizonSoftness: 0.55,

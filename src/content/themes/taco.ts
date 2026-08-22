@@ -875,7 +875,7 @@ const WALL_LAMP_R = 12.45;
 const BACK_ARC = Math.PI * 1.25;
 
 /** The four silhouette layers past the wall, nearest first. */
-const ROOF_R = 17.2;
+const ROOF_R = 19;
 const TOWN_R = 26;
 const RIDGE_R = 42;
 const MESA_R = 60;
@@ -1703,7 +1703,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     for (let i = 0; i < piers; i++) {
       const a = BACK_ARC + 0.4 + (i / piers) * TAU;
       const h = wallHigh + 0.1 - (floor - 0.6);
-      const pier = new THREE.BoxGeometry(0.9, h, 0.5);
+      const pier = new THREE.BoxGeometry(0.66, h, 0.44);
       pier.rotateY(a);
       pier.translate(
         Math.sin(a) * (WALL_R - 0.2),
@@ -1749,25 +1749,34 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   {
     /** Rooftops just past the wall — flat roofs, parapets, a water tank. */
     const roofParts: Array<THREE.BufferGeometry | null> = [];
-    const roofs = lo ? 13 : q === 'medium' ? 20 : 28;
+    const roofs = lo ? 20 : q === 'medium' ? 30 : 44;
     for (let i = 0; i < roofs; i++) {
       const a = (i / roofs) * TAU + rng.signed() * 0.06;
-      const r = ROOF_R + rng.range(-1.7, 1.9);
+      const r = ROOF_R + rng.range(-2.2, 2.4);
       const x = Math.sin(a) * r;
       const z = Math.cos(a) * r;
-      const roofY = top + rng.range(1.2, ROOF_TOP);
-      const w = rng.range(1.5, 2.7);
-      const d = rng.range(1.3, 2.3);
-      const body = new THREE.BoxGeometry(w, roofY - (top - 5.5), d);
+      const roofY = top + rng.range(0.75, ROOF_TOP);
+      const w = rng.range(0.85, 1.55);
+      const d = rng.range(0.75, 1.35);
+      const body = new THREE.BoxGeometry(w, roofY - (top - 4.2), d);
       body.rotateY(a + rng.signed() * 0.25);
-      body.translate(x, (roofY + top - 5.5) * 0.5, z);
+      body.translate(x, (roofY + top - 4.2) * 0.5, z);
       // sunward faces warm, the rest fall away into the violet
       const face = clamp01(-Math.cos(a - SUN_AZ));
-      roofParts.push(tintGeometry(body, face > 0.35 ? 0xa9614a : 0x7c4448));
-      const parapet = new THREE.BoxGeometry(w * 1.06, 0.22, d * 1.06);
-      parapet.rotateY(a + rng.signed() * 0.25);
-      parapet.translate(x, roofY + 0.06, z);
-      roofParts.push(tintGeometry(parapet, 0xc07a58));
+      roofParts.push(tintGeometry(body, face > 0.35 ? 0x9e5341 : 0x6b3a40));
+      if (i % 3 === 0) {
+        // a pitched tile roof: a four-sided cone, squashed onto the footprint
+        const pitch = new THREE.CylinderGeometry(0.02, Math.max(w, d) * 0.78, 0.44, 4, 1);
+        pitch.rotateY(a + Math.PI / 4);
+        pitch.scale(1, 1, (d / Math.max(w, 0.01)) * 0.9 + 0.1);
+        pitch.translate(x, roofY + 0.2, z);
+        roofParts.push(tintGeometry(pitch, 0x9c4a3c));
+      } else {
+        const parapet = new THREE.BoxGeometry(w * 1.06, 0.22, d * 1.06);
+        parapet.rotateY(a + rng.signed() * 0.25);
+        parapet.translate(x, roofY + 0.06, z);
+        roofParts.push(tintGeometry(parapet, 0xc07a58));
+      }
       if (!lo && i % 4 === 1) {
         // a roof water tank on stilts, the shape that says "town" fastest
         const tankH = Math.min(0.5, top + ROOF_TOP - roofY - 0.24);
@@ -1780,8 +1789,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
     const roofGeo = mergeEnv(roofParts);
     if (roofGeo) {
-      mistBelow(roofGeo, 0xe8b088, top + ROOF_TOP - 2.4, top + ROOF_TOP, 0.62);
-      far.push(hazeByRadius(roofGeo, DUSK_HAZE, 13, 20, 0.38, 1.05));
+      mistBelow(roofGeo, 0xdba178, top + ROOF_TOP - 2.6, top + ROOF_TOP, 0.5);
+      far.push(hazeByRadius(roofGeo, DUSK_HAZE, 14, 21, 0.26, 1.0));
     }
   }
 
@@ -1793,11 +1802,11 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const r = TOWN_R + rng.range(-1, 1);
       const x = Math.sin(a) * r;
       const z = Math.cos(a) * r;
-      const tipY = top + TOWN_TOP * scale;
-      const shaftTop = tipY - 0.62 * scale;
-      const shaft = new THREE.BoxGeometry(1.5 * scale, shaftTop - (top - 6), 1.5 * scale);
+      const tipY = top + TOWN_TOP;
+      const shaftTop = tipY - 0.55 * scale;
+      const shaft = new THREE.BoxGeometry(1.5 * scale, shaftTop - (top - 7), 1.5 * scale);
       shaft.rotateY(a);
-      shaft.translate(x, (shaftTop + top - 6) * 0.5, z);
+      shaft.translate(x, (shaftTop + top - 7) * 0.5, z);
       town.push(tintGeometry(shaft, 0xb08063));
       const belfry = new THREE.BoxGeometry(1.72 * scale, 0.34 * scale, 1.72 * scale);
       belfry.rotateY(a);
@@ -1811,33 +1820,33 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       spike.translate(x, tipY - 0.17 * scale, z);
       town.push(tintGeometry(spike, 0x3d2436));
       // nave, running off to one side and much lower
-      const nave = new THREE.BoxGeometry(3.4 * scale, shaftTop - 0.8 - (top - 6), 2.2 * scale);
+      const nave = new THREE.BoxGeometry(3.4 * scale, shaftTop - 0.8 - (top - 7), 2.2 * scale);
       nave.rotateY(a);
       nave.translate(
         x + Math.sin(a + Math.PI / 2) * 2.3 * scale,
-        (shaftTop - 0.8 + top - 6) * 0.5,
+        (shaftTop - 0.8 + top - 7) * 0.5,
         z + Math.cos(a + Math.PI / 2) * 2.3 * scale,
       );
       town.push(tintGeometry(nave, 0x91614f));
     };
 
-    church(0.23, 1);
-    if (!lo) church(-2.4, 0.86);
+    church(0.23, 0.78);
+    if (!lo) church(-2.4, 0.66);
 
-    const blocksN = lo ? 10 : q === 'medium' ? 15 : 20;
+    const blocksN = lo ? 16 : q === 'medium' ? 24 : 34;
     for (let i = 0; i < blocksN; i++) {
       const a = (i / blocksN) * TAU + rng.signed() * 0.08;
-      const r = TOWN_R + rng.range(-2.6, 2.8);
+      const r = TOWN_R + rng.range(-3.4, 3.6);
       const x = Math.sin(a) * r;
       const z = Math.cos(a) * r;
       const roofY = top + rng.range(0.15, TOWN_TOP - 0.34);
-      const w = rng.range(2.2, 3.8);
-      const d = rng.range(1.8, 3.0);
-      const body = new THREE.BoxGeometry(w, roofY - (top - 6), d);
+      const w = rng.range(1.3, 2.4);
+      const d = rng.range(1.1, 2.0);
+      const body = new THREE.BoxGeometry(w, roofY - (top - 7), d);
       body.rotateY(a + rng.signed() * 0.3);
-      body.translate(x, (roofY + top - 6) * 0.5, z);
+      body.translate(x, (roofY + top - 7) * 0.5, z);
       const face = clamp01(-Math.cos(a - SUN_AZ));
-      town.push(tintGeometry(body, face > 0.4 ? 0x9c6250 : 0x5c3a4c));
+      town.push(tintGeometry(body, face > 0.4 ? 0x8c5450 : 0x4e3048));
     }
     const townGeo = mergeEnv(town);
     if (townGeo) {
@@ -1845,8 +1854,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       // what separates one silhouette layer from the next — a dark crest read
       // against the pale base of the layer behind it — and it is the reason
       // four flat cut-outs read as distance rather than as one brown mass.
-      mistBelow(townGeo, 0xefc19c, top + TOWN_TOP - 2.6, top + TOWN_TOP, 0.72);
-      far.push(hazeByRadius(townGeo, DUSK_HAZE, 17, 28, 0.5, 1.12));
+      mistBelow(townGeo, 0xe5b18c, top + TOWN_TOP - 2.8, top + TOWN_TOP, 0.6);
+      far.push(hazeByRadius(townGeo, DUSK_HAZE, 19, 28, 0.4, 1.06));
     }
   }
 
@@ -1861,7 +1870,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       y: ridgeAt(a),
     }));
     const parts: Array<THREE.BufferGeometry | null> = [];
-    if (ring) parts.push(tintGeometry(ring, 0x4e3260));
+    if (ring) parts.push(tintGeometry(ring, 0x452c58));
 
     const cacti = lo ? 6 : q === 'medium' ? 10 : 15;
     for (let i = 0; i < cacti; i++) {
@@ -1894,8 +1903,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
     const ridgeGeo = mergeEnv(parts);
     if (ridgeGeo) {
-      mistBelow(ridgeGeo, 0xf2caa6, crestY - 3.4, crestY, 0.78);
-      far.push(hazeByRadius(ridgeGeo, DUSK_HAZE, 26, 43, 0.62, 1.2));
+      mistBelow(ridgeGeo, 0xecc19e, crestY - 3.6, crestY, 0.68);
+      far.push(hazeByRadius(ridgeGeo, DUSK_HAZE, 28, 43, 0.54, 1.14));
     }
   }
 
@@ -1917,8 +1926,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     });
     if (ring) {
       tintGeometry(ring, 0x543a6e);
-      mistBelow(ring, 0xf6d6b6, cap - 4.4, cap, 0.82);
-      far.push(hazeByRadius(ring, DUSK_HAZE, 38, 60, 0.74, 1.32));
+      mistBelow(ring, 0xf2ceac, cap - 4.6, cap, 0.74);
+      far.push(hazeByRadius(ring, DUSK_HAZE, 40, 60, 0.66, 1.24));
     }
   }
 

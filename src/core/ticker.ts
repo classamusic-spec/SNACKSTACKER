@@ -77,8 +77,13 @@ export class Ticker {
     // hide genuine slowness from the frame governor.
     this.fpsAccum += rawDt;
     this.fpsFrames++;
-    this.fpsTimer += dt;
+    // The WINDOW must use real time too, not just the value. Summing clamped
+    // dt stretched the window by 1/(rawDt/0.05) on slow devices: at 10fps the
+    // governor's 3s became 6s, at 2fps it became 30s — reacting slowest on
+    // exactly the hardware it exists to rescue.
+    this.fpsTimer += rawDt;
     if (this.fpsTimer >= 0.5) {
+      const window = this.fpsTimer;
       const fps = this.fpsFrames / Math.max(this.fpsAccum, 1e-6);
       this.info.fps = fps;
       this.fpsAccum = 0;
@@ -88,7 +93,9 @@ export class Ticker {
       const threshold = this.opts.slowThreshold ?? 48;
       const needed = this.opts.slowSeconds ?? 3;
       if (fps < threshold) {
-        this.slowRun += 0.5;
+        // Credit the real elapsed window, which can exceed 0.5s when a single
+        // frame is very long.
+        this.slowRun += window;
         if (this.slowRun >= needed && !this.hasReportedSlow) {
           this.hasReportedSlow = true;
           this.slowRun = 0;

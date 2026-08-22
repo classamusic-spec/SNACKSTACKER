@@ -786,9 +786,13 @@ export class Backdrop {
 
     const intensity = Math.max(0, s.sunIntensity);
     out.sunAmt = THREE.MathUtils.clamp(intensity, 0, 1);
-    // The core of any sun reads white; the authored hue survives at the rim
-    // and, much more visibly, in the glow.
-    out.sunTint.setHex(s.sunColor, THREE.SRGBColorSpace).lerp(WHITE, 0.5);
+    // Nearly white, and that is forced rather than stylistic. The direct path
+    // clamps at 1.0 and every warm palette already has bgTop pinned there, so
+    // a disc tinted at the authored hue has no headroom to be brighter than
+    // the sky it sits in — measured at 14 steps on the diner, i.e. invisible.
+    // White is the only value with anywhere to go. The hue survives in the
+    // glow, which is where it was doing the work anyway.
+    out.sunTint.setHex(s.sunColor, THREE.SRGBColorSpace).lerp(WHITE, 0.85);
     out.sunLin
       .setHex(s.sunColor, THREE.SRGBColorSpace)
       .multiplyScalar(sunLinearScale(p) * intensity);
@@ -798,11 +802,15 @@ export class Backdrop {
 
     out.cloudLit.setHex(s.cloudColor, THREE.SRGBColorSpace);
     const shade = THREE.MathUtils.clamp(s.cloudShadow, 0, 1);
+    // 0.85, not 0.62: at 0.62 a cloudShadow of 0.3 separated base from crown
+    // by 17 display steps, which is under the threshold at which a shape reads
+    // as a volume at all — the clouds looked like flat cut-outs of a slightly
+    // different cream. 0.85 puts it at ~45 steps, which reads.
     out.cloudShade
       .copy(out.cloudLit)
-      .multiplyScalar(1 - shade * 0.62)
+      .multiplyScalar(1 - shade * 0.85)
       // A cloud base is not just a darker cloud; it picks up the haze under
-      // it, and at 0.3 of that the diner's cumulus came out neutral grey and
+      // it. Without this term the diner's cumulus came out neutral grey and
       // read as rain against a golden sky.
       .lerp(TMP_HAZE.setHex(s.horizonColor, THREE.SRGBColorSpace), shade * 0.5);
     out.cloudCover = THREE.MathUtils.clamp(s.cloudCover, 0, 1);

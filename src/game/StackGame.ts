@@ -100,6 +100,8 @@ export class StackGame {
   private state: GameState = 'idle';
   private score: ScoreState = createScoreState();
   private runRng = new Rng(1);
+  /** Stable per-run seed for layer geometry, independent of draw order. */
+  private runSeed = 1;
 
   private footprintX = TUNING.BASE_FOOTPRINT;
   private footprintZ = TUNING.BASE_FOOTPRINT;
@@ -121,6 +123,11 @@ export class StackGame {
 
   get layerCount(): number {
     return this.layers.length;
+  }
+
+  /** Live ballistic debris, for the leak harness. */
+  get debrisCount(): number {
+    return this.offcuts.count;
   }
 
   get currentTheme(): ThemeDef | null {
@@ -179,6 +186,9 @@ export class StackGame {
     }
     this.deps.rig.setTop(this.topY * 0.5, true);
     this.deps.rig.setOrbit(0.22);
+    // miss() pushes the camera back to show the finished tower; without this
+    // the home screen inherits that lift for the rest of the session.
+    this.deps.rig.setLift(0);
     this.deps.rig.snap();
   }
 
@@ -189,7 +199,8 @@ export class StackGame {
 
     this.state = 'ready';
     this.score = createScoreState();
-    this.runRng = new Rng((Date.now() ^ 0x9e3779b9) >>> 0);
+    this.runSeed = (Date.now() ^ 0x9e3779b9) >>> 0;
+    this.runRng = new Rng(this.runSeed);
     this.footprintX = TUNING.BASE_FOOTPRINT;
     this.footprintZ = TUNING.BASE_FOOTPRINT;
     this.topY = 0;
@@ -244,8 +255,9 @@ export class StackGame {
   // input
   // -------------------------------------------------------------------------
 
-  drop(): void {
-    if (this.state !== 'playing' || !this.moving || this.spawnCooldown > 0) return;
+  /** @returns true when the input was taken; false when it was ignored. */
+  drop(): boolean {
+    if (this.state !== 'playing' || !this.moving || this.spawnCooldown > 0) return false;
     const moving = this.moving;
     const top = this.layers[this.layers.length - 1];
     const axis = moving.axis;
@@ -268,7 +280,7 @@ export class StackGame {
 
     if (cut.kind === 'miss') {
       this.miss(moving);
-      return;
+      return true;
     }
 
     // Rebuild the kept portion at its cut size. We never boolean-slice — the
@@ -332,6 +344,7 @@ export class StackGame {
 
     this.spawnCooldown = TUNING.SPAWN_DELAY;
     this.deps.rig.setTop(this.topY);
+    return true;
   }
 
   private onPerfect(layer: TowerLayer): void {
@@ -587,7 +600,11 @@ export class StackGame {
       depth: Math.max(depth, 0.04),
       height: Math.max(height, 0.04),
       index,
-      rng: this.runRng.fork(index),
+      // Forked from a fixed run seed rather than the live generator: spawning
+      // advances runRng, so rebuilding the kept piece on drop used to draw a
+      // different stream and visibly re-scattered seeds, flecks and sprinkles
+      // in the landing frame.
+      rng: new Rng((this.runSeed ^ Math.imul(index + 1, 0x9e3779b9)) >>> 0),
       quality: this.deps.quality,
       materials: this.deps.materials,
       offcut,

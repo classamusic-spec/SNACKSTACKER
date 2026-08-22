@@ -146,6 +146,9 @@ async function boot(): Promise<void> {
 
   const applyTheme = (next: ThemeDef, rebuild: boolean): void => {
     theme = next;
+    // Reachable from the store before the renderer exists; the palette is
+    // handed to createSceneKit at construction anyway, so skipping is safe.
+    if (!kit || !game) return;
     kit.applyPalette(next.palette);
     ui.applyTheme(next);
     audio.setTheme(next);
@@ -170,7 +173,11 @@ async function boot(): Promise<void> {
     },
     onCloseStore: () => {
       if (state === 'playing' || state === 'paused') ui.goGame();
-      else if (state === 'result' && lastResult) ui.goResult(lastResult);
+      // The result screen is still mounted underneath the store sheet, so
+      // re-opening it would tear it down and rebuild it: the score replays its
+      // count-up and the HUD fades back in behind the card. Closing the sheet
+      // is enough.
+      else if (state === 'result') return;
       else ui.goHome();
     },
     onOpenSettings: () => {
@@ -231,7 +238,7 @@ async function boot(): Promise<void> {
     onSettingChange: <K extends keyof Settings>(key: K, value: Settings[K]) => {
       meta.setSetting(key, value);
       const s = settings();
-      kit.setShakeScale(s.reducedMotion ? 0 : 1);
+      if (kit) kit.setShakeScale(s.reducedMotion ? 0 : 1);
       audio.setSfxEnabled(s.sfx);
       audio.setMusicEnabled(s.music);
       setHapticsEnabled(s.haptics);
@@ -283,6 +290,11 @@ async function boot(): Promise<void> {
   }
 
   function startRun(): void {
+    // The splash blocks pointer input but not the tab order, so this can be
+    // reached by keyboard or assistive tech before the game is constructed.
+    // Bail before touching `state`, or the app strands in 'playing' with no
+    // game and every subsequent Space throws.
+    if (!game) return;
     void audio.unlock();
     state = 'playing';
     lastResult = null;
@@ -303,7 +315,11 @@ async function boot(): Promise<void> {
   }
 
   function pause(): void {
-    if (state !== 'playing') return;
+    if (state !== 'playing' || !game) return;
+    // The death animation runs while state is still 'playing'. Pausing there
+    // would freeze game.update() before the gameover event fires, and a Home
+    // from that frozen state discarded the whole run. Let the topple finish.
+    if (game.phase === 'toppling' || game.phase === 'over') return;
     state = 'paused';
     ui.goPause();
   }
@@ -384,10 +400,11 @@ async function boot(): Promise<void> {
   // ---------------------------------------------------------------------------
 
   const tryDrop = (): void => {
-    if (state !== 'playing') return;
+    if (state !== 'playing' || !game) return;
     void audio.unlock();
-    game.drop();
-    haptic('light');
+    // Only buzz if the drop was actually taken; during the spawn cooldown and
+    // the topple `drop()` no-ops, and buzzing there feels like a lost input.
+    if (game.drop()) haptic('light');
   };
 
   // The UI overlay is pointer-events:none except for its controls, so a tap on
@@ -424,6 +441,10 @@ async function boot(): Promise<void> {
   // ---------------------------------------------------------------------------
 
   const onResize = (): void => {
+    // Registered before the renderer exists: the mobile URL bar collapsing
+    // during load fires visualViewport resize, and rotating while loading
+    // fires orientationchange. Both used to throw on the unassigned bindings.
+    if (!kit || !rig) return;
     const w = window.innerWidth;
     const h = window.innerHeight;
     rig.setAspect(w / Math.max(h, 1));
@@ -551,6 +572,7 @@ async function boot(): Promise<void> {
     stats.layers = game.layerCount;
     stats.tier = kit.quality.tier;
     stats.state = state;
+    stats.offcuts = game.debrisCount;
     stats.geometries = kit.renderer.info.memory.geometries;
     stats.textures = kit.renderer.info.memory.textures;
     stats.programs2 = kit.renderer.info.programs?.length ?? 0;

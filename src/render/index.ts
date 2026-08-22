@@ -5,6 +5,7 @@ import type {
   MaterialLibrary,
   RenderQualitySettings,
   SceneKit,
+  SkyConfig,
   ThemePaletteLike,
 } from './api';
 import { Backdrop, createBackdrop } from './backdrop';
@@ -60,17 +61,26 @@ const TEMP_SKY_BY_BGTOP: Record<number, keyof typeof SKY_PRESETS> = {
   0xffe9c7: 'pizza',
 };
 let TEMP_skyFlag: string | null | undefined;
+let TEMP_skyOverride: Partial<SkyConfig> | null | undefined;
 function TEMP_injectSky(p: ThemePaletteLike): ThemePaletteLike {
   if (TEMP_skyFlag === undefined) {
     try {
       TEMP_skyFlag = localStorage.getItem('snackery.sky');
+      const raw = localStorage.getItem('snackery.sky.override');
+      TEMP_skyOverride = raw ? (JSON.parse(raw) as Partial<SkyConfig>) : null;
     } catch {
       TEMP_skyFlag = null;
+      TEMP_skyOverride = null;
     }
   }
-  if (TEMP_skyFlag !== 'on' || p.sky) return p;
-  const id = TEMP_SKY_BY_BGTOP[p.bgTop];
-  return id ? { ...p, sky: SKY_PRESETS[id] } : p;
+  let sky = p.sky;
+  if (!sky && TEMP_skyFlag === 'on') {
+    const id = TEMP_SKY_BY_BGTOP[p.bgTop];
+    if (id) sky = SKY_PRESETS[id];
+  }
+  if (!sky) return p;
+  if (TEMP_skyOverride) sky = { ...sky, ...TEMP_skyOverride };
+  return sky === p.sky ? p : { ...p, sky };
 }
 
 function nextTierDown(tier: QualityTier): QualityTier {

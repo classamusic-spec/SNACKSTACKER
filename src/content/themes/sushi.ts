@@ -954,6 +954,8 @@ function hashPx(i: number, j: number): number {
  * that colour per vertex, which is how a baked pool of light is put on the
  * counter without a second material.
  */
+const BUCKET_COL = new THREE.Color();
+
 class EnvBucket {
   private readonly parts: THREE.BufferGeometry[] = [];
 
@@ -987,6 +989,43 @@ class EnvBucket {
       }
       c.needsUpdate = true;
     }
+    this.parts.push(g);
+  }
+
+  /**
+   * Same, but every vertex gets its own colour. A `shade` callback can only
+   * ever darken one flat tint, and a canopy that goes from dusky rose in its
+   * own shadow to near-white on the lit edge is a change of HUE, not of value.
+   */
+  addColored(
+    geo: THREE.BufferGeometry | null,
+    colorAt: (x: number, y: number, z: number) => number,
+  ): void {
+    if (!geo) return;
+    const pos0 = geo.getAttribute('position');
+    if (!pos0 || pos0.count < 3) {
+      geo.dispose();
+      return;
+    }
+    let g = geo;
+    if (g.index) {
+      const flat = g.toNonIndexed();
+      g.dispose();
+      g = flat;
+    }
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    const arr = new Float32Array(p.count * 3);
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i);
+      const y = p.getY(i);
+      const z = p.getZ(i);
+      const hex = colorAt(x, y, z);
+      BUCKET_COL.setHex(Number.isFinite(hex) ? hex : 0xffffff).convertSRGBToLinear();
+      arr[i * 3] = BUCKET_COL.r;
+      arr[i * 3 + 1] = BUCKET_COL.g;
+      arr[i * 3 + 2] = BUCKET_COL.b;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
     this.parts.push(g);
   }
 
@@ -1782,7 +1821,11 @@ function shojiWall(
   y: number,
   bars: number,
 ): void {
-  const h = 1.02;
+  // Low and broken up. At 1.02 tall and unbroken this was a continuous cream
+  // bar across the horizon and the brightest thing in the theme after the
+  // salmon; a shoji screen is a GRID of small lit panels, and reading it as
+  // one takes both a shorter band and enough joinery to divide it.
+  const h = 0.76;
   const sill = 0.52;
   const cx = Math.cos(bearing) * radius;
   const cz = Math.sin(bearing) * radius;
@@ -1802,7 +1845,9 @@ function shojiWall(
     const u = (i / bars - 0.5) * span;
     wood.add(at(envBox(0.06, h, 0.05), cx + nx * u + px, y + sill, cz + nz * u + pz, yaw), 0x140f0d);
   }
-  wood.add(at(envBox(span, 0.05, 0.05), cx + px, y + sill + h * 0.52, cz + pz, yaw), 0x140f0d);
+  for (const f of [0.34, 0.68]) {
+    wood.add(at(envBox(span, 0.045, 0.05), cx + px, y + sill + h * f, cz + pz, yaw), 0x140f0d);
+  }
   // eave: a deep dark overhang, which is what reads as a roof at this size
   wood.add(at(envBox(span + 1.15, 0.14, 1.15), cx, y + sill + h + 0.62, cz, yaw), 0x0e0b0a);
   wood.add(at(envBox(span + 0.8, 0.16, 0.7), cx, y + sill + h + 0.74, cz, yaw), 0x181310);
@@ -1818,11 +1863,11 @@ function shojiWall(
 const KEY_DIR = new THREE.Vector3(-4.5, 4.72, 5.0).normalize();
 const RIM_DIR = new THREE.Vector3(2.4, 5.6, -6.4).normalize();
 
-const BLOSSOM_DEEP = new THREE.Color(0xb05e7d);
-const BLOSSOM_MID = new THREE.Color(0xf5a8c2);
-const BLOSSOM_PALE = new THREE.Color(0xffd6e4);
-const BLOSSOM_LIGHT = new THREE.Color(0xfff5f9);
-const BLOSSOM_HAZE = new THREE.Color(0x8fa2b4);
+const BLOSSOM_DEEP = new THREE.Color(0x9e4f6b);
+const BLOSSOM_MID = new THREE.Color(0xef9dbb);
+const BLOSSOM_PALE = new THREE.Color(0xffd3e2);
+const BLOSSOM_LIGHT = new THREE.Color(0xfff6fa);
+const BLOSSOM_HAZE = new THREE.Color(0x8299ad);
 const BLOSSOM_TMP = new THREE.Color();
 const BLOSSOM_TMP2 = new THREE.Color();
 
@@ -1835,21 +1880,128 @@ function blossomTint(lit: number, rim: number, out: number, fade: number): numbe
   const t = smooth01(lit * 0.5 + 0.5);
   BLOSSOM_TMP.copy(BLOSSOM_DEEP).lerp(BLOSSOM_MID, smooth01(out * 0.55 + t * 0.55));
   BLOSSOM_TMP.lerp(BLOSSOM_PALE, t * t * out);
-  BLOSSOM_TMP.lerp(BLOSSOM_LIGHT, 0.5 * t * t * t * out);
+  BLOSSOM_TMP.lerp(BLOSSOM_LIGHT, 0.62 * t * t * t * out);
   // the warm rim catches the far edge of the crown
-  if (rim > 0) BLOSSOM_TMP.lerp(BLOSSOM_TMP2.setRGB(1, 0.78, 0.7), 0.16 * rim * rim * out);
+  if (rim > 0) BLOSSOM_TMP.lerp(BLOSSOM_TMP2.setRGB(1, 0.78, 0.7), 0.2 * rim * rim * out);
   return BLOSSOM_TMP.lerp(BLOSSOM_HAZE, fade).getHex();
 }
 
 /**
- * A cherry in blossom: flared trunk, a fan of limbs, and a crown built from
- * scattered clusters rather than a facet ball.
+ * The florets, as a modulating albedo map.
  *
- * The old canopy was seven icosahedra, and beyond about twelve units it read
- * as exactly what it was — pink hexagons. The fix is not more subdivision, it
- * is smaller forms: forty clusters of four to eight triangles each break the
- * silhouette, let the limbs show through the gaps, and carry their own colour
- * so the crown has depth instead of a single flat pink.
+ * This is the piece that makes a canopy read as blossom rather than as a
+ * shape. No amount of triangles buys thousands of five-petal florets, but a
+ * near-white map of soft puffs and the gaps between them costs nothing and
+ * survives all the way down to the point where the crown is forty pixels wide,
+ * because mip-mapping just averages it back to the mean.
+ *
+ * Painted near-white on purpose: the bible's rule is that a map carries hue OR
+ * the material does, never both, and here the hue is entirely in the vertex
+ * colours. This only modulates brightness, and its mean is close to 1 so it
+ * does not quietly darken the whole treeline.
+ */
+function paintBlossomMass(c: CanvasRenderingContext2D, size: number): void {
+  c.fillStyle = '#cdc7ca';
+  c.fillRect(0, 0, size, size);
+  const rng = new Rng(0x51b1);
+  // Jittered grid, so coverage is even and no puff lands on top of another —
+  // scattered uniformly, a third of the map ends up bald and the canopy grows
+  // holes that read as damage rather than as gaps between clusters.
+  const cells = 5;
+  const step = size / cells;
+  const blot = (x: number, y: number, r: number, a: number): void => {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const px = x + dx * size;
+        const py = y + dy * size;
+        if (px < -r || px > size + r || py < -r || py > size + r) continue;
+        const g = c.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, `rgba(255,253,254,${a.toFixed(3)})`);
+        g.addColorStop(0.55, `rgba(250,244,247,${(a * 0.6).toFixed(3)})`);
+        g.addColorStop(1, 'rgba(236,230,233,0)');
+        c.fillStyle = g;
+        c.beginPath();
+        c.arc(px, py, r, 0, TAU);
+        c.fill();
+      }
+    }
+  };
+  for (let j = 0; j < cells; j++) {
+    for (let i = 0; i < cells; i++) {
+      const cx = (i + rng.range(0.18, 0.82)) * step;
+      const cy = (j + rng.range(0.18, 0.82)) * step;
+      blot(cx, cy, step * rng.range(0.42, 0.66), rng.range(0.72, 1));
+      // two or three satellites, which is what turns a disc into a cluster
+      const sats = rng.int(2, 3);
+      for (let k = 0; k < sats; k++) {
+        const a = rng.range(0, TAU);
+        const d = step * rng.range(0.3, 0.62);
+        blot(cx + Math.cos(a) * d, cy + Math.sin(a) * d, step * rng.range(0.2, 0.36), rng.range(0.5, 0.86));
+      }
+    }
+  }
+  // individual florets catching the light on top of the mass
+  for (let i = 0; i < 260; i++) {
+    const r = size * rng.range(0.004, 0.011);
+    c.fillStyle = `rgba(255,255,255,${rng.range(0.18, 0.5).toFixed(3)})`;
+    c.beginPath();
+    c.arc(rng.next() * size, rng.next() * size, r, 0, TAU);
+    c.fill();
+  }
+}
+
+/**
+ * One lobe of a crown: a sphere pushed around by noise until its outline is
+ * ragged, squashed into an umbrella, and coloured through its own volume.
+ *
+ * Normals stay RADIAL rather than following the displacement. A lumpy shell
+ * with true normals shades every dent, and eighty faces' worth of dents at
+ * forty pixels is a golf ball; radial normals shade it as one soft mass and
+ * let the silhouette carry all the irregularity, which is how a canopy reads
+ * at this distance.
+ */
+function blossomLobe(
+  rx: number,
+  ry: number,
+  detail: number,
+  warp: number,
+  seed: number,
+): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, detail);
+  const p = g.getAttribute('position') as THREE.BufferAttribute;
+  const n = g.getAttribute('normal') as THREE.BufferAttribute;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const y = p.getY(i);
+    const z = p.getZ(i);
+    const l = Math.hypot(x, y, z) || 1;
+    const ux = x / l;
+    const uy = y / l;
+    const uz = z / l;
+    n.setXYZ(i, ux, uy, uz);
+    const lump =
+      fbm2(ux * 2.6 + uy * 1.7 + seed, uz * 2.6 - uy * 1.1 - seed, 2) * 0.62 +
+      fbm2(ux * 6.1 - uz * 2.2 + seed * 1.7, uz * 6.1 + ux * 2.2 - seed, 2) * 0.38;
+    const d = 1 + warp * (lump - 0.5) * 2;
+    p.setXYZ(i, ux * d * rx, uy * d * ry, uz * d * rx);
+  }
+  p.needsUpdate = true;
+  n.needsUpdate = true;
+  return g;
+}
+
+/**
+ * A cherry in blossom: flared trunk, a fan of limbs, and a crown built as a
+ * few overlapping masses rather than a facet ball.
+ *
+ * The old canopy was scattered icosahedra, and beyond about twelve units it
+ * read as exactly what it was — pink confetti stuck on a black stick, with
+ * daylight between every piece. The fix was not more pieces. A canopy is a
+ * MASS: two or three lumpy lobes give it continuous volume and a torn outline,
+ * the floret map puts thousands of blossoms on that volume for no triangles at
+ * all, and a handful of small forms on the fringe break the edge where the
+ * silhouette meets sky. The limbs then reach out PAST the lobes, so the
+ * structure shows through the gap between them.
  */
 function cherryTree(
   wood: EnvBucket,
@@ -1859,21 +2011,22 @@ function cherryTree(
   x: number, y: number, z: number,
   scale: number,
   fade: number,
-  clusters: number,
+  lobes: number,
+  fringe: number,
 ): void {
-  const bark = 0x53414a;
+  const bark = 0x6b5560;
   const sides = q === 'low' ? 5 : 6;
   const trunkH = 1.9 * scale;
-  const lean = rng.signed() * 0.11;
+  const lean = rng.signed() * 0.13;
 
   // a root mound, so the trunk is visibly planted instead of stopping in the
   // dark. Without it the tree reads as a lollipop pasted onto the sky.
-  const mound = envBlob(0.44 * scale, q === 'low' ? 0 : 1);
+  const mound = envBlob(0.44 * scale, 0);
   mound.scale(1.6, 0.34, 1.6);
   wood.add(at(mound, x, y + 0.02 * scale, z, rng.range(0, TAU)), 0x241d22);
   // flare, then the shaft: a cherry swells hard at the ground
-  wood.add(at(envCyl(0.17 * scale, 0.31 * scale, 0.34 * scale, sides), x, y, z), bark);
-  const trunk = envCyl(0.1 * scale, 0.18 * scale, trunkH, sides);
+  wood.add(at(envCyl(0.15 * scale, 0.29 * scale, 0.34 * scale, sides), x, y, z), 0x3d3038);
+  const trunk = envCyl(0.085 * scale, 0.16 * scale, trunkH, sides);
   trunk.rotateZ(lean);
   wood.add(at(trunk, x, y + 0.32 * scale, z), bark);
 
@@ -1881,74 +2034,87 @@ function cherryTree(
   const ty = y + 0.32 * scale + Math.cos(lean) * trunkH;
   const tz = z;
 
-  // The crown is ONE umbrella: an oblate shell, much wider than it is tall,
-  // filled with overlapping lumps and fringed with small ones. Five separate
-  // lobes on five limbs read as five puffs of candyfloss; a cherry reads as a
-  // single cloud with structure inside it.
-  const crownR = rng.range(1.02, 1.42) * scale;
-  const crownH = rng.range(0.44, 0.64) * scale;
-  const limbs = q === 'low' ? 3 : 5;
-  for (let i = 0; i < limbs; i++) {
-    const a = (i / limbs) * TAU + rng.range(-0.5, 0.5);
-    const reach = crownR * rng.range(0.45, 0.85);
+  const crownR = rng.range(1.06, 1.44) * scale;
+  const crownH = rng.range(0.5, 0.7) * scale;
+
+  // Limbs first, and deliberately longer than the crown is wide: their tips
+  // come out beyond the blossom, which is what says "there is a tree in there".
+  const limbN = q === 'low' ? 3 : 5;
+  const limbA = rng.range(0, TAU);
+  for (let i = 0; i < limbN; i++) {
+    const a = limbA + (i / limbN) * TAU + rng.range(-0.45, 0.45);
+    const reach = crownR * rng.range(0.78, 1.12);
     const ex = tx + Math.cos(a) * reach;
-    const ey = ty + rng.range(0.1, 0.42) * scale;
+    const ey = ty + rng.range(0.05, 0.4) * scale;
     const ez = tz + Math.sin(a) * reach;
-    wood.add(envStrut(tx, ty - 0.34 * scale, tz, ex, ey, ez, 0.028 * scale, 0.06 * scale, 4), bark);
+    wood.add(envStrut(tx, ty - 0.38 * scale, tz, ex, ey, ez, 0.024 * scale, 0.058 * scale, 4), bark);
     if (q !== 'low') {
-      const ta = a + rng.range(-1.1, 1.1);
-      const tr = crownR * rng.range(0.3, 0.6);
+      const ta = a + rng.range(-1.2, 1.2);
+      const tr = crownR * rng.range(0.34, 0.62);
       wood.add(
         envStrut(
           ex, ey, ez,
-          ex + Math.cos(ta) * tr, ey + rng.range(0.02, 0.24) * scale, ez + Math.sin(ta) * tr,
-          0.014 * scale, 0.028 * scale, 4,
+          ex + Math.cos(ta) * tr, ey + rng.range(0.04, 0.26) * scale, ez + Math.sin(ta) * tr,
+          0.012 * scale, 0.024 * scale, 4,
         ),
         bark,
       );
     }
   }
 
-  /** Place one blossom form at a spherical offset inside the crown shell. */
-  const put = (u: number, shell: number, up: number, size: number, small: boolean): void => {
-    const ox = Math.cos(u) * crownR * shell;
-    const oz = Math.sin(u) * crownR * shell;
-    const oy = crownH * up;
-    const len = Math.hypot(ox / crownR, oy / crownH, oz / crownR) || 1;
-    const lit = (ox / crownR * KEY_DIR.x + (oy / crownH) * KEY_DIR.y + (oz / crownR) * KEY_DIR.z) / len;
-    const rim = (ox / crownR * RIM_DIR.x + (oy / crownH) * RIM_DIR.y + (oz / crownR) * RIM_DIR.z) / len;
-    const geo = small ? envTetra(size * 1.25) : envOcta(size);
-    geo.scale(1.24, 0.8, 1.24);
-    geo.rotateX(rng.signed() * 0.55);
-    blossom.add(
-      at(geo, tx + ox, ty + oy, tz + oz, rng.range(0, TAU)),
-      blossomTint(lit, rim, clamp01(Math.hypot(shell, up * 0.7)), fade),
-    );
+  /**
+   * Grade a point of the crown. `ox/oy/oz` are relative to the crown centre;
+   * `out` is how far out of the mass it sits, which is what decides whether a
+   * surface is buried in shadow or is the lit edge of the silhouette.
+   */
+  const tintAt = (ox: number, oy: number, oz: number, extra: number): number => {
+    const nx = ox / crownR;
+    const ny = oy / crownH;
+    const nz = oz / crownR;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    const lit = (nx * KEY_DIR.x + ny * KEY_DIR.y + nz * KEY_DIR.z) / len;
+    const rim = (nx * RIM_DIR.x + ny * RIM_DIR.y + nz * RIM_DIR.z) / len;
+    // Mottling, so a smooth shell still reads as thousands of separate
+    // clusters rather than as one painted surface.
+    const mot = fbm2(ox * 3.1 + oz * 1.4 + tx, oz * 3.1 - oy * 2.2 + tz, 2) - 0.5;
+    const out = clamp01(len * 0.72 + extra + mot * 0.34);
+    return blossomTint(lit + mot * 0.5, rim, out, fade);
   };
 
-  // the body: a dozen fat lumps filling the umbrella
-  const masses = q === 'low' ? 7 : q === 'medium' ? 10 : 13;
-  for (let i = 0; i < masses; i++) {
-    const u = (i / masses) * TAU + rng.range(-0.5, 0.5);
-    put(
-      u,
-      i === 0 ? rng.range(0, 0.25) : rng.range(0.2, 0.72),
-      rng.range(-0.45, 0.85),
-      rng.range(0.27, 0.44) * scale,
-      false,
+  // The body: overlapping lumpy lobes, offset around the crown centre so the
+  // union has notches in it and the limbs show through them.
+  const lobeDetail = q === 'low' ? 1 : 1;
+  const spin = rng.range(0, TAU);
+  for (let i = 0; i < lobes; i++) {
+    const a = spin + (i / lobes) * TAU;
+    const off = lobes > 1 ? crownR * rng.range(0.2, 0.36) : 0;
+    const ox = Math.cos(a) * off;
+    const oz = Math.sin(a) * off;
+    const oy = rng.range(-0.16, 0.2) * scale;
+    const lr = crownR * rng.range(0.72, 0.9);
+    const lh = crownH * rng.range(0.92, 1.18);
+    const geo = blossomLobe(lr, lh, lobeDetail, 0.3, rng.range(0, 40));
+    geo.rotateY(rng.range(0, TAU));
+    blossom.addColored(at(geo, tx + ox, ty + oy, tz + oz), (vx, vy, vz) =>
+      tintAt(vx - tx, vy - ty, vz - tz, 0.1),
     );
   }
-  // the fringe: small forms out on the shell, which is what tears the outline
-  for (let i = 0; i < clusters; i++) {
+
+  // The fringe: small forms sitting proud of the lobes, tearing the outline
+  // where it meets the sky and catching the light on the top of the crown.
+  for (let i = 0; i < fringe; i++) {
     const u = rng.range(0, TAU);
-    const shell = 0.68 + 0.42 * Math.sqrt(rng.next());
-    const small = rng.bool(0.55);
-    put(
-      u,
-      shell,
-      rng.range(-0.85, 1.05) * (1.15 - shell * 0.5),
-      (small ? rng.range(0.075, 0.13) : rng.range(0.14, 0.23)) * scale,
-      small,
+    const shell = 0.74 + 0.4 * Math.sqrt(rng.next());
+    const small = rng.bool(0.5);
+    const size = (small ? rng.range(0.1, 0.16) : rng.range(0.17, 0.26)) * scale;
+    const ox = Math.cos(u) * crownR * shell;
+    const oz = Math.sin(u) * crownR * shell;
+    const oy = crownH * rng.range(-0.8, 1.0) * (1.15 - shell * 0.5);
+    const geo = small ? envTetra(size * 1.3) : envOcta(size);
+    geo.scale(1.2, 0.82, 1.2);
+    geo.rotateX(rng.signed() * 0.5);
+    blossom.addColored(at(geo, tx + ox, ty + oy, tz + oz, rng.range(0, TAU)), (vx, vy, vz) =>
+      tintAt(vx - tx, vy - ty, vz - tz, 0.22),
     );
   }
 }
@@ -1993,9 +2159,35 @@ const FUJI_R = 35;
 const FUJI_H = 8.76;
 const FUJI_N = 2.6;
 const FUJI_U0 = 0.055;
-/** Where the alpha fade starts and finishes, as heights up the full cone. */
-const FUJI_FADE_LO = 1.8;
-const FUJI_FADE_HI = 4.2;
+/**
+ * Where the alpha fade starts and finishes, as heights up the full cone.
+ *
+ * These two numbers decide how much of the mountain is snow, which is not
+ * obvious: the mesh only exists above FADE_LO, so the SNOW LINE has to be read
+ * as a fraction of `FADE_LO..FUJI_H`, not of the whole cone. At 1.8/4.2 with
+ * the line at 0.66H the rock band was a fifth of the visible mountain and half
+ * of that was already dissolving — Fuji rendered as a bald white cone. Dropped
+ * to 1.0/3.4 the rock is a little over half of what you see, the snow sits on
+ * top of it, and the line between them is the thing that says "Fuji".
+ */
+const FUJI_FADE_LO = 1.0;
+const FUJI_FADE_HI = 3.4;
+
+/**
+ * The cone is not a solid of revolution. This is its radial swell by bearing:
+ * above 1 is a buttress ridge, below 1 a gully. The snow line reads the same
+ * function, which is what puts the long tongues of snow in the gullies and
+ * pulls it back up over the ridges — the single detail that stops a snowcap
+ * looking like a dipped ice cream.
+ */
+function fujiSwell(a: number): number {
+  return (
+    1 +
+    0.075 * Math.sin(a + 0.8) +
+    0.04 * Math.sin(a * 2 - 1.3) +
+    0.022 * Math.sin(a * 5 + 0.4)
+  );
+}
 
 function fujiProfile(u: number): number {
   if (u >= FUJI_U0) return FUJI_H * Math.pow(1 - u, FUJI_N);
@@ -2011,8 +2203,8 @@ function fujiRadiusAt(h: number): number {
   return (1 - Math.pow(t, 1 / FUJI_N)) * FUJI_R;
 }
 
-const FUJI_ROCK = new THREE.Color(0x1c2836);
-const FUJI_ROCK_DARK = new THREE.Color(0x0a0f16);
+const FUJI_ROCK = new THREE.Color(0x141d29);
+const FUJI_ROCK_DARK = new THREE.Color(0x070b11);
 /**
  * Snow, deliberately over-bright. At 60 units the exponential fog has already
  * eaten 60% of this before it reaches the frame, so a snowcap authored at
@@ -2020,7 +2212,7 @@ const FUJI_ROCK_DARK = new THREE.Color(0x0a0f16);
  * are a straight linear multiplier and three does not clamp them, so the cap
  * is pushed past 1 and the fog brings it back to white.
  */
-const FUJI_SNOW = new THREE.Color(0xcfe2f5).multiplyScalar(2.1);
+const FUJI_SNOW = new THREE.Color(0xcfe2f5).multiplyScalar(2.8);
 const FUJI_TMP = new THREE.Color();
 
 /**
@@ -2034,9 +2226,17 @@ function buildFuji(seg: number, rings: number, baseY: number): THREE.BufferGeome
   const col: number[] = [];
   const idx: number[] = [];
 
-  // Snow line about a third down, with tongues running lower in the gullies.
+  // Snow line about a third down the cone, dragged DOWN in the gullies and
+  // pulled back UP over the buttresses by the same swell the geometry uses, so
+  // the tongues follow real topography instead of being noise on a circle.
+  // The high-frequency terms are kept under seg/3 or they alias into a
+  // dashed line on the low tier's 34 segments.
   const snowLine = (a: number): number =>
-    FUJI_H * (0.66 + 0.075 * Math.sin(a * 7.3 + 0.9) + 0.055 * Math.sin(a * 13.1 - 2.1) + 0.04 * Math.sin(a * 3.7 + 1.7));
+    FUJI_H *
+    (0.605 -
+      1.5 * (fujiSwell(a) - 1) +
+      0.05 * Math.sin(a * 7.3 + 0.9) +
+      0.032 * Math.sin(a * 11.1 - 2.1));
 
   for (let ri = 0; ri <= rings; ri++) {
     const t = ri / rings;
@@ -2046,7 +2246,7 @@ function buildFuji(seg: number, rings: number, baseY: number): THREE.BufferGeome
     for (let si = 0; si < seg; si++) {
       const a = (si / seg) * TAU;
       // the mountain is not a solid of revolution: ridges and a broad shoulder
-      const swell = 1 + 0.075 * Math.sin(a + 0.8) + 0.04 * Math.sin(a * 2 - 1.3) + 0.022 * Math.sin(a * 5 + 0.4);
+      const swell = fujiSwell(a);
       const rr = u * FUJI_R * swell;
       const y = h + 0.06 * FUJI_H * Math.sin(a * 3.1 + 2.2) * u;
       pos.push(Math.cos(a) * rr, baseY + y, Math.sin(a) * rr);
@@ -2055,9 +2255,14 @@ function buildFuji(seg: number, rings: number, baseY: number): THREE.BufferGeome
       const nl = Math.hypot(1, slope);
       nrm.push(Math.cos(a) / nl, slope / nl, Math.sin(a) / nl);
 
-      const sn = smooth01((y - snowLine(a)) / (FUJI_H * 0.045));
+      // A hard-ish edge: snow ends where it ends. Softened over 2.5% of the
+      // cone's height, which at this screen size is about a pixel and a half.
+      const sn = smooth01((y - snowLine(a)) / (FUJI_H * 0.025));
       FUJI_TMP.copy(FUJI_ROCK_DARK).lerp(FUJI_ROCK, smooth01(0.35 + Math.cos(a + 0.7) * 0.5));
-      FUJI_TMP.lerp(FUJI_SNOW, sn);
+      // A little snow survives below the line as streaks in the gullies, and a
+      // little rock shows through above it near the ridges.
+      const dust = 0.16 * smooth01((y - snowLine(a) + FUJI_H * 0.14) / (FUJI_H * 0.1));
+      FUJI_TMP.lerp(FUJI_SNOW, sn + (1 - sn) * dust);
       const alpha = smooth01((y - FUJI_FADE_LO) / (FUJI_FADE_HI - FUJI_FADE_LO));
       col.push(FUJI_TMP.r, FUJI_TMP.g, FUJI_TMP.b, alpha);
     }
@@ -2226,8 +2431,16 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     clearcoatRoughness: 0.1,
     vertexColors: true,
   });
-  const blossomMat = m.physical('sushi.env.blossom2', {
+  const blossomMat = m.physical('sushi.env.blossom3', {
     color: 0xffffff,
+    // Thousands of florets, for no triangles: a near-white modulating map of
+    // soft puffs and the gaps between them, wrapped tight enough that a cluster
+    // is about a quarter of a world unit across. Hue stays entirely in the
+    // vertex colours — the map only breaks the surface up.
+    map: m.texture('sushi.env.blossom.map', paintBlossomMass, {
+      size: 256,
+      repeat: [5, 3],
+    }),
     roughness: 0.82,
     metalness: 0,
     sheen: 0.9,
@@ -2243,8 +2456,12 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   });
   const glowMat = m.standard('sushi.env.glow', {
     color: 0x120a06,
-    emissive: 0xffb877,
-    emissiveIntensity: 1.05,
+    // Amber, not cream. The paper behind a shoji is lit by a low-colour-
+    // temperature bulb and the whole point of it in this frame is to be the
+    // one warm note against a cold garden; at 0xffb877 and full intensity it
+    // read as daylight and it out-shouted the tower.
+    emissive: 0xffa25c,
+    emissiveIntensity: 0.82,
     roughness: 1,
     metalness: 0,
     vertexColors: true,
@@ -2273,7 +2490,15 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     vertexColors: true,
     transparent: true,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    // FrontSide, and it matters more than it looks. These are unsorted
+    // depth-write-off surfaces, so a double-sided closed cone blends its FAR
+    // wall over its near one and the sum washes out to a single flat value —
+    // which is exactly why Fuji rendered as a bald pale cone with the snow
+    // line invisible. Both silhouettes are wound so that the surface a camera
+    // actually sees is the front face: the cone's outward wall (the camera is
+    // outside it) and the ridge rings' inward wall (the camera is inside
+    // those). One layer each, and the snow comes back.
+    side: THREE.FrontSide,
   });
 
   const counter = new EnvBucket();
@@ -2289,29 +2514,47 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // ---- the counter -------------------------------------------------------
   // A single thick slab of hinoki, tessellated across the top so a pool of
   // lantern light can be baked into it.
-  const slab = new THREE.BoxGeometry(COUNTER_W, COUNTER_T, COUNTER_D, envPick(q, 10, 14, 18), 1, envPick(q, 4, 6, 8));
+  const slab = new THREE.BoxGeometry(COUNTER_W, COUNTER_T, COUNTER_D, envPick(q, 12, 16, 22), 1, envPick(q, 6, 9, 12));
   slab.translate(0, deck - COUNTER_T / 2, 0);
   /**
    * The counter's real problem was never its albedo, it was that a flat plane
    * two metres wide takes the key light evenly from end to end and therefore
-   * reads as one enormous highlight. A bar is not lit like that: it is lit in
-   * a pool around where the chef is working, and falls away into the dark at
-   * both ends. Baked here rather than added as a light, because the rig is
-   * three-point studio and shared by every theme.
+   * reads as one enormous highlight — the second brightest surface in the
+   * theme, owning the bottom third of every frame.
+   *
+   * A bar is not lit like that. It is lit in a tight pool where the chef is
+   * working and it falls away into the dark at both ends, and the wood at the
+   * far ends is not "dimmer blond" — it is taking cool bounce off the night
+   * sky, so it changes HUE as well as value. That is the whole fix, and it has
+   * to be a colour ramp rather than a scalar dim: at 35% of its value in a
+   * cool slate the hinoki stops competing with the salmon and starts framing
+   * it, and the bottom of frame gets a vignette for free.
+   *
+   * Baked into vertex colours rather than added as a light, because the rig is
+   * a shared three-point studio and this theme does not get its own lamp.
    */
-  const pool = (x: number, y: number, z: number): number => {
-    const r = Math.hypot(x * 0.82, z);
-    const fall = 1 - 0.74 * smooth01((r - 1.2) / 3.9);
-    const lip = y < deck - COUNTER_T * 0.4 ? 0.55 : 1;
-    return 0.94 * fall * lip;
+  const POOL_LIT = new THREE.Color(0xefe3cd);
+  const POOL_EDGE = new THREE.Color(0x55636f);
+  const POOL_TMP = new THREE.Color();
+  /** 0 in the middle of the pool, 1 out at the dark ends. */
+  const poolT = (x: number, z: number): number =>
+    smooth01((Math.hypot(x * 0.5, z * 1.15) - 0.8) / 3.0);
+  const poolHex = (x: number, y: number, z: number): number => {
+    POOL_TMP.copy(POOL_LIT).lerp(POOL_EDGE, poolT(x, z));
+    // the apron below the top edge sees no key at all
+    if (y < deck - COUNTER_T * 0.4) POOL_TMP.multiplyScalar(0.55);
+    return POOL_TMP.getHex();
   };
-  counter.add(slab, 0xffffff, pool);
+  counter.addColored(slab, poolHex);
   // end grain: a hair proud of each short end so the edge reads as a cut face
   for (const s of [-1, 1]) {
-    counter.add(
+    counter.addColored(
       at(envBox(0.05, COUNTER_T * 0.92, COUNTER_D * 0.985), s * (COUNTER_W / 2), deck - COUNTER_T * 0.96, 0),
-      0xd8c8a4,
-      pool,
+      (x, y, z) => {
+        POOL_TMP.copy(POOL_LIT).lerp(POOL_EDGE, poolT(x, z)).multiplyScalar(0.82);
+        if (y < deck - COUNTER_T * 0.4) POOL_TMP.multiplyScalar(0.6);
+        return POOL_TMP.getHex();
+      },
     );
   }
   // a lacquered nosing along both long edges: the bevel, and a dark line that
@@ -2476,20 +2719,21 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const walls = envPick(q, 4, 6, 7);
   for (let i = 0; i < walls; i++) {
     const bearing = (i / walls) * TAU + rng.range(-0.12, 0.12) + 0.6;
-    shojiWall(wood, glow, rng.range(15.5, 17.5), bearing, rng.range(6.5, 8.5), floorY, envPick(q, 3, 4, 5));
+    shojiWall(wood, glow, rng.range(15.5, 17.5), bearing, rng.range(6.5, 8.5), floorY, envPick(q, 4, 6, 7));
   }
 
   // A treeline, not a lollipop: many small trees rather than a few big ones,
   // all planted inside the solid part of the ground so a trunk always has
   // earth under it, and with crowns topping out just above the counter plane
   // so the blossom bands beside the tower instead of massing behind its top.
-  const trees = envPick(q, 16, 20, 24);
-  const clusters = envPick(q, 20, 28, 34);
+  const trees = envPick(q, 14, 17, 20);
+  const fringe = envPick(q, 9, 13, 16);
   for (let i = 0; i < trees; i++) {
     const a = (i / trees) * TAU + rng.range(-0.2, 0.2);
     const r = rng.range(10.8, 15.0);
     // a floor on the wash so even the nearest canopy is blossom-pink, not grey
-    const fade = clamp((r - 10) / 24, 0.05, 0.24);
+    const fade = clamp((r - 10) / 24, 0.05, 0.26);
+    const near = r < 12.8;
     cherryTree(
       wood,
       blossom,
@@ -2500,9 +2744,12 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       Math.sin(a) * r,
       rng.range(0.92, 1.26),
       fade,
-      // the far half of the treeline is small on screen; spend the clusters
-      // where they are actually resolvable
-      Math.round(clusters * (r > 12.8 ? 0.62 : 1)),
+      // Lobes build the mass; the far half of the treeline is forty pixels
+      // wide and one lobe is all of the mass that can possibly resolve there.
+      q === 'low' ? (near ? 2 : 1) : near ? 3 : 2,
+      // the fringe is what tears the outline, so it is spent where the outline
+      // is actually resolvable
+      Math.round(fringe * (near ? 1 : 0.55)),
     );
   }
 

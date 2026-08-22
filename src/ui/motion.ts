@@ -98,7 +98,13 @@ export function runExit(
     done();
   };
   anim.addEventListener('finish', finish);
-  anim.addEventListener('cancel', finish);
+  // Deliberately NOT on 'cancel'. Cancellation means a caller re-entered the
+  // screen mid-exit and is reusing the element — `resetAnimations()` at the top
+  // of every `enter()` does exactly that. Running the exit's teardown there
+  // removes the element that was just re-added, which hard-locks the game:
+  // re-opening the pause sheet inside its 300ms close deleted the sheet and
+  // left the player paused with no controls, and Home->Play inside 220ms
+  // deleted the HUD for the whole run.
 }
 
 /**
