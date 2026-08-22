@@ -1105,6 +1105,19 @@ function softNormals(g: THREE.BufferGeometry): THREE.BufferGeometry {
 function envOcta(r: number): THREE.BufferGeometry {
   return softNormals(new THREE.OctahedronGeometry(Math.max(r, 1e-3), 0));
 }
+/**
+ * Twenty faces instead of eight, for the blossom puffs that are large enough
+ * on screen to have a silhouette of their own.
+ *
+ * An octahedron is six vertices, so smooth normals give it one linear ramp per
+ * face and at sixty pixels across it reads as a flat pink diamond — the "pink
+ * hexagon" note, at a larger size. An icosahedron reads round at that size for
+ * two and a half times the triangles, and a canopy is where those triangles
+ * are worth spending.
+ */
+function envPuff(r: number): THREE.BufferGeometry {
+  return softNormals(new THREE.IcosahedronGeometry(Math.max(r, 1e-3), 0));
+}
 function envTetra(r: number): THREE.BufferGeometry {
   return softNormals(new THREE.TetrahedronGeometry(Math.max(r, 1e-3), 0));
 }
@@ -1951,8 +1964,10 @@ function paintBlossomMass(c: CanvasRenderingContext2D, size: number): void {
 }
 
 /**
- * One lobe of a crown: a sphere pushed around by noise until its outline is
- * ragged, squashed into an umbrella, and coloured through its own volume.
+ * The core of a crown: a sphere pushed around by noise until its outline is
+ * ragged and squashed into an umbrella. It never reaches the silhouette; it is
+ * there so that the middle of a canopy is solid instead of showing sky between
+ * the puffs that surround it.
  *
  * Normals stay RADIAL rather than following the displacement. A lumpy shell
  * with true normals shades every dent, and eighty faces' worth of dents at
@@ -2011,7 +2026,7 @@ function cherryTree(
   x: number, y: number, z: number,
   scale: number,
   fade: number,
-  lobes: number,
+  puffs: number,
   fringe: number,
 ): void {
   const bark = 0x6b5560;
@@ -2034,27 +2049,30 @@ function cherryTree(
   const ty = y + 0.32 * scale + Math.cos(lean) * trunkH;
   const tz = z;
 
-  const crownR = rng.range(1.06, 1.44) * scale;
-  const crownH = rng.range(0.5, 0.7) * scale;
+  const crownR = rng.range(1.1, 1.46) * scale;
+  const crownH = rng.range(0.62, 0.86) * scale;
 
-  // Limbs first, and deliberately longer than the crown is wide: their tips
-  // come out beyond the blossom, which is what says "there is a tree in there".
+  // Limbs first. They stay INSIDE the crown: reaching past it turned every
+  // tree into a black spike-ball, because a bare limb tip against a night sky
+  // is a hard dark line and the blossom is what is supposed to end the
+  // silhouette. What shows through is the gap BETWEEN the puffs, which is
+  // where a limb belongs anyway.
   const limbN = q === 'low' ? 3 : 5;
   const limbA = rng.range(0, TAU);
   for (let i = 0; i < limbN; i++) {
     const a = limbA + (i / limbN) * TAU + rng.range(-0.45, 0.45);
-    const reach = crownR * rng.range(0.78, 1.12);
+    const reach = crownR * rng.range(0.5, 0.8);
     const ex = tx + Math.cos(a) * reach;
-    const ey = ty + rng.range(0.05, 0.4) * scale;
+    const ey = ty + rng.range(0.02, 0.3) * scale;
     const ez = tz + Math.sin(a) * reach;
-    wood.add(envStrut(tx, ty - 0.38 * scale, tz, ex, ey, ez, 0.024 * scale, 0.058 * scale, 4), bark);
+    wood.add(envStrut(tx, ty - 0.42 * scale, tz, ex, ey, ez, 0.024 * scale, 0.058 * scale, 4), bark);
     if (q !== 'low') {
       const ta = a + rng.range(-1.2, 1.2);
-      const tr = crownR * rng.range(0.34, 0.62);
+      const tr = crownR * rng.range(0.2, 0.36);
       wood.add(
         envStrut(
           ex, ey, ez,
-          ex + Math.cos(ta) * tr, ey + rng.range(0.04, 0.26) * scale, ez + Math.sin(ta) * tr,
+          ex + Math.cos(ta) * tr, ey + rng.range(0.02, 0.2) * scale, ez + Math.sin(ta) * tr,
           0.012 * scale, 0.024 * scale, 4,
         ),
         bark,
@@ -2076,45 +2094,77 @@ function cherryTree(
     const rim = (nx * RIM_DIR.x + ny * RIM_DIR.y + nz * RIM_DIR.z) / len;
     // Mottling, so a smooth shell still reads as thousands of separate
     // clusters rather than as one painted surface.
-    const mot = fbm2(ox * 3.1 + oz * 1.4 + tx, oz * 3.1 - oy * 2.2 + tz, 2) - 0.5;
-    const out = clamp01(len * 0.72 + extra + mot * 0.34);
-    return blossomTint(lit + mot * 0.5, rim, out, fade);
+    const mot = fbm2(ox * 3.4 + oz * 1.4 + tx, oz * 3.4 - oy * 2.2 + tz, 2) - 0.5;
+    const out = clamp01(len * 0.78 + extra + mot * 0.2);
+    return blossomTint(lit + mot * 0.26, rim, out, fade);
   };
 
-  // The body: overlapping lumpy lobes, offset around the crown centre so the
-  // union has notches in it and the limbs show through them.
-  const lobeDetail = q === 'low' ? 1 : 1;
-  const spin = rng.range(0, TAU);
-  for (let i = 0; i < lobes; i++) {
-    const a = spin + (i / lobes) * TAU;
-    const off = lobes > 1 ? crownR * rng.range(0.2, 0.36) : 0;
-    const ox = Math.cos(a) * off;
-    const oz = Math.sin(a) * off;
-    const oy = rng.range(-0.16, 0.2) * scale;
-    const lr = crownR * rng.range(0.72, 0.9);
-    const lh = crownH * rng.range(0.92, 1.18);
-    const geo = blossomLobe(lr, lh, lobeDetail, 0.3, rng.range(0, 40));
-    geo.rotateY(rng.range(0, TAU));
-    blossom.addColored(at(geo, tx + ox, ty + oy, tz + oz), (vx, vy, vz) =>
-      tintAt(vx - tx, vy - ty, vz - tz, 0.1),
+  // A core, so the middle of the crown is never see-through. Twenty faces of
+  // displaced sphere, and it never reaches the silhouette — the puffs do.
+  const core = blossomLobe(crownR * 0.64, crownH * 0.86, 0, 0.34, rng.range(0, 40));
+  core.rotateY(rng.range(0, TAU));
+  blossom.addColored(at(core, tx, ty, tz), (vx, vy, vz) =>
+    tintAt(vx - tx, vy - ty, vz - tz, -0.08),
+  );
+
+  /**
+   * The mass: overlapping puffs on an oblate shell, walked round a golden-
+   * angle spiral so they distribute evenly without a grid ever showing.
+   *
+   * The reason this reads as a canopy and the old version read as confetti is
+   * not the count — it is that every puff is coloured by the same continuous
+   * field over the WHOLE crown, so neighbours agree at their seams and the
+   * eye merges them into one volume with a lit top and a rose-dark underside.
+   * Give each puff a flat tint of its own and the identical geometry falls
+   * apart into a bag of pink gems again.
+   */
+  const GOLD = Math.PI * (3 - Math.sqrt(5));
+  const puff = (
+    u: number,
+    shell: number,
+    up: number,
+    size: number,
+    extra: number,
+    small: boolean,
+  ): void => {
+    const ox = Math.cos(u) * crownR * shell;
+    const oz = Math.sin(u) * crownR * shell;
+    const oy = crownH * up;
+    const geo = small ? envOcta(size * 1.1) : envPuff(size);
+    geo.scale(1.26, rng.range(0.72, 0.98), 1.26);
+    geo.rotateX(rng.signed() * 0.45);
+    blossom.addColored(at(geo, tx + ox, ty + oy, tz + oz, rng.range(0, TAU)), (vx, vy, vz) =>
+      tintAt(vx - tx, vy - ty, vz - tz, extra),
+    );
+  };
+
+  for (let i = 0; i < puffs; i++) {
+    const u = i * GOLD + rng.range(-0.25, 0.25);
+    // sqrt keeps the spiral area-uniform rather than crowding the middle
+    const shell = 0.42 + 0.52 * Math.sqrt((i + 0.5) / puffs);
+    puff(
+      u,
+      shell,
+      Math.cos(i * 2.399 + 0.7) * (1.05 - shell * 0.55) + rng.range(-0.15, 0.15),
+      rng.range(0.32, 0.42) * crownR,
+      0.06,
+      false,
     );
   }
 
-  // The fringe: small forms sitting proud of the lobes, tearing the outline
-  // where it meets the sky and catching the light on the top of the crown.
+  // The fringe: smaller puffs sitting proud of the mass, which is what tears
+  // the outline where it meets the sky.
   for (let i = 0; i < fringe; i++) {
     const u = rng.range(0, TAU);
-    const shell = 0.74 + 0.4 * Math.sqrt(rng.next());
-    const small = rng.bool(0.5);
-    const size = (small ? rng.range(0.1, 0.16) : rng.range(0.17, 0.26)) * scale;
-    const ox = Math.cos(u) * crownR * shell;
-    const oz = Math.sin(u) * crownR * shell;
-    const oy = crownH * rng.range(-0.8, 1.0) * (1.15 - shell * 0.5);
-    const geo = small ? envTetra(size * 1.3) : envOcta(size);
-    geo.scale(1.2, 0.82, 1.2);
-    geo.rotateX(rng.signed() * 0.5);
-    blossom.addColored(at(geo, tx + ox, ty + oy, tz + oz, rng.range(0, TAU)), (vx, vy, vz) =>
-      tintAt(vx - tx, vy - ty, vz - tz, 0.22),
+    const shell = 0.88 + 0.34 * Math.sqrt(rng.next());
+    const small = rng.bool(0.45);
+    puff(
+      u,
+      shell,
+      rng.range(-0.85, 1.05) * (1.15 - shell * 0.5),
+      rng.range(small ? 0.13 : 0.18, small ? 0.2 : 0.27) * crownR,
+      0.2,
+      small,
     );
   }
 }
@@ -2533,12 +2583,16 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
    * Baked into vertex colours rather than added as a light, because the rig is
    * a shared three-point studio and this theme does not get its own lamp.
    */
-  const POOL_LIT = new THREE.Color(0xefe3cd);
-  const POOL_EDGE = new THREE.Color(0x55636f);
+  // Neutral, not cream. A warm ramp over an already-warm blond map squares the
+  // warmth and the bar comes out orange, which is worse than bright: it drags
+  // the whole bottom of frame into the food's own hue family and the "world is
+  // cool, food is warm" separation goes with it.
+  const POOL_LIT = new THREE.Color(0xd6d1c6);
+  const POOL_EDGE = new THREE.Color(0x4d5a66);
   const POOL_TMP = new THREE.Color();
   /** 0 in the middle of the pool, 1 out at the dark ends. */
   const poolT = (x: number, z: number): number =>
-    smooth01((Math.hypot(x * 0.5, z * 1.15) - 0.8) / 3.0);
+    smooth01((Math.hypot(x * 0.5, z * 1.2) - 0.7) / 2.6);
   const poolHex = (x: number, y: number, z: number): number => {
     POOL_TMP.copy(POOL_LIT).lerp(POOL_EDGE, poolT(x, z));
     // the apron below the top edge sees no key at all
@@ -2726,8 +2780,8 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // all planted inside the solid part of the ground so a trunk always has
   // earth under it, and with crowns topping out just above the counter plane
   // so the blossom bands beside the tower instead of massing behind its top.
-  const trees = envPick(q, 14, 17, 20);
-  const fringe = envPick(q, 9, 13, 16);
+  const trees = envPick(q, 14, 16, 18);
+  const fringe = envPick(q, 6, 9, 12);
   for (let i = 0; i < trees; i++) {
     const a = (i / trees) * TAU + rng.range(-0.2, 0.2);
     const r = rng.range(10.8, 15.0);
@@ -2744,9 +2798,9 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       Math.sin(a) * r,
       rng.range(0.92, 1.26),
       fade,
-      // Lobes build the mass; the far half of the treeline is forty pixels
-      // wide and one lobe is all of the mass that can possibly resolve there.
-      q === 'low' ? (near ? 2 : 1) : near ? 3 : 2,
+      // Puffs build the mass; the far half of the treeline is forty pixels
+      // wide, so it gets fewer and the near half gets the budget.
+      q === 'low' ? (near ? 12 : 8) : near ? (q === 'high' ? 17 : 14) : q === 'high' ? 12 : 10,
       // the fringe is what tears the outline, so it is spent where the outline
       // is actually resolvable
       Math.round(fringe * (near ? 1 : 0.55)),

@@ -1747,9 +1747,20 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // Near to far, each one lower than the last so it clears the frame top, and
   // each one hazed harder toward the colour of the sky it sits against.
   {
+    // The ground the town stands on. It is tucked just under the line the eye
+    // grazes over the coping, so it is invisible for the first fifteen layers
+    // and only appears once the camera has climbed far enough to look over the
+    // wall properly — at which point the alternative is roofs floating on air.
+    const deck = new THREE.RingGeometry(WALL_R + 0.4, 34, envSeg(q, 48, 36, 24), 1);
+    deck.rotateX(-Math.PI / 2);
+    deck.translate(0, top - 1.7, 0);
+    far.push(hazeByRadius(tintGeometry(deck, 0x8f5a4e), DUSK_HAZE, 14, 33, 0.5, 1.05));
+  }
+
+  {
     /** Rooftops just past the wall — flat roofs, parapets, a water tank. */
     const roofParts: Array<THREE.BufferGeometry | null> = [];
-    const roofs = lo ? 20 : q === 'medium' ? 30 : 44;
+    const roofs = lo ? 30 : q === 'medium' ? 46 : 70;
     for (let i = 0; i < roofs; i++) {
       const a = (i / roofs) * TAU + rng.signed() * 0.06;
       const r = ROOF_R + rng.range(-2.2, 2.4);
@@ -1758,9 +1769,9 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const roofY = top + rng.range(0.75, ROOF_TOP);
       const w = rng.range(0.85, 1.55);
       const d = rng.range(0.75, 1.35);
-      const body = new THREE.BoxGeometry(w, roofY - (top - 4.2), d);
+      const body = new THREE.BoxGeometry(w, roofY - (top - 1.78), d);
       body.rotateY(a + rng.signed() * 0.25);
-      body.translate(x, (roofY + top - 4.2) * 0.5, z);
+      body.translate(x, (roofY + top - 1.78) * 0.5, z);
       // sunward faces warm, the rest fall away into the violet
       const face = clamp01(-Math.cos(a - SUN_AZ));
       roofParts.push(tintGeometry(body, face > 0.35 ? 0x9e5341 : 0x6b3a40));
@@ -1804,9 +1815,9 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const z = Math.cos(a) * r;
       const tipY = top + TOWN_TOP;
       const shaftTop = tipY - 0.55 * scale;
-      const shaft = new THREE.BoxGeometry(1.5 * scale, shaftTop - (top - 7), 1.5 * scale);
+      const shaft = new THREE.BoxGeometry(1.5 * scale, shaftTop - (top - 1.78), 1.5 * scale);
       shaft.rotateY(a);
-      shaft.translate(x, (shaftTop + top - 7) * 0.5, z);
+      shaft.translate(x, (shaftTop + top - 1.78) * 0.5, z);
       town.push(tintGeometry(shaft, 0xb08063));
       const belfry = new THREE.BoxGeometry(1.72 * scale, 0.34 * scale, 1.72 * scale);
       belfry.rotateY(a);
@@ -1820,11 +1831,11 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       spike.translate(x, tipY - 0.17 * scale, z);
       town.push(tintGeometry(spike, 0x3d2436));
       // nave, running off to one side and much lower
-      const nave = new THREE.BoxGeometry(3.4 * scale, shaftTop - 0.8 - (top - 7), 2.2 * scale);
+      const nave = new THREE.BoxGeometry(3.4 * scale, shaftTop - 0.8 - (top - 1.78), 2.2 * scale);
       nave.rotateY(a);
       nave.translate(
         x + Math.sin(a + Math.PI / 2) * 2.3 * scale,
-        (shaftTop - 0.8 + top - 7) * 0.5,
+        (shaftTop - 0.8 + top - 1.78) * 0.5,
         z + Math.cos(a + Math.PI / 2) * 2.3 * scale,
       );
       town.push(tintGeometry(nave, 0x91614f));
@@ -1833,7 +1844,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     church(0.23, 0.78);
     if (!lo) church(-2.4, 0.66);
 
-    const blocksN = lo ? 16 : q === 'medium' ? 24 : 34;
+    const blocksN = lo ? 22 : q === 'medium' ? 34 : 50;
     for (let i = 0; i < blocksN; i++) {
       const a = (i / blocksN) * TAU + rng.signed() * 0.08;
       const r = TOWN_R + rng.range(-3.4, 3.6);
@@ -1842,9 +1853,9 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const roofY = top + rng.range(0.15, TOWN_TOP - 0.34);
       const w = rng.range(1.3, 2.4);
       const d = rng.range(1.1, 2.0);
-      const body = new THREE.BoxGeometry(w, roofY - (top - 7), d);
+      const body = new THREE.BoxGeometry(w, roofY - (top - 1.78), d);
       body.rotateY(a + rng.signed() * 0.3);
-      body.translate(x, (roofY + top - 7) * 0.5, z);
+      body.translate(x, (roofY + top - 1.78) * 0.5, z);
       const face = clamp01(-Math.cos(a - SUN_AZ));
       town.push(tintGeometry(body, face > 0.4 ? 0x8c5450 : 0x4e3048));
     }

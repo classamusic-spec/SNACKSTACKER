@@ -171,16 +171,32 @@ for (const id of THEMES) {
   await page.waitForTimeout(1500);
 
   let fps = null;
+  let frameMs = null;
   if (WANT_FPS) {
-    // Two windows: the first lets the frame time settle after hiding the UI.
-    await page.waitForTimeout(6000);
-    const samples = [];
-    for (let i = 0; i < 8; i++) {
-      samples.push(await page.evaluate(() => window.__snackeryStats?.fps ?? 0));
-      await page.waitForTimeout(1000);
-    }
-    samples.sort((a, b) => a - b);
-    fps = samples[Math.floor(samples.length / 2)];
+    // Count rAF callbacks rather than reading the game's own fps field: the
+    // field is rounded to an integer and reads 0 once a frame takes longer
+    // than two seconds, which is exactly the regime a fill-rate test wants to
+    // be in. Two windows — the first lets the frame time settle.
+    const measure = (ms) =>
+      page.evaluate(
+        (dur) =>
+          new Promise((res) => {
+            let n = 0;
+            const t0 = performance.now();
+            const tick = () => {
+              n++;
+              const el = performance.now() - t0;
+              if (el < dur) requestAnimationFrame(tick);
+              else res({ n, el });
+            };
+            requestAnimationFrame(tick);
+          }),
+        ms,
+      );
+    await measure(4000);
+    const r = await measure(Number(process.env.SN_FPS_MS ?? 12000));
+    frameMs = r.el / Math.max(r.n, 1);
+    fps = Math.round(1000 / frameMs);
   }
 
   const name = `${id}-${TIER}${TAG ? '-' + TAG : ''}`;
@@ -206,7 +222,7 @@ for (const id of THEMES) {
     return s ? { calls: s.drawCalls, tris: s.triangles, progs: s.programs, tier: s.tier } : null;
   });
   console.log(
-    `${name.padEnd(22)} ${fps !== null ? `fps=${String(fps).padStart(3)} ` : ''}` +
+    `${name.padEnd(22)} ${fps !== null ? `fps=${String(fps).padStart(3)} ${frameMs.toFixed(2)}ms ` : ''}` +
       `${stats ? `calls=${stats.calls} progs=${stats.progs} ` : ''}${rows.join(' ')}`,
   );
   await page.close();
