@@ -1043,7 +1043,7 @@ export const breakfastTheme: ThemeDef = {
     fog: 0xffdca8,
     fogDensity: 0.012,
     key: 0xfffaf0,
-    keyIntensity: 2.6,
+    keyIntensity: 2.2,
     fill: 0xa8cbee,
     fillIntensity: 0.6,
     rim: 0xffce7a,
@@ -1051,8 +1051,11 @@ export const breakfastTheme: ThemeDef = {
     ground: 0xc97b3c,
     accent: 0xff8c42,
     accentSoft: 0x6fcf97,
-    bloomStrength: 0.38,
-    exposure: 1.12,
+    bloomStrength: 0.32,
+    // Breakfast Rush has the brightest palette in the game (bgTop luma 0.95).
+    // Exposure has to run inversely to a palette's key or the scene clips:
+    // this one takes the least of the six, the way Candy Stack does.
+    exposure: 0.97,
     vignette: 0.34,
   },
   foods: [
