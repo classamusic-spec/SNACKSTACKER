@@ -23,8 +23,12 @@ layer is cut, the food is **rebuilt at its new size** rather than boolean-sliced
 so a narrow cut reads as a genuine cross-section instead of a clipped box.
 
 Six themes ship as content packs: Classic Diner (free), Sushi Tower, Candy Stack,
-Taco Night, Breakfast Rush and Pizza Piazza — each with its own eight-ingredient
-run, palette, plate, and musical key.
+Taco Night, Breakfast Rush and Pizza Piazza. Each has its own eight-ingredient
+run, palette, plate, musical key — and its own place. The burger is built on a
+gingham cloth on a weathered picnic table in a backyard, with a kettle grill and
+a fence line behind it. The sushi is on a black lacquer geta board on a hinoki
+counter, under blossom and lantern light. Taco Night is a string-lit patio with
+papel picado overhead; Pizza Piazza a marble bistro table on worn stone.
 
 ## Running it
 
@@ -54,7 +58,8 @@ src/
 │                Offcuts (ballistic debris) · scoring · tuning constants
 ├── render/      SceneKit: renderer, three-point studio rig, procedural PMREM
 │                environment, gradient cyclorama, bloom/vignette/grain, shake
-├── content/     kit.ts (procedural food geometry) + one module per theme
+├── content/     kit.ts (procedural food geometry) + one module per theme,
+│                each supplying its foods, plate and environment
 ├── vfx/         instanced GPU particles: crumbs, sparkles, splashes, rings,
 │                confetti, world-space pop text
 ├── audio/       WebAudio synthesis: foley SFX, the combo ladder, adaptive
@@ -85,6 +90,19 @@ tower back toward the base footprint.
 `CameraRig` derives its distance from the viewport aspect such that the sliding
 layer is always fully visible, and hands back only as much travel amplitude as
 actually fits. No hard-coded framing that breaks on a different device.
+
+**The tower always has to read.** Portrait gives only about 22 degrees of
+horizontal field, so at the tower's distance the visible slot is roughly four
+units wide and the food fills more than half of it. Environment props are
+therefore held out of a clearance cylinder around the tower — expressed in
+cylindrical coordinates, which makes the rule yaw-independent, so it holds
+through the home screen's full turntable rotation rather than only from the
+opening angle.
+
+**Grade against the palette, not by habit.** Exposure and bloom run inversely
+to a palette's key. Candy Stack and Breakfast Rush are the two high-key themes
+and take the lowest settings of the six; Sushi Tower is the dark one and takes
+the most. Getting this backwards is what washed both bright themes out.
 
 **Everything shares.** A sixty-layer tower must not mean sixty shader programs,
 so all materials, textures and cached geometry come from a keyed
