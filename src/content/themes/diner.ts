@@ -14,8 +14,9 @@
 import * as THREE from 'three';
 import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import type { MaterialLibrary } from '../../render/api';
+import { SKY_PRESETS } from '../../render/palette';
 import type { Rng } from '../../core/rng';
-import { TAU, clamp01 } from '../../core/math';
+import { TAU, clamp, clamp01 } from '../../core/math';
 import { droopSlab, fbm2, mesh, puck, roughen, ruffle, scatter } from '../kit';
 import {
   areaCount,
@@ -43,6 +44,7 @@ import {
   pickE,
   pickQ,
   plankPainter,
+  prismGeo,
   PropBatch,
   propSize,
   rasherRun,
@@ -50,6 +52,7 @@ import {
   roughAmt,
   safe,
   specklePainter,
+  tintEach,
   turfPainter,
 } from './shared-savory';
 
@@ -547,30 +550,127 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
 }
 
 // ---------------------------------------------------------------------------
-// environment — a backyard barbecue
+// environment — a backyard barbecue, golden hour
 // ---------------------------------------------------------------------------
 //
-// Golden hour in a suburban yard: a weathered picnic table under the plate, a
-// kettle grill smoking gently, a cooler and a folding chair on the mown grass,
-// a board fence closing the yard off and a swag of festoon lights over it all.
+// The note that drove this pass was "I should see the sky in the BBQ
+// backyard", and the arithmetic explains why you could not.
 //
-// Framing notes (camera: FOV 46, yaw 45, pitch 0.5 rad, ~11.5 units back):
-//   • the picnic table's near corner falls off the bottom of the frame, so the
-//     table fills the foreground rather than floating in it;
-//   • the picket fence at 17.2 units lands about a quarter of the way down
-//     the screen — a horizon line ABOVE the tower's crown, so it never
-//     crowds it, and it hides the far edge of the grass;
-//   • the grass disc stops at 24 units, by which point its vertex colours have
-//     already faded into the palette's haze, so there is no rim to see.
+// The rig frames portrait at FOV 46, pitch 0.5 rad, ~11.5 units back, so the
+// camera floats 5.5 units above the tower top and the TOP of the frame looks
+// 4.55 degrees BELOW the horizon. The true horizon is off-screen. Everything
+// you can ever see is a wedge between that line and the ground, which means
+// the sky in shot is not "up there" — it is the narrow band between the top of
+// the frame and whatever the furthest object's silhouette reaches. Trees at
+// r 20 whose crowns stood 4.8 units off the lawn filled that band completely.
+// They were not blocking a view of the sky; they WERE the sky.
 //
-// Nothing within 5 units of the origin rises above `tableTopY`; the fence,
-// trees and light posts are the only things that do, and they are 13-23 units
-// out and desaturated towards the fog.
+// So the composition is now built against a skyline instead of against a
+// clearance radius: `skyCap(r)` returns the highest a prop at radius r may
+// reach before it crosses the line, and every distant piece is clamped through
+// it. The fence came down from 2.12 to 1.6 and the crowns from 4.8 to ~3.2,
+// which opened roughly a fifth of the frame — and then the middle distance
+// went INTO that band, hazed, so it reads as depth rather than as emptiness:
+//
+//   yard (0-14)   table, grill, cooler, chair, hose reel, bird bath, stones
+//   fence (16.4)  low pickets with real gaps, a gate, a hedge run
+//   near trees    r 20-23, three of them, crowns clamped to the skyline
+//   neighbourhood r 24-31: rooflines, a shed, a power line, a treeline
+//   sky           everything above, and now there is some
+//
+// The clearance cylinder still holds — nothing within 4.6 units rises above
+// the table plane, nothing between 4.6 and 9.5 tops `tableTopY + 1.5` — but on
+// its own it was never the binding constraint out here. Distance is.
 
 /** Drop from the table top to the grass. Compressed: a real one would dwarf the plate. */
 const YARD_DROP = 2.3;
 /** The cloth is the top surface; the planks sit this far under it. */
 const CLOTH_LIFT = 0.045;
+/**
+ * Everything far away fades into this — and it is the sky preset's OWN
+ * `horizonColor`, not a hand-picked near-match. The lawn's outer apron and the
+ * sky's haze band meet somewhere around the top of the fence, and if the two
+ * are even a few percent apart the meeting shows up as a line drawn across the
+ * yard. Taking the value from the same object the shader reads makes the seam
+ * impossible rather than merely unlikely.
+ */
+const HAZE = SKY_PRESETS.diner.horizonColor;
+/** The play/home yaw the game opens on; props are placed relative to it. */
+const CAM_BEARING = Math.PI / 4;
+
+// --- the sun ---------------------------------------------------------------
+//
+// Read straight off the sky preset rather than authored twice. The render
+// side pins every sun to the light rig's own azimuth, so a shadow baked from
+// `DINER_SKY` can never end up falling the opposite way from the glow — and
+// the elevation (0.2 rad, a hand's width above the fence) is what makes this
+// golden hour rather than mid-afternoon. The real-time shadow map is a 5-unit
+// box around the tower and never reaches the grass, so every shadow you can
+// see on the lawn is painted here, at exactly this angle.
+const DINER_SKY = SKY_PRESETS.diner;
+/** Unit XZ direction a shadow runs in: directly away from the sun. */
+const SHADOW_X = -Math.sin(DINER_SKY.sunAzimuth);
+const SHADOW_Z = -Math.cos(DINER_SKY.sunAzimuth);
+/**
+ * Shadow length per unit of caster height. A 0.2 rad sun throws a shadow five
+ * times the caster's height, which is right and also enormous, so the streak
+ * is capped before it crosses the whole yard.
+ */
+const SHADOW_LEN = 1 / Math.tan(Math.max(DINER_SKY.sunElevation, 0.08));
+const SHADOW_MAX = 9.5;
+
+// --- the skyline -----------------------------------------------------------
+const CAM_DIST = 11.5;
+/** Camera height above the tower top, and its horizontal setback. */
+const CAM_EYE = Math.sin(0.5) * CAM_DIST;
+const CAM_BACK = Math.cos(0.5) * CAM_DIST;
+/**
+ * Angle below the horizon the skyline may not cross, in radians. The top of
+ * the frame is 0.079 rad (4.55 deg) below the horizon, so 0.152 leaves about
+ * 0.073 rad of clean sky — a sixth of the frame at the tightest moment, which
+ * is layer 0. Every layer after that lifts the camera and gives back more.
+ */
+const SKYLINE = 0.152;
+
+/** The highest a prop standing at radius `r` may reach and still leave sky. */
+function skyCap(r: number): number {
+  return CAM_EYE - (CAM_BACK + Math.max(r, 0)) * Math.tan(SKYLINE);
+}
+
+/** A caster whose shadow is painted into the lawn's vertex colours. */
+interface Caster {
+  x: number;
+  z: number;
+  /** Plan radius of the thing casting. */
+  r: number;
+  /** Height above the grass. */
+  h: number;
+}
+
+/**
+ * Soft, long, raking shadows baked straight into the turf.
+ *
+ * The real shadow map is a 5-unit box around the tower — correct, because that
+ * is where the food is — so the lawn would otherwise be lit perfectly flat at
+ * the exact hour when a lawn is nothing BUT shadows. Each caster projects a
+ * capsule down the sun's own bearing, widening and fading as it goes.
+ */
+function bakedShade(casters: readonly Caster[], x: number, z: number): number {
+  let s = 0;
+  for (let i = 0; i < casters.length; i++) {
+    const c = casters[i];
+    const len = clamp(c.h * SHADOW_LEN, 1e-3, SHADOW_MAX);
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const t = clamp(dx * SHADOW_X + dz * SHADOW_Z, 0, len);
+    const across = Math.hypot(dx - t * SHADOW_X, dz - t * SHADOW_Z);
+    const width = c.r + 0.3 + t * 0.17;
+    const near = clamp01(1 - across / width);
+    const along = 1 - Math.pow(clamp01(t / len), 1.4);
+    s = Math.max(s, near * near * (0.28 + 0.72 * along));
+  }
+  return clamp01(s);
+}
 
 const yardWoodMat = (m: MaterialLibrary): THREE.Material =>
   m.standard('diner.env.wood', {
@@ -769,6 +869,194 @@ function foldingChair(batch: PropBatch, x: number, z: number, yardY: number, ry:
   });
 }
 
+/**
+ * A hose reel abandoned on the grass: a drum on a low frame with three coils
+ * of green hose on it and a loose tail running off into the lawn. Reads at
+ * 120px purely from the coil stack, so the coils are proud of the drum.
+ */
+function hoseReel(batch: PropBatch, x: number, z: number, yardY: number, ry: number): void {
+  const FRAME = 0x3f6f4a;
+  const HOSE = 0x2f7d46;
+  const hub = yardY + 0.46;
+  for (const s of [-1, 1]) {
+    batch.box(0.09, 0.5, 0.09, FRAME, {
+      x: x + Math.sin(ry + Math.PI / 2) * s * 0.36,
+      z: z + Math.cos(ry + Math.PI / 2) * s * 0.36,
+      y: yardY,
+      ground: true,
+    });
+  }
+  batch.cyl(0.19, 0.19, 0.66, FRAME, { x, y: hub, z, ry, rz: Math.PI / 2 }, 10);
+  for (let i = 0; i < 3; i++) {
+    batch.add(
+      new THREE.TorusGeometry(0.3 - i * 0.045, 0.075, 5, 12).rotateY(ry + Math.PI / 2),
+      mix(HOSE, 0x1f5c33, i * 0.22),
+      { x, y: hub, z },
+    );
+  }
+  // the tail, snaking away — the thing that says "someone was watering"
+  let px = x + Math.sin(ry) * 0.3;
+  let pz = z + Math.cos(ry) * 0.3;
+  let a = ry;
+  for (let i = 0; i < 4; i++) {
+    a += (i % 2 === 0 ? 0.7 : -0.85);
+    const nx = px + Math.sin(a) * 0.62;
+    const nz = pz + Math.cos(a) * 0.62;
+    batch.strut(
+      new THREE.Vector3(px, yardY + 0.07, pz),
+      new THREE.Vector3(nx, yardY + 0.07, nz),
+      0.11,
+      HOSE,
+    );
+    px = nx;
+    pz = nz;
+  }
+}
+
+/** A bird bath: a pedestal, a fluted foot and a shallow dish with a lip. */
+function birdBath(batch: PropBatch, x: number, z: number, yardY: number): void {
+  const STONE = 0xd6cfc0;
+  batch.cyl(0.34, 0.46, 0.14, mix(STONE, 0x9d9789, 0.3), { x, z, y: yardY, ground: true }, 10);
+  batch.cyl(0.18, 0.26, 0.92, STONE, { x, z, y: yardY + 0.14, ground: true }, 10);
+  batch.cyl(0.62, 0.3, 0.16, mix(STONE, 0xfff6e6, 0.25), { x, z, y: yardY + 1.06, ground: true }, 14);
+  batch.add(
+    new THREE.TorusGeometry(0.58, 0.055, 5, 16),
+    mix(STONE, 0xfff6e6, 0.4),
+    { x, z, y: yardY + 1.23 },
+  );
+  // the water: a disc a shade cooler than the stone, catching the sky
+  batch.cyl(0.55, 0.55, 0.03, 0xb9d3dd, { x, z, y: yardY + 1.2 }, 14);
+}
+
+/** A scuffed play ball, half-sunk in the grass. */
+function gardenBall(batch: PropBatch, x: number, z: number, yardY: number, rng: Rng): void {
+  const r = 0.3;
+  batch.ball(r, 0xe8e2d4, { x, z, y: yardY + r * 0.82 }, 12);
+  for (let i = 0; i < 3; i++) {
+    const a = rng.range(0, TAU);
+    const t = rng.range(0.3, 1.1);
+    batch.add(
+      new THREE.SphereGeometry(r * 0.34, 6, 4),
+      0x2f3540,
+      {
+        x: x + Math.sin(a) * Math.sin(t) * r * 0.86,
+        y: yardY + r * 0.82 + Math.cos(t) * r * 0.86,
+        z: z + Math.cos(a) * Math.sin(t) * r * 0.86,
+      },
+    );
+  }
+}
+
+/**
+ * A wandering path of stepping stones. Deliberately uneven in spacing, size
+ * and angle: evenly spaced stones read as a paving pattern, not as a path
+ * somebody wore into a lawn.
+ */
+function steppingStones(
+  batch: PropBatch,
+  rng: Rng,
+  yardY: number,
+  bearing: number,
+  fromR: number,
+  toR: number,
+  count: number,
+): void {
+  let r = fromR;
+  let drift = 0;
+  for (let i = 0; i < count && r < toR; i++) {
+    drift += rng.range(-0.42, 0.42);
+    const a = bearing + drift * 0.075;
+    const w = rng.range(0.52, 0.78);
+    batch.cyl(w * 0.5, w * 0.46, 0.11, mix(0xcfc7b6, 0xa79f90, rng.next()), {
+      x: Math.sin(a) * r + drift * 0.2,
+      z: Math.cos(a) * r + drift * 0.2,
+      y: yardY + 0.02,
+      ry: rng.range(0, TAU),
+      rz: rng.range(-0.03, 0.03),
+      ground: true,
+    }, 9);
+    r += rng.range(0.95, 1.5);
+  }
+}
+
+/**
+ * A neighbour's house, seen over the fence: a body, a gable roof and a
+ * chimney, hazed hard toward the sky. It is only ever twenty pixels tall, so
+ * everything about it is silhouette — the ridge line and the chimney are the
+ * only two features that survive, and both are free.
+ */
+function neighbourHouse(
+  far: PropBatch,
+  x: number,
+  z: number,
+  base: number,
+  ry: number,
+  rng: Rng,
+  haze: number,
+): void {
+  const wall = mix(mix(0xe6cfae, 0xd0b48f, rng.next()), HAZE, haze);
+  const roof = mix(mix(0x9c6a55, 0x7f5747, rng.next()), HAZE, haze * 0.86);
+  // Small, because the band they live in is four degrees tall. A roof that
+  // filled it stopped being a neighbour's house and became a shape.
+  const w = rng.range(2.7, 4.1);
+  const d = rng.range(2.1, 3.1);
+  const bodyH = rng.range(0.9, 1.3);
+  const roofH = rng.range(0.68, 1.0);
+  far.box(w, bodyH, d, wall, { x, z, ry, y: base, ground: true });
+  far.add(prismGeo(w * 1.06, roofH, d * 1.1), roof, { x, z, ry, y: base + bodyH });
+  far.box(0.28, rng.range(0.5, 0.8), 0.28, mix(roof, 0x6d4a3c, 0.3), {
+    x: x + Math.sin(ry + 1.2) * w * 0.24,
+    z: z + Math.cos(ry + 1.2) * w * 0.24,
+    ry,
+    y: base + bodyH + roofH * 0.45,
+    ground: true,
+  });
+}
+
+/**
+ * Poles and wires. Three poles in a line down one side of the yard, not a ring
+ * — a power line that circled the garden would read as a circus tent. The
+ * wires are square struts because a 5-sided cylinder at 35 units is four
+ * wasted triangles a wire's worth of pixels will never show.
+ */
+function powerLine(
+  far: PropBatch,
+  yardY: number,
+  bearing: number,
+  radius: number,
+  rng: Rng,
+  spans: number,
+): void {
+  const tone = mix(0x6f5a48, HAZE, 0.5);
+  const wireTone = mix(0x4a4038, HAZE, 0.42);
+  const tops: THREE.Vector3[] = [];
+  for (let i = 0; i <= spans; i++) {
+    const a = bearing + (i - spans / 2) * 0.62;
+    const r = radius + rng.range(-1.1, 1.1);
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const top = Math.min(yardY + 3.05 + rng.range(-0.15, 0.15), skyCap(r) + 0.14);
+    far.cyl(0.1, 0.15, top - yardY, tone, { x, z, y: yardY, ground: true }, 5);
+    far.box(1.5, 0.11, 0.13, tone, { x, z, ry: a + Math.PI / 2, y: top - 0.24 });
+    tops.push(new THREE.Vector3(x, top - 0.2, z));
+  }
+  for (let i = 0; i < tops.length - 1; i++) {
+    for (const s of [-1, 1]) {
+      const off = new THREE.Vector3(
+        Math.sin(bearing + Math.PI / 2) * s * 0.6,
+        0,
+        Math.cos(bearing + Math.PI / 2) * s * 0.6,
+      );
+      const a = tops[i].clone().add(off);
+      const b = tops[i + 1].clone().add(off);
+      const pts = catenary(a, b, 0.55, 4);
+      for (let k = 0; k < pts.length - 1; k++) {
+        far.strut(pts[k], pts[k + 1], 0.075, wireTone, true);
+      }
+    }
+  }
+}
+
 function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const g = new THREE.Group();
   g.name = 'diner.backyard';
@@ -778,41 +1066,183 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const topY = num(ctx.tableTopY, -0.35);
   const yardY = topY - YARD_DROP;
 
-  // --- ground: mown grass fading into the golden-hour haze -----------------
-  const HAZE = 0xf7cba6;
+  // Bearings are measured from the camera's own opening yaw, not from world
+  // north, because that is what decides whether a prop is behind the tower or
+  // off the edge of a 22-degree-wide portrait frame. The four bearings the
+  // orbit parks on are `theta` = pi (opening), pi/2 and -pi/2 (the two yaws
+  // that used to be dead) and 0 (behind the camera at the start).
+  const atBearing = (theta: number, d: number): [number, number] => {
+    const a = CAM_BEARING + theta;
+    return [Math.sin(a) * d, Math.cos(a) * d];
+  };
+
+  // --- yard props, placed first: the lawn needs their shadows ---------------
+  const props = new PropBatch();
+  const [grillX, grillZ] = atBearing(Math.PI + rng.range(-0.06, 0.06), 12.0);
+  const [coolX, coolZ] = atBearing(rng.range(-0.06, 0.06), 9.6);
+  const [chairX, chairZ] = atBearing(-Math.PI / 2 + rng.range(-0.1, 0.1), 7.4);
+  const [hoseX, hoseZ] = atBearing(0.34, 8.2);
+  const [bathX, bathZ] = atBearing(Math.PI / 2 + 0.1, 11.6);
+  const [ballX, ballZ] = atBearing(Math.PI - 0.95, 6.6);
+
+  kettleGrill(props, grillX, grillZ, yardY, Math.atan2(grillX, grillZ) + Math.PI + 0.5);
+  coolerBox(props, coolX, coolZ, yardY, Math.atan2(coolX, coolZ) + 1.25);
+  foldingChair(props, chairX, chairZ, yardY, Math.atan2(chairX, chairZ) + Math.PI + 0.4);
+  birdBath(props, bathX, bathZ, yardY);
+  gardenBall(props, ballX, ballZ, yardY, rng);
+  // The path and the reel run at every tier. They are the two things that
+  // stop the stretch between the table and the fence — which the camera looks
+  // straight down at, at every yaw — from being an empty green field, and a
+  // low-tier frame that is composed differently is a different scene, not a
+  // cheaper one.
+  steppingStones(props, rng, yardY, CAM_BEARING + Math.PI / 2 + 0.1, 4.8, 11.4, pickE(q, 5, 7, 8));
+  hoseReel(props, hoseX, hoseZ, yardY, Math.atan2(hoseX, hoseZ) + 0.9);
+
+  const casters: Caster[] = [
+    // the table itself, which at this hour throws the longest shadow in the yard
+    { x: 0, z: 0, r: 3.1, h: YARD_DROP },
+    { x: grillX, z: grillZ, r: 0.95, h: 1.98 },
+    { x: coolX, z: coolZ, r: 0.85, h: 1.0 },
+    { x: chairX, z: chairZ, r: 0.7, h: 1.98 },
+    { x: bathX, z: bathZ, r: 0.6, h: 1.55 },
+  ];
+
+  // --- ground: mown grass, raked by a low sun ------------------------------
+  //
+  // Stripes are the cheapest thing in this file and the one that does the most
+  // work: turf without them reads as green paint, and with them it reads as a
+  // lawn somebody mows. They run parallel to the opening bearing so they
+  // converge toward the horizon instead of banding across the frame, and they
+  // are a soft sine rather than a hard band because the disc only carries a
+  // vertex per 0.9 units out here and a square wave would alias into stripes
+  // that crawl as the camera orbits.
+  // The lawn is two pieces, and the split is the whole trick.
+  //
+  // A single disc big enough for a house at r 26 to stand on cannot also carry
+  // mower stripes: its rings are evenly spaced in radius, so a 34-unit disc
+  // with an affordable ring count samples the stripe pattern about once per
+  // period and the bands turn into a crawling moire. So the LAWN is a dense
+  // disc out to 21 — every stripe, every shadow, every daisy lives here — and
+  // beyond it an APRON of two flat rings carries the ground out to 36 in pure
+  // haze. The apron is free, it is the same colour as the sky's horizon band
+  // so it has no visible edge of its own, and it is the difference between a
+  // distant roofline standing on the ground and hanging in the air.
+  const LAWN_R = 21;
+  const APRON_R = 36;
+  // Stripe pitch is set by the FRAME, not by the lawn. The visible strip of
+  // grass between the table and the fence is only about ten units wide and
+  // sits 24 units from the camera, so a 4-unit stripe filled it end to end and
+  // read as "the grass is slightly uneven". Two units puts four bands across
+  // it, which is when the eye finally calls it mown.
+  const stripeW = pickE(q, 1.8, 1.5, 1.3);
   const turf = new PropBatch();
-  // `keep`, not `add`: the disc already carries the radial fade in its vertex
-  // colours and a flat tint would wipe it back to one green.
+  // `keep`, not `add`: the disc already carries its colour in vertex colours
+  // and a flat tint would wipe it back to one green.
   turf.keep(
     groundDisc(
-      24,
+      LAWN_R,
       (t, x, z) => {
-        // broad patchiness first, then the fade into the haze
         const patch = clamp01(0.5 + fbm2(x * 0.085 + 4.1, z * 0.085 - 2.7, 2) * 0.9);
-        const near = mix(0x9dbf5e, 0xb6cb78, patch);
-        return t < 0.3 ? near : mix(near, HAZE, clamp01((t - 0.3) / 0.52));
+        // Squared off, not a sine. A mown stripe is a hard edge where the
+        // blades were bent the other way, and a smooth gradient of the same
+        // amplitude reads as "the grass is a bit uneven" instead of as turf
+        // somebody cut. The wave is still soft over about a third of its
+        // period, which is what stops it crawling as the camera orbits.
+        const wave = Math.sin(
+          ((x * Math.cos(CAM_BEARING) - z * Math.sin(CAM_BEARING)) / stripeW) * Math.PI,
+        );
+        const band = clamp01(0.5 + wave * 1.6);
+        let near = mix(0x6f9235, 0xd2e293, band);
+        // broad patchiness rides on top of the stripes, never over them
+        near = mix(near, mix(0x6c9139, 0xd6e39a, patch), 0.24);
+        // the low sun gilds whatever faces it and leaves the rest cooler
+        const rake = clamp01(0.5 - (x * SHADOW_X + z * SHADOW_Z) / 26);
+        near = mix(near, 0xe2cd72, rake * 0.2);
+        // ...and the long shadows are the other half of the same statement
+        near = mix(near, 0x4c6852, bakedShade(casters, x, z) * 0.42);
+        // Held green until well past the fence foot, and even at the rim it is
+        // only HALF hazed. Running the lawn all the way to the haze colour by
+        // r 20 turned the whole band above the fence into a desert: the fence
+        // is at 16.4 and the eye reads everything past it as one flat pink
+        // field. Grass that is still visibly grass at the rim reads instead as
+        // the neighbour's garden, which is what it is.
+        return mix(near, HAZE, clamp01((t - 0.62) / 0.38) ** 1.2 * 0.5);
       },
-      { segments: pickE(q, 30, 42, 54), rings: pickE(q, 6, 8, 10), relief: 0.09, seed: 3 },
+      {
+        segments: pickE(q, 80, 96, 112),
+        rings: pickE(q, 12, 15, 18),
+        relief: 0.09,
+        seed: 3,
+      },
     ),
     { y: yardY },
   );
+  {
+    const apron = new THREE.RingGeometry(LAWN_R - 0.4, APRON_R, pickE(q, 32, 44, 56), 3);
+    apron.rotateX(-Math.PI / 2);
+    tintEach(apron, (x, _y, z) => {
+      const r = Math.hypot(x, z);
+      // Picks up exactly where the lawn's own fade left off (half hazed) and
+      // finishes the job over the next nine units, so the two discs read as one
+      // continuous field receding rather than as a lawn and a mat.
+      const t = clamp01((r - LAWN_R + 0.4) / 13.4);
+      const far = mix(0x93ad6a, HAZE, 0.5 + 0.5 * t);
+      // a little large-scale mottle: hedgerows and field edges, not a wash
+      return mix(far, HAZE, clamp01(0.4 + fbm2(x * 0.05 - 2.2, z * 0.05 + 5.4, 2) * 0.5) * 0.18);
+    });
+    turf.keep(apron, { y: yardY - 0.05 });
+  }
 
-  const tufts = pickE(q, 28, 54, 84);
-  for (let i = 0; i < tufts; i++) {
-    const a = rng.range(0, TAU);
-    const r = 3.4 + Math.sqrt(rng.next()) * 11.5;
-    const w = rng.range(0.3, 0.62);
-    // Flattened domes, not spikes: a mown lawn is lumpy, not bristly, and a
-    // 4-sided cone at this size just reads as a stray dark triangle.
-    turf.dome(
-      w,
-      w * rng.range(0.2, 0.34),
-      // Kept within a shade of the lawn: darker tufts read as holes punched in
-      // the grass rather than as clumps of it.
-      mix(0x93b457, 0xaec86c, rng.next()),
-      { x: Math.sin(a) * r, z: Math.cos(a) * r, y: yardY, ry: rng.range(0, TAU) },
-      q === 'low' ? 7 : 9,
-    );
+  // Tufts: flattened domes, not spikes. A mown lawn is lumpy, not bristly, and
+  // a 4-sided cone at this size just reads as a stray dark triangle. Clustered
+  // rather than scattered, because grass grows longer where the mower missed.
+  const clumps = pickE(q, 5, 8, 11);
+  for (let c = 0; c < clumps; c++) {
+    const ca = rng.range(0, TAU);
+    const cr = 3.6 + Math.sqrt(rng.next()) * 11.2;
+    const cx = Math.sin(ca) * cr;
+    const cz = Math.cos(ca) * cr;
+    const n = pickE(q, 3, 4, 4);
+    for (let i = 0; i < n; i++) {
+      const w = rng.range(0.32, 0.66);
+      turf.dome(
+        w,
+        w * rng.range(0.2, 0.34),
+        // Kept within a shade of the lawn: darker tufts read as holes punched
+        // in the grass rather than as clumps of it.
+        mix(0x93b457, 0xaec86c, rng.next()),
+        {
+          x: cx + rng.range(-1.5, 1.5),
+          z: cz + rng.range(-1.5, 1.5),
+          y: yardY,
+          ry: rng.range(0, TAU),
+        },
+        q === 'low' ? 6 : 7,
+      );
+    }
+  }
+
+  // Daisies and dandelions: two triangles each, tilted so they catch the key.
+  // A lawn with no white in it is a golf green.
+  {
+    const patches = pickE(q, 4, 8, 11);
+    for (let p = 0; p < patches; p++) {
+      const pa = rng.range(0, TAU);
+      const pr = 3.8 + Math.sqrt(rng.next()) * 9.5;
+      const px = Math.sin(pa) * pr;
+      const pz = Math.cos(pa) * pr;
+      const gold = rng.bool(0.4);
+      for (let i = 0; i < 5; i++) {
+        const s = rng.range(0.1, 0.17);
+        turf.add(new THREE.PlaneGeometry(s, s), gold ? 0xf5d64e : 0xfaf3e2, {
+          x: px + rng.range(-0.75, 0.75),
+          z: pz + rng.range(-0.75, 0.75),
+          y: yardY + rng.range(0.06, 0.16),
+          rx: -Math.PI / 2 + rng.range(-0.5, 0.5),
+          ry: rng.range(0, TAU),
+        });
+      }
+    }
   }
   const turfGeo = turf.build();
   if (turfGeo) g.add(mesh(turfGeo, turfMat(m), { cast: false, receive: true }));
@@ -836,141 +1266,259 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   cloth.translate(rng.range(-0.16, 0.16), topY, rng.range(-0.14, 0.14));
   g.add(mesh(cloth, clothMat(m), { cast: false, receive: true }));
 
-  // --- mid-ground props: grill, cooler, chair ------------------------------
-  // Placement is done in the camera's own frame, not in world azimuth.
-  //
-  // The lens is brutal in portrait: 46 degree vertical FOV at 0.46 aspect is
-  // only ~22 degrees across, so at the tower's distance the visible slot is
-  // 4 units wide and the food alone fills 57% of it. That leaves a usable band
-  // on each side between 0.6 and 1.0 of the half-frame, and a prop only lands
-  // in it if it is nearly BEHIND the tower and a long way back:
-  //
-  //   lateral = d * sin(theta),  depth = 11.5*cos(0.5) - d * cos(theta)
-  //
-  // with theta measured from the camera's own bearing. theta ~ 164 degrees at
-  // 12 units puts the grill just outside the bun and just inside the frame;
-  // any closer and it hides behind the food, any further round and it falls
-  // off the edge. `CAM_BEARING` is the play/home yaw the game opens on.
-  const CAM_BEARING = Math.PI / 4;
-  const atBearing = (theta: number, d: number): [number, number] => {
-    const a = CAM_BEARING + theta;
-    return [Math.sin(a) * d, Math.cos(a) * d];
-  };
-
-  const props = new PropBatch();
-  const [grillX, grillZ] = atBearing(2.862 + rng.range(-0.03, 0.03), 12.0);
-  kettleGrill(props, grillX, grillZ, yardY, Math.atan2(grillX, grillZ) + Math.PI + 0.5);
-
-  const [coolX, coolZ] = atBearing(-2.79 + rng.range(-0.03, 0.03), 9.4);
-  coolerBox(props, coolX, coolZ, yardY, Math.atan2(coolX, coolZ) + 1.25);
-
-  if (q !== 'low') {
-    const [chairX, chairZ] = atBearing(1.25 + rng.range(-0.12, 0.12), 7.2);
-    foldingChair(props, chairX, chairZ, yardY, Math.atan2(chairX, chairZ) + Math.PI + 0.4);
-  }
   const propGeo = props.build();
   if (propGeo) g.add(mesh(propGeo, yardPaintMat(m), { cast: true, receive: true }));
 
-  // --- background: fence line, trees, festoon posts ------------------------
+  // --- the fence: a line to look OVER, not a wall --------------------------
   const far = new PropBatch();
-  const FENCE_R = 17.2;
+  const FENCE_R = 16.4;
+  const FENCE_H = 1.6;
+  // The gate goes on one of the two yaws that used to carry nothing; the hedge
+  // run goes on the other, so a quarter-turn of the orbit never lands on plain
+  // pickets twice running.
+  const GATE_A = CAM_BEARING - Math.PI / 2;
+  const HEDGE_A = CAM_BEARING + Math.PI / 2;
+  const arcDelta = (a: number, b: number): number =>
+    Math.abs(((a - b + Math.PI * 3) % TAU) - Math.PI);
+
   // Boards are a FIXED width at every tier — deriving the width from the count
   // turned LOW into a ring of 1.5-unit panels that read as a stockade wall.
   // Only the pitch changes, so the fence is always a fence, just airier.
-  const boards = pickE(q, 104, 124, 144);
-  const boardW = Math.min(0.62, ((TAU * FENCE_R) / boards) * 0.7);
-  const fenceTone = (t: number): number => mix(mix(0xdcbb8c, 0xb99b6c, t), HAZE, 0.34);
+  const boards = pickE(q, 84, 104, 122);
+  const boardW = Math.min(0.5, ((TAU * FENCE_R) / boards) * 0.62);
+  const fenceTone = (t: number): number => mix(mix(0xdcbb8c, 0xb99b6c, t), HAZE, 0.3);
   for (let i = 0; i < boards; i++) {
     const a = (i / boards) * TAU;
-    const r = FENCE_R * (1 + rng.signed() * 0.008);
-    // every eighth board is a post: taller, thicker, and it breaks the ruler line
-    const post = i % 10 === 0;
-    far.box(
-      post ? boardW * 1.7 : boardW,
-      (post ? 2.42 : 2.12) + rng.range(-0.06, 0.12),
-      post ? 0.2 : 0.09,
-      fenceTone(post ? 0.85 : rng.next()),
-      { x: Math.sin(a) * r, z: Math.cos(a) * r, ry: a, y: yardY, ground: true },
-    );
+    if (arcDelta(a, GATE_A) < 0.075) continue;
+    // The radius wanders on a slow noise so the boundary is a yard's boundary
+    // and not a compass circle.
+    const r = FENCE_R + fbm2(Math.cos(a) * 1.6, Math.sin(a) * 1.6, 2) * 0.55;
+    const post = i % 9 === 0;
+    const h = (post ? FENCE_H + 0.32 : FENCE_H) + rng.range(-0.05, 0.09);
+    const w = post ? boardW * 1.6 : boardW;
+    const at = { x: Math.sin(a) * r, z: Math.cos(a) * r, ry: a, y: yardY, ground: true };
+    far.box(w, h, post ? 0.18 : 0.08, fenceTone(post ? 0.85 : rng.next()), at);
+    // a pointed cap: what makes it a picket fence and lets light between
+    if (!post) {
+      far.cyl(0, w * 0.62, w * 0.66, fenceTone(0.2), {
+        ...at,
+        ry: a + Math.PI / 4,
+        y: yardY + h,
+        ground: true,
+      }, 4, true);
+    }
   }
   // one rail behind the boards, just proud enough to catch the light
-  const railSegs = pickE(q, 18, 26, 34);
+  const railSegs = pickE(q, 16, 22, 30);
   for (let i = 0; i < railSegs; i++) {
     const a0 = (i / railSegs) * TAU;
     const a1 = ((i + 1) / railSegs) * TAU;
+    if (arcDelta(a0, GATE_A) < 0.1) continue;
     const rr = FENCE_R - 0.14;
     far.strut(
-      new THREE.Vector3(Math.sin(a0) * rr, yardY + 1.55, Math.cos(a0) * rr),
-      new THREE.Vector3(Math.sin(a1) * rr, yardY + 1.55, Math.cos(a1) * rr),
-      0.13,
-      mix(0xb08c58, HAZE, 0.38),
+      new THREE.Vector3(Math.sin(a0) * rr, yardY + FENCE_H * 0.66, Math.cos(a0) * rr),
+      new THREE.Vector3(Math.sin(a1) * rr, yardY + FENCE_H * 0.66, Math.cos(a1) * rr),
+      0.11,
+      mix(0xb08c58, HAZE, 0.34),
       true,
     );
   }
 
-  // shrubs along the fence foot: they break the dead line where boards meet grass
-  const shrubs = pickE(q, 12, 19, 26);
+  // The gate: two heavier posts with ball caps, a lower leaf between them, and
+  // a genuine hole in the boundary. It is the one place the eye is told the
+  // yard has an outside, and the sky comes straight through the gap.
+  {
+    const gr = FENCE_R;
+    for (const s of [-1, 1]) {
+      const a = GATE_A + s * 0.085;
+      const x = Math.sin(a) * gr;
+      const z = Math.cos(a) * gr;
+      far.box(0.24, FENCE_H + 0.55, 0.24, fenceTone(0.9), { x, z, ry: a, y: yardY, ground: true });
+      far.ball(0.15, fenceTone(0.45), { x, z, y: yardY + FENCE_H + 0.62 }, 7);
+    }
+    for (let i = 0; i < 5; i++) {
+      const a = GATE_A + (i / 4 - 0.5) * 0.13;
+      far.box(0.16, FENCE_H * 0.78, 0.07, fenceTone(rng.next() * 0.5), {
+        x: Math.sin(a) * gr,
+        z: Math.cos(a) * gr,
+        ry: a,
+        y: yardY,
+        ground: true,
+      });
+    }
+    for (const h of [0.34, 0.94]) {
+      far.box(0.72, 0.11, 0.06, fenceTone(0.6), {
+        x: Math.sin(GATE_A) * gr,
+        z: Math.cos(GATE_A) * gr,
+        ry: GATE_A,
+        y: yardY + FENCE_H * h,
+      });
+    }
+  }
+
+  // Shrubs along the fence foot, and a deeper hedge run on the far side: they
+  // break the dead line where boards meet grass, and the hedge gives the
+  // second quiet yaw a mass of its own.
+  const shrubs = pickE(q, 11, 16, 22);
   for (let i = 0; i < shrubs; i++) {
     const a = (i / shrubs) * TAU + rng.range(-0.22, 0.22);
     // every fourth one wanders out onto the lawn, so no yaw is a bare green band
-    const d = i % 4 === 3 ? rng.range(9.5, 14.0) : FENCE_R - rng.range(0.5, 1.9);
+    const d = i % 4 === 3 ? rng.range(9.8, 14.2) : FENCE_R - rng.range(0.4, 1.8);
     const w = rng.range(0.75, 1.5);
     far.dome(
       w,
-      w * rng.range(0.55, 0.85),
-      mix(mix(0x6f9a44, 0x8bab52, rng.next()), HAZE, 0.3),
+      Math.min(w * rng.range(0.55, 0.85), skyCap(d) - yardY),
+      mix(mix(0x6f9a44, 0x8bab52, rng.next()), HAZE, 0.28),
       { x: Math.sin(a) * d, z: Math.cos(a) * d, y: yardY },
-      q === 'low' ? 6 : 9,
+      q === 'low' ? 6 : 8,
+    );
+  }
+  const hedgeLobes = pickE(q, 7, 10, 14);
+  for (let i = 0; i < hedgeLobes; i++) {
+    const a = HEDGE_A + (i / (hedgeLobes - 1) - 0.5) * 0.72;
+    const d = FENCE_R + rng.range(0.9, 1.9);
+    const w = rng.range(1.5, 2.3);
+    far.dome(
+      w,
+      Math.min(w * rng.range(0.62, 0.86), skyCap(d) - yardY),
+      mix(mix(0x5f8c3d, 0x7ea24a, rng.next()), HAZE, 0.36),
+      { x: Math.sin(a) * d, z: Math.cos(a) * d, y: yardY },
+      q === 'low' ? 6 : 8,
     );
   }
 
-  const trees = pickE(q, 5, 7, 9);
+  // --- the neighbourhood ---------------------------------------------------
+  //
+  // Three layers between the fence and the sky, each hazed harder than the
+  // last. This is the whole reason the fence came down: without it, an open
+  // sky reads as a fence standing against a void.
+
+  // near trees: three of them, crowns clamped to the skyline. They used to be
+  // the tallest thing in the frame; now they sit just above the fence and act
+  // as the anchor the hazier layers recede from.
+  const trees = pickE(q, 2, 3, 3);
   for (let i = 0; i < trees; i++) {
-    const a = (i / trees) * TAU + rng.range(-0.35, 0.35);
-    const d = 20.0 + rng.range(-1.6, 3.2);
+    const a = CAM_BEARING + Math.PI * 0.45 + (i / trees) * TAU + rng.range(-0.3, 0.3);
+    const d = 20.5 + rng.range(-1.2, 2.6);
     const x = Math.sin(a) * d;
     const z = Math.cos(a) * d;
-    const trunkH = 1.75 + rng.range(-0.25, 0.5);
-    const spread = 1.8 + rng.range(-0.3, 0.7);
-    far.cyl(0.16, 0.26, trunkH, mix(0x8a6540, HAZE, 0.42), { x, z, y: yardY, ground: true }, 6);
-    // Two or three overlapping balls at 10 segments: a round canopy at 120px.
-    // Six segments read as a literal hexagon at this distance.
-    const lobes = pickE(q, 2, 3, 3);
+    const cap = skyCap(d);
+    const spread = 1.35 + rng.range(-0.2, 0.4);
+    const trunkH = 1.15 + rng.range(-0.15, 0.35);
+    far.cyl(0.15, 0.24, trunkH, mix(0x8a6540, HAZE, 0.4), { x, z, y: yardY, ground: true }, 5);
+    const lobes = pickE(q, 2, 2, 3);
     const canopyTone = mix(0x7ba24c, HAZE, 0.4);
     for (let k = 0; k < lobes; k++) {
-      const ox = k === 0 ? 0 : rng.range(-0.8, 0.8);
-      const oz = k === 0 ? 0 : rng.range(-0.8, 0.8);
-      const r = spread * (k === 0 ? 1 : rng.range(0.62, 0.84));
+      const r = spread * (k === 0 ? 1 : rng.range(0.6, 0.82));
+      // the crown centre is whatever leaves the crown itself under the skyline
+      const cy = Math.min(yardY + trunkH + r * 0.55, cap - r * 0.86);
       far.add(
-        new THREE.SphereGeometry(r, 10, 6).scale(1, 0.86, 1),
-        mix(canopyTone, 0xffffff, k * 0.06),
-        { x: x + ox, z: z + oz, y: yardY + trunkH + spread * 0.7 + rng.range(-0.2, 0.35) },
+        new THREE.SphereGeometry(r, q === 'low' ? 7 : 9, q === 'low' ? 4 : 5).scale(1, 0.86, 1),
+        mix(canopyTone, 0xffffff, k * 0.07),
+        {
+          x: x + (k === 0 ? 0 : rng.range(-0.7, 0.7)),
+          z: z + (k === 0 ? 0 : rng.range(-0.7, 0.7)),
+          y: cy + (k === 0 ? 0 : rng.range(-0.25, 0.15)),
+        },
       );
     }
+  }
+
+  // rooflines, and a shed of our own tucked against the fence
+  //
+  // They sit at 22-26, INSIDE the apron rather than past it. A house at 30 was
+  // beyond the ground's own rim and hung in the sky with daylight under its
+  // footings — the single ugliest thing in the first pass of this scene, and a
+  // reminder that a middle distance is only middle if there is ground under it.
+  const houses = pickE(q, 5, 6, 7);
+  for (let i = 0; i < houses; i++) {
+    const a = (i / houses) * TAU + rng.range(-0.26, 0.26) + 0.4;
+    const d = 23.5 + rng.range(-1.6, 2.8);
+    neighbourHouse(
+      far,
+      Math.sin(a) * d,
+      Math.cos(a) * d,
+      // dropped so the ridge lands just under the skyline at its own distance
+      Math.min(yardY, skyCap(d) - 1.85),
+      a + Math.PI + rng.range(-0.5, 0.5),
+      rng,
+      0.7 + rng.next() * 0.14,
+    );
+  }
+  {
+    const a = GATE_A + 0.55;
+    const d = 20.2;
+    const base = Math.min(yardY, skyCap(d) - 2.1);
+    const shedTone = mix(0xbfa079, HAZE, 0.34);
+    far.box(3.0, 1.35, 2.2, shedTone, { x: Math.sin(a) * d, z: Math.cos(a) * d, ry: a, y: base, ground: true });
+    far.add(prismGeo(3.2, 0.62, 2.4), mix(0x8f6a55, HAZE, 0.3), {
+      x: Math.sin(a) * d,
+      z: Math.cos(a) * d,
+      ry: a,
+      y: base + 1.35,
+    });
+  }
+
+  // the far treeline: canopy masses only, no trunks. At 25 units a trunk is one
+  // pixel wide and all it does is alias, while the overlapping crowns are what
+  // actually says "there is a town behind this fence".
+  //
+  // It runs the whole way round and the lobes deliberately OVERLAP, because a
+  // treeline is a continuous silhouette and a ring of separated blobs is a
+  // necklace. It also sits at two depths: an inner run just past the fence
+  // that the rooflines rise out of, and a hazier outer run behind them.
+  const lineLobes = pickE(q, 26, 34, 44);
+  for (let i = 0; i < lineLobes; i++) {
+    const outer = i % 3 === 2;
+    const a = (i / lineLobes) * TAU + rng.range(-0.1, 0.1);
+    const d = (outer ? 25.5 : 19.4) + rng.range(-1.0, 2.0);
+    const r = outer ? rng.range(1.5, 2.3) : rng.range(1.3, 2.0);
+    const squash = 0.62;
+    // Sat exactly on the ground — centre at half its own squashed height — so
+    // the band has a base and a top instead of hovering. The cap only ever
+    // pulls it DOWN, never lifts it off the grass.
+    const y = Math.min(yardY + r * squash, skyCap(d) - r * squash);
+    far.add(
+      new THREE.SphereGeometry(r, pickE(q, 7, 9, 10), pickE(q, 4, 5, 5)).scale(1.3, squash, 1.3),
+      mix(
+        mix(0x6f9450, 0x8aa65f, rng.next()),
+        HAZE,
+        // Hazed, but still unmistakably GREEN. At 0.72 the outer run turned
+        // the colour of the sky and the treeline read as a row of sand dunes.
+        (outer ? 0.55 : 0.3) + rng.next() * 0.1,
+      ),
+      { x: Math.sin(a) * d, z: Math.cos(a) * d, y },
+    );
+  }
+
+  if (q !== 'low') {
+    powerLine(far, yardY, CAM_BEARING + 0.35, 25.5, rng, 2);
   }
 
   // festoon lights: four posts, four swags, so a swag crosses every yaw
   const bulbs = new PropBatch();
   if (q !== 'low') {
     const POST_R = 13.2;
-    const POST_H = 4.2;
     const posts: THREE.Vector3[] = [];
     for (let i = 0; i < 4; i++) {
       const a = 0.62 + (i / 4) * TAU;
       const x = Math.sin(a) * POST_R;
       const z = Math.cos(a) * POST_R;
-      far.box(0.18, POST_H, 0.18, mix(0x9a7546, HAZE, 0.4), { x, z, y: yardY, ground: true });
-      posts.push(new THREE.Vector3(x, yardY + POST_H - 0.1, z));
+      const top = Math.min(yardY + 4.2, skyCap(POST_R));
+      far.box(0.18, top - yardY, 0.18, mix(0x9a7546, HAZE, 0.4), { x, z, y: yardY, ground: true });
+      posts.push(new THREE.Vector3(x, top - 0.1, z));
     }
     for (let i = 0; i < 4; i++) {
       const pts = catenary(posts[i], posts[(i + 1) % 4], 1.05, pickE(q, 5, 7, 9));
       for (let k = 0; k < pts.length - 1; k++) {
         far.strut(pts[k], pts[k + 1], 0.05, 0x4a4038);
-        if (k > 0) bulbs.add(new THREE.SphereGeometry(0.11, 6, 4), 0xffffff, {
-          x: pts[k].x,
-          y: pts[k].y - 0.12,
-          z: pts[k].z,
-        });
+        if (k > 0) {
+          bulbs.add(new THREE.SphereGeometry(0.11, 5, 3), 0xffffff, {
+            x: pts[k].x,
+            y: pts[k].y - 0.12,
+            z: pts[k].z,
+          });
+        }
       }
     }
   }
@@ -1022,6 +1570,10 @@ export const dinerTheme: ThemeDef = {
   glyph: '🍔',
   price: 0,
   palette: {
+    // Golden-hour suburban afternoon: warm low sun on the light rig's own
+    // bearing, scattered fair-weather cumulus. The composition above is built
+    // to leave this room — see `skyCap`.
+    sky: SKY_PRESETS.diner,
     bgTop: 0xffe7c4,
     bgBottom: 0xe07a5f,
     fog: 0xf2b48c,

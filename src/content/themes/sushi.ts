@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import type { QualityTier } from '../../core/types';
 import { Rng } from '../../core/rng';
+import { SKY_PRESETS } from '../../render/palette';
 import { TAU, clamp } from '../../core/math';
 import {
   fbm2,
@@ -858,7 +859,7 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 }
 
 // ===========================================================================
-// environment — a hinoki counter in a lantern-lit garden
+// environment — a hinoki counter above a karesansui, Fuji on the horizon
 // ===========================================================================
 
 /**
@@ -869,18 +870,31 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
  *  2. Nothing rises above that plane within PROP_R of the middle, so neither
  *     the tower nor the layer sliding above it can ever meet a prop — at any
  *     camera yaw, since the home screen orbits a full turn.
- *  3. The garden floor is `FLOOR_DROP` below the counter and dissolves into
- *     the sweep with a baked vertex alpha, so the backdrop still owns the top
- *     of frame and there is no hard horizon line.
+ *  3. The garden floor is `FLOOR_DROP` below the counter and is a real
+ *     karesansui: raked gravel whose furrows ring the tower and bend around
+ *     five stone groups, with moss islands between them.
+ *  4. The horizon is three layers deep — two hazed ridgelines and Mount Fuji
+ *     behind them — built as vertex-alpha silhouettes that dissolve into the
+ *     sky instead of ending on a line.
  *
- * Everything is merged into eight vertex-coloured draws. A whole family of
- * props — stone lantern, basin, rocks, moss, the folded cloth — is one mesh.
+ * ## Why the whole horizon lives in the top fifth of the frame
+ *
+ * The camera pitches down 0.5 rad behind a 23 degree half-FOV, so the TOP of
+ * the frame already looks 5.6 degrees BELOW the true horizon: nothing at or
+ * above eye height is ever on screen, and the further away a thing is the
+ * HIGHER it projects. Measured at the home framing, the garden floor's fading
+ * rim lands about 17% down the frame and everything above that is sky. That
+ * thin band is the entire budget for distance, which is why Fuji is authored
+ * by its screen angles rather than by its world size: summit ~11% down the
+ * frame, dissolved away by ~20%, about 80% of the frame wide. Sized like a
+ * mountain instead, it either runs off both edges or leaves the frame out of
+ * the top entirely — both of which happened on the way here.
  */
 
 const ENV_SINK = 0.0025;
-const COUNTER_W = 11.8;
-const COUNTER_D = 4.3;
-const COUNTER_T = 0.52;
+const COUNTER_W = 10.4;
+const COUNTER_D = 3.94;
+const COUNTER_T = 0.46;
 const FLOOR_DROP = 3.1;
 
 /**
@@ -906,6 +920,10 @@ const PROP_R = 4.6;
 const PROP_LIFT = 1.5;
 const FAR_R = 9.5;
 
+/** Radius of the gravel disc, and the world square the rake texture covers. */
+const GROUND_R = 31;
+const GARDEN_SPAN = 64;
+
 /** Shove a prop radially outwards until it clears the tower's cylinder. */
 function clearOf(x: number, z: number, min = PROP_R): [number, number] {
   const r = Math.hypot(x, z);
@@ -916,14 +934,34 @@ function clearOf(x: number, z: number, min = PROP_R): [number, number] {
 const envPick = <T>(q: QualityTier, low: T, med: T, high: T): T =>
   q === 'low' ? low : q === 'medium' ? med : high;
 
+const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t);
+const smooth01 = (t: number): number => {
+  const c = clamp01(t);
+  return c * c * (3 - 2 * c);
+};
+
+/** Cheap integer hash, 0..1. Used per-texel, so it must not call Math.sin. */
+function hashPx(i: number, j: number): number {
+  let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0;
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
 /**
  * Merge bucket. Each part carries its colour in vertex colours, so a dozen
- * differently-tinted props collapse into a single draw call.
+ * differently-tinted props collapse into a single draw call. `shade` scales
+ * that colour per vertex, which is how a baked pool of light is put on the
+ * counter without a second material.
  */
 class EnvBucket {
   private readonly parts: THREE.BufferGeometry[] = [];
 
-  add(geo: THREE.BufferGeometry | null, color: number): void {
+  add(
+    geo: THREE.BufferGeometry | null,
+    color: number,
+    shade?: (x: number, y: number, z: number) => number,
+  ): void {
     if (!geo) return;
     const pos = geo.getAttribute('position');
     if (!pos || pos.count < 3) {
@@ -939,6 +977,16 @@ class EnvBucket {
       g = flat;
     }
     tintGeometry(g, color);
+    if (shade) {
+      const p = g.getAttribute('position') as THREE.BufferAttribute;
+      const c = g.getAttribute('color') as THREE.BufferAttribute;
+      for (let i = 0; i < p.count; i++) {
+        const s = shade(p.getX(i), p.getY(i), p.getZ(i));
+        const k = Number.isFinite(s) ? clamp01(s) : 1;
+        c.setXYZ(i, c.getX(i) * k, c.getY(i) * k, c.getZ(i) * k);
+      }
+      c.needsUpdate = true;
+    }
     this.parts.push(g);
   }
 
@@ -993,6 +1041,64 @@ function envBlob(r: number, detail: number): THREE.BufferGeometry {
   return new THREE.IcosahedronGeometry(Math.max(r, 1e-3), Math.max(0, detail));
 }
 
+/**
+ * Eight and four triangles: the two sizes a blossom cluster comes in.
+ *
+ * Both come out of three with flat face normals, which turn a 20px puff into a
+ * visibly faceted gem — the exact failure the old canopies had, only smaller.
+ * Pointing every normal out from the centre instead makes each cluster shade
+ * like a tiny sphere for no extra triangles at all.
+ */
+function softNormals(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const p = g.getAttribute('position') as THREE.BufferAttribute;
+  const n = g.getAttribute('normal') as THREE.BufferAttribute;
+  if (!p || !n) return g;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const y = p.getY(i);
+    const z = p.getZ(i);
+    const l = Math.hypot(x, y, z) || 1;
+    n.setXYZ(i, x / l, y / l, z / l);
+  }
+  n.needsUpdate = true;
+  return g;
+}
+function envOcta(r: number): THREE.BufferGeometry {
+  return softNormals(new THREE.OctahedronGeometry(Math.max(r, 1e-3), 0));
+}
+function envTetra(r: number): THREE.BufferGeometry {
+  return softNormals(new THREE.TetrahedronGeometry(Math.max(r, 1e-3), 0));
+}
+
+const STRUT_UP = new THREE.Vector3(0, 1, 0);
+const STRUT_DIR = new THREE.Vector3();
+const STRUT_Q = new THREE.Quaternion();
+
+/** An open-ended rod between two arbitrary points — a limb, a twig. */
+function envStrut(
+  ax: number, ay: number, az: number,
+  bx: number, by: number, bz: number,
+  rTop: number, rBot: number, sides: number,
+): THREE.BufferGeometry | null {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dz = bz - az;
+  const len = Math.hypot(dx, dy, dz);
+  if (!(len > 1e-4) || !Number.isFinite(len)) return null;
+  const g = new THREE.CylinderGeometry(
+    Math.max(rTop, 1e-4),
+    Math.max(rBot, 1e-4),
+    len,
+    Math.max(3, Math.round(sides)),
+    1,
+    true,
+  );
+  STRUT_DIR.set(dx / len, dy / len, dz / len);
+  g.applyQuaternion(STRUT_Q.setFromUnitVectors(STRUT_UP, STRUT_DIR));
+  g.translate((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+  return g;
+}
+
 /** Author a prop at the origin with its base on y = 0, then post it here. */
 function at(g: THREE.BufferGeometry, x: number, y: number, z: number, yaw = 0): THREE.BufferGeometry {
   if (yaw) g.rotateY(yaw);
@@ -1002,13 +1108,13 @@ function at(g: THREE.BufferGeometry, x: number, y: number, z: number, yaw = 0): 
 
 /**
  * A ring-tessellated ground disc with per-vertex RGBA, so the far rim can fade
- * to nothing instead of ending on a hard edge. Planar UVs in world units keep
- * the texture tiling even across every ring.
+ * to nothing instead of ending on a hard edge. UVs are world-planar and
+ * centred, which is what lets a single non-tiling texture carry rake furrows
+ * that ring particular stones rather than an anonymous repeat.
  */
 function envGround(
   radii: readonly number[],
   segments: number,
-  uvScale: number,
   shade: (radius: number) => readonly [number, number, number, number],
 ): THREE.BufferGeometry {
   const pos: number[] = [];
@@ -1016,30 +1122,31 @@ function envGround(
   const uv: number[] = [];
   const col: number[] = [];
   const idx: number[] = [];
+  const s = 1 / GARDEN_SPAN;
   const push = (x: number, z: number, r: number): void => {
     pos.push(x, 0, z);
     nrm.push(0, 1, 0);
-    uv.push(x * uvScale, z * uvScale);
-    const s = shade(r);
-    col.push(s[0], s[1], s[2], s[3]);
+    uv.push(x * s + 0.5, z * s + 0.5);
+    const c = shade(r);
+    col.push(c[0], c[1], c[2], c[3]);
   };
 
   push(0, 0, 0);
   for (let ri = 0; ri < radii.length; ri++) {
     const r = radii[ri];
-    for (let s = 0; s < segments; s++) {
-      const a = (s / segments) * TAU;
+    for (let sg = 0; sg < segments; sg++) {
+      const a = (sg / segments) * TAU;
       push(Math.cos(a) * r, Math.sin(a) * r, r);
     }
   }
-  for (let s = 0; s < segments; s++) idx.push(0, 1 + ((s + 1) % segments), 1 + s);
+  for (let sg = 0; sg < segments; sg++) idx.push(0, 1 + ((sg + 1) % segments), 1 + sg);
   for (let ri = 0; ri < radii.length - 1; ri++) {
     const a0 = 1 + ri * segments;
     const b0 = a0 + segments;
-    for (let s = 0; s < segments; s++) {
-      const s1 = (s + 1) % segments;
-      idx.push(a0 + s, a0 + s1, b0 + s);
-      idx.push(a0 + s1, b0 + s1, b0 + s);
+    for (let sg = 0; sg < segments; sg++) {
+      const s1 = (sg + 1) % segments;
+      idx.push(a0 + sg, a0 + s1, b0 + sg);
+      idx.push(a0 + s1, b0 + s1, b0 + sg);
     }
   }
 
@@ -1050,6 +1157,343 @@ function envGround(
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
   g.setIndex(idx);
   return g;
+}
+
+// ---------------------------------------------------------------------------
+// the karesansui — stones, moss, and the field the rake follows
+// ---------------------------------------------------------------------------
+
+interface StoneGroup {
+  /** Bearing (x = cos a, z = sin a) and radius of the group's centre. */
+  readonly a: number;
+  readonly r: number;
+  /** How many stones. Odd, or a pair — never a tidy count. */
+  readonly n: number;
+  /** How far the stones scatter from the group's centre. */
+  readonly spread: number;
+  /** Height of the tallest stone in the group. */
+  readonly tall: number;
+  readonly seed: number;
+}
+
+/**
+ * Ryoan-ji's grammar: fifteen stones in five groups of 5-2-3-2-3, never
+ * centred, never evenly spaced, never on a grid — the asymmetry IS the form.
+ *
+ * Authored as constants rather than drawn from ctx.rng because the rake
+ * texture is baked once and cached across runs: the furrows have to ring the
+ * stones that are actually standing there, so both have to read the same
+ * layout. A zen garden is composed anyway; it is the one thing in this scene
+ * that should not be re-rolled.
+ */
+const STONE_GROUPS: readonly StoneGroup[] = [
+  { a: 3.49, r: 8.4, n: 5, spread: 1.45, tall: 1.2, seed: 0x51a1 },
+  { a: 4.97, r: 12.6, n: 2, spread: 0.85, tall: 0.72, seed: 0x51a2 },
+  { a: 0.44, r: 9.9, n: 3, spread: 1.1, tall: 0.9, seed: 0x51a3 },
+  { a: 1.66, r: 13.4, n: 2, spread: 0.9, tall: 0.66, seed: 0x51a4 },
+  { a: 2.53, r: 7.5, n: 3, spread: 1.0, tall: 0.98, seed: 0x51a5 },
+];
+
+interface Patch {
+  readonly x: number;
+  readonly z: number;
+  readonly r: number;
+  readonly seed: number;
+}
+
+/** Every stone group wears a moss skirt; three islands float free of them. */
+const MOSS: readonly Patch[] = [
+  ...STONE_GROUPS.map((g, i) => ({
+    x: Math.cos(g.a) * g.r + Math.cos(g.a + 1.9) * g.spread * 0.5,
+    z: Math.sin(g.a) * g.r + Math.sin(g.a + 1.9) * g.spread * 0.5,
+    r: g.spread * 1.55 + 0.5,
+    seed: 3.7 + i * 2.3,
+  })),
+  { x: -4.1, z: -11.6, r: 1.9, seed: 17.2 },
+  { x: 10.8, z: 4.4, r: 1.35, seed: 21.9 },
+  { x: 1.6, z: 15.2, r: 2.3, seed: 26.4 },
+];
+
+interface RakeIsland {
+  readonly x: number;
+  readonly z: number;
+  readonly r: number;
+}
+
+const RAKE_ISLANDS: readonly RakeIsland[] = STONE_GROUPS.map((g) => ({
+  x: Math.cos(g.a) * g.r,
+  z: Math.sin(g.a) * g.r,
+  r: g.spread + 0.8,
+}));
+
+/** Influence length of the open field, in world units. */
+const RAKE_OPEN = 5.6;
+
+/**
+ * The potential whose contour lines the rake follows.
+ *
+ * Every term is a distance, so the gradient is unit length wherever one term
+ * dominates and the furrow spacing stays even: rings about the tower out in
+ * the open, rings about a stone group near one, and a smooth partition of
+ * unity between them so a furrow BENDS round a stone instead of colliding
+ * with it. That bend is the whole signature of a raked garden.
+ */
+function rakePotential(x: number, z: number): number {
+  const rc = Math.sqrt(x * x + z * z);
+  let w = 1 / (RAKE_OPEN * RAKE_OPEN);
+  let wsum = w;
+  // the open sea, wobbled: a rake is dragged by hand, not by a compass
+  let v = (rc + fbm2(x * 0.055 + 11, z * 0.055 - 7, 2) * 1.3) * w;
+  for (let i = 0; i < RAKE_ISLANDS.length; i++) {
+    const is = RAKE_ISLANDS[i];
+    const dx = x - is.x;
+    const dz = z - is.z;
+    const d = Math.sqrt(dx * dx + dz * dz);
+    w = 1 / (d * d + 0.5);
+    wsum += w;
+    v += (d - is.r) * w;
+  }
+  return v / wsum;
+}
+
+/** 0 outside the moss, 1 inside, with a torn rather than circular edge. */
+function mossAt(x: number, z: number): number {
+  let m = 0;
+  for (let i = 0; i < MOSS.length; i++) {
+    const p = MOSS[i];
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const warp = fbm2(x * 0.45 + p.seed, z * 0.45 - p.seed, 3) * 0.4;
+    const d = Math.sqrt(dx * dx + dz * dz) / Math.max(p.r, 0.1) + warp;
+    const v = 1 - smooth01((d - 0.6) / 0.42);
+    if (v > m) m = v;
+  }
+  return m;
+}
+
+/** How much the gravel is shaded by the stones standing in it. */
+function stoneShadeAt(x: number, z: number): number {
+  let s = 0;
+  for (let i = 0; i < RAKE_ISLANDS.length; i++) {
+    const is = RAKE_ISLANDS[i];
+    const d = Math.hypot(x - is.x, z - is.z);
+    const v = 1 - smooth01((d - is.r * 0.55) / (is.r * 0.9));
+    if (v > s) s = v;
+  }
+  return s;
+}
+
+/**
+ * Smooth fields sampled on a coarse grid and read back bilinearly.
+ *
+ * The furrows themselves have to be crisp at texel resolution, but everything
+ * that FEEDS them — the potential, its gradient, the moss, the mottling — is
+ * smooth over metres. Evaluating those per texel costs a million square roots
+ * and a million fbm calls; sampling them at half resolution costs a quarter of
+ * that and is visually identical, which is the difference between a 40ms bake
+ * and a third of a second of hitching on theme select.
+ */
+interface RakeMaps {
+  res: number;
+  step: number;
+  field: Float32Array;
+  gradX: Float32Array;
+  gradZ: Float32Array;
+  moss: Float32Array;
+  mottle: Float32Array;
+  pebble: Float32Array;
+}
+
+let rakeMaps: RakeMaps | null = null;
+
+function rakeMapsFor(res: number): RakeMaps {
+  if (rakeMaps && rakeMaps.res === res) return rakeMaps;
+  const n = res * res;
+  const step = GARDEN_SPAN / res;
+  const field = new Float32Array(n);
+  const moss = new Float32Array(n);
+  const mottle = new Float32Array(n);
+  const pebble = new Float32Array(n);
+  const gradX = new Float32Array(n);
+  const gradZ = new Float32Array(n);
+
+  for (let j = 0; j < res; j++) {
+    const wz = GARDEN_SPAN / 2 - (j + 0.5) * step;
+    for (let i = 0; i < res; i++) {
+      const wx = (i + 0.5) * step - GARDEN_SPAN / 2;
+      const k = j * res + i;
+      field[k] = rakePotential(wx, wz);
+      moss[k] = mossAt(wx, wz);
+      mottle[k] = fbm2(wx * 0.16 + 3.1, wz * 0.16 - 5.4, 3);
+      pebble[k] = fbm2(wx * 4.1 + 41, wz * 4.1 - 29, 2);
+    }
+  }
+  for (let j = 0; j < res; j++) {
+    for (let i = 0; i < res; i++) {
+      const k = j * res + i;
+      const i0 = i > 0 ? i - 1 : i;
+      const i1 = i < res - 1 ? i + 1 : i;
+      const j0 = j > 0 ? j - 1 : j;
+      const j1 = j < res - 1 ? j + 1 : j;
+      gradX[k] = (field[j * res + i1] - field[j * res + i0]) / ((i1 - i0) * step);
+      // canvas rows run the other way to world z, hence the sign
+      gradZ[k] = -(field[j1 * res + i] - field[j0 * res + i]) / ((j1 - j0) * step);
+    }
+  }
+  rakeMaps = { res, step, field, gradX, gradZ, moss, mottle, pebble };
+  return rakeMaps;
+}
+
+/** Bilinear read of a coarse grid at continuous grid coordinates. */
+function gridAt(g: Float32Array, res: number, gx: number, gy: number): number {
+  const x = gx < 0 ? 0 : gx > res - 1 ? res - 1 : gx;
+  const y = gy < 0 ? 0 : gy > res - 1 ? res - 1 : gy;
+  const i0 = Math.floor(x);
+  const j0 = Math.floor(y);
+  const i1 = i0 < res - 1 ? i0 + 1 : i0;
+  const j1 = j0 < res - 1 ? j0 + 1 : j0;
+  const fx = x - i0;
+  const fy = y - j0;
+  const a = g[j0 * res + i0];
+  const b = g[j0 * res + i1];
+  const c = g[j1 * res + i0];
+  const d = g[j1 * res + i1];
+  return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+}
+
+/**
+ * Furrow spacing, in world units, held to at least ten texels so the rake
+ * never turns into a moire once anisotropy runs out. One unit is about 20cm
+ * at this scale, so 0.62 is a hand rake at Ryoan-ji's pitch.
+ */
+function rakeSpacing(size: number): number {
+  return Math.max(0.62, (10.5 * GARDEN_SPAN) / size);
+}
+/** Depth of a furrow, in world units. Read entirely by the normal map. */
+const RAKE_DEPTH = 0.065;
+
+/** Where the gravel gives out and the fog takes over. */
+const rakeFalloff = (rc: number): number => 1 - smooth01((rc - 21) / 9);
+
+/**
+ * The garden floor, painted once in world space.
+ *
+ * A tiling gravel swatch cannot ring a stone that is standing at (8.4, 3.1),
+ * so this is a single non-tiling image covering a 64-unit square centred on
+ * the tower, and the mesh's UVs are world-planar. The albedo stays almost
+ * flat — the rake is carried by the matching normal map, because a furrow
+ * painted as a light and dark stripe stops being a furrow the moment the key
+ * light moves.
+ */
+function paintKaresansui(c: CanvasRenderingContext2D, size: number): void {
+  const res = Math.max(64, size >> 1);
+  const maps = rakeMapsFor(res);
+  const img = c.createImageData(size, size);
+  const px = img.data;
+  const inv = GARDEN_SPAN / size;
+  const k = TAU / rakeSpacing(size);
+  const scale = res / size;
+
+  for (let j = 0; j < size; j++) {
+    const wz = GARDEN_SPAN / 2 - (j + 0.5) * inv;
+    const gy = (j + 0.5) * scale - 0.5;
+    for (let i = 0; i < size; i++) {
+      const wx = (i + 0.5) * inv - GARDEN_SPAN / 2;
+      const gx = (i + 0.5) * scale - 0.5;
+      const rc = Math.hypot(wx, wz);
+
+      const moss = clamp01(gridAt(maps.moss, res, gx, gy));
+      const amp = (1 - moss) * rakeFalloff(rc);
+      const crest = amp * Math.cos(gridAt(maps.field, res, gx, gy) * k);
+      const mot = gridAt(maps.mottle, res, gx, gy);
+      const grain = hashPx(i, j);
+      const shade = stoneShadeAt(wx, wz);
+
+      // Cool near-black granite chippings. Kept dark: this is a night garden
+      // and the furrows are read by their normals, not by their albedo.
+      let r = 36 + mot * 7 + grain * 15 + crest * 9;
+      let g = 44 + mot * 7 + grain * 15 + crest * 11;
+      let b = 55 + mot * 7 + grain * 16 + crest * 13;
+      // damp, darker gravel in the lee of a stone
+      const damp = 1 - 0.34 * shade;
+      r *= damp;
+      g *= damp;
+      b *= damp;
+
+      if (moss > 0.004) {
+        // Moss is the only warm-ish green in the frame; it wants to read as
+        // velvet, so it gets its own grain and a darker torn rim.
+        const rim = 0.72 + 0.28 * smooth01((moss - 0.06) / 0.34);
+        const mr = (32 + grain * 13 + mot * 8) * rim;
+        const mg = (58 + grain * 19 + mot * 12) * rim;
+        const mb = (36 + grain * 12 + mot * 7) * rim;
+        r += (mr - r) * moss;
+        g += (mg - g) * moss;
+        b += (mb - b) * moss;
+      }
+
+      const o = (j * size + i) * 4;
+      px[o] = r < 0 ? 0 : r > 255 ? 255 : r;
+      px[o + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      px[o + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      px[o + 3] = 255;
+    }
+  }
+  c.putImageData(img, 0, 0);
+}
+
+/**
+ * The matching relief. Tangent space here is (T,B,N) = (+x, +z, +y) because
+ * the ground's UVs are world planar and un-rotated, so the height field's
+ * x-slope goes in R, its z-slope in G and the up axis in B.
+ */
+function paintKaresansuiNormal(c: CanvasRenderingContext2D, size: number): void {
+  const res = Math.max(64, size >> 1);
+  const maps = rakeMapsFor(res);
+  const img = c.createImageData(size, size);
+  const px = img.data;
+  const inv = GARDEN_SPAN / size;
+  const spacing = rakeSpacing(size);
+  const k = TAU / spacing;
+  const scale = res / size;
+  // pebble relief: read off the coarse grid by central difference
+  const pStep = maps.step;
+
+  for (let j = 0; j < size; j++) {
+    const wz = GARDEN_SPAN / 2 - (j + 0.5) * inv;
+    const gy = (j + 0.5) * scale - 0.5;
+    for (let i = 0; i < size; i++) {
+      const wx = (i + 0.5) * inv - GARDEN_SPAN / 2;
+      const gx = (i + 0.5) * scale - 0.5;
+      const rc = Math.hypot(wx, wz);
+      const moss = clamp01(gridAt(maps.moss, res, gx, gy));
+      const amp = (1 - moss) * rakeFalloff(rc);
+
+      const v = gridAt(maps.field, res, gx, gy);
+      const s = Math.sin(v * k) * amp * RAKE_DEPTH * k;
+      let dx = -s * gridAt(maps.gradX, res, gx, gy);
+      let dz = -s * gridAt(maps.gradZ, res, gx, gy);
+
+      // gravel chippings, and a softer swell under the moss
+      const pAmp = 0.016 + moss * 0.01;
+      const px0 = gridAt(maps.pebble, res, gx - 0.5, gy);
+      const px1 = gridAt(maps.pebble, res, gx + 0.5, gy);
+      const pz0 = gridAt(maps.pebble, res, gx, gy - 0.5);
+      const pz1 = gridAt(maps.pebble, res, gx, gy + 0.5);
+      dx += (pAmp * (px1 - px0)) / pStep;
+      dz -= (pAmp * (pz1 - pz0)) / pStep;
+
+      const nx = -dx;
+      const nz = -dz;
+      const len = Math.hypot(nx, 1, nz);
+      const o = (j * size + i) * 4;
+      px[o] = Math.round(127.5 + (nx / len) * 127);
+      px[o + 1] = Math.round(127.5 + (nz / len) * 127);
+      px[o + 2] = Math.round(127.5 + (1 / len) * 127);
+      px[o + 3] = 255;
+    }
+  }
+  c.putImageData(img, 0, 0);
 }
 
 // --- painted surfaces ------------------------------------------------------
@@ -1112,38 +1556,6 @@ function paintHinokiBump(c: CanvasRenderingContext2D, size: number): void {
   }
 }
 
-/** Raked gravel, seen at night: near-black with a cool sheen along the rake. */
-function paintGravel(c: CanvasRenderingContext2D, size: number): void {
-  c.fillStyle = '#232F3A';
-  c.fillRect(0, 0, size, size);
-  const rng = new Rng(0x6ea5);
-  const bands = 9;
-  for (let i = 0; i < bands; i++) {
-    const y = (i / bands) * size + rng.range(-3, 3);
-    c.strokeStyle = 'rgba(120,152,176,0.085)';
-    c.lineWidth = size * 0.014;
-    c.beginPath();
-    for (let x = 0; x <= size; x += size / 16) {
-      c.lineTo(x, y + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.009);
-    }
-    c.stroke();
-    c.strokeStyle = 'rgba(6,10,14,0.19)';
-    c.lineWidth = size * 0.009;
-    c.beginPath();
-    for (let x = 0; x <= size; x += size / 16) {
-      c.lineTo(x, y + size * 0.019 + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.009);
-    }
-    c.stroke();
-  }
-  for (let i = 0; i < 900; i++) {
-    const s = size * rng.range(0.002, 0.006);
-    c.fillStyle = rng.bool(0.5) ? 'rgba(146,171,190,0.16)' : 'rgba(8,12,17,0.3)';
-    c.beginPath();
-    c.arc(rng.next() * size, rng.next() * size, s, 0, TAU);
-    c.fill();
-  }
-}
-
 // --- petals ----------------------------------------------------------------
 
 interface Petal {
@@ -1162,7 +1574,13 @@ interface Petal {
 /**
  * A slow drift of blossom past the camera. One mesh, one draw, animated on the
  * CPU from an absolute clock so repeated render passes in a frame are
- * idempotent. Sixty quads is nothing; the drift is what sells the night.
+ * idempotent.
+ *
+ * Each petal now writes a real face normal alongside its position, which is
+ * the whole difference between "lit" and "not". As flat emissive quads with a
+ * hard-coded +Y normal they hung against the night like stickers; with the
+ * plane's own normal they catch the key on one tumble and the warm rim on the
+ * next, and the drift finally reads as something falling through light.
  */
 function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material): THREE.Mesh | null {
   if (count <= 0) return null;
@@ -1196,8 +1614,10 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
   const geo = new THREE.BufferGeometry();
   const attr = new THREE.BufferAttribute(position, 3);
   attr.setUsage(THREE.DynamicDrawUsage);
+  const nAttr = new THREE.BufferAttribute(normal, 3);
+  nAttr.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('position', attr);
-  geo.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+  geo.setAttribute('normal', nAttr);
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, deck + 2, 0), 14);
 
   const write = (t: number): void => {
@@ -1217,11 +1637,23 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
       const vz = Math.cos(ang) * vh;
       const vy = Math.sin(tilt) * p.h;
 
+      // face normal = u x v, the plane the petal is actually lying in
+      let nx = -uz * vy;
+      let ny = uz * vx - ux * vz;
+      let nz = ux * vy;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      nx /= nl;
+      ny /= nl;
+      nz /= nl;
+
       const o = i * 18;
-      const set = (k: number, sx: number, sy: number): void => {
-        position[o + k] = cx + ux * sx + vx * sy;
-        position[o + k + 1] = cy + vy * sy;
-        position[o + k + 2] = cz + uz * sx + vz * sy;
+      const set = (kk: number, sx: number, sy: number): void => {
+        position[o + kk] = cx + ux * sx + vx * sy;
+        position[o + kk + 1] = cy + vy * sy;
+        position[o + kk + 2] = cz + uz * sx + vz * sy;
+        normal[o + kk] = nx;
+        normal[o + kk + 1] = ny;
+        normal[o + kk + 2] = nz;
       };
       // A rhombus, not a rectangle: same two triangles, but the corners meet
       // on the axes so the silhouette is a petal rather than a pink tile.
@@ -1233,6 +1665,7 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
       set(15, 0, 1);
     }
     attr.needsUpdate = true;
+    nAttr.needsUpdate = true;
   };
 
   write(0);
@@ -1283,68 +1716,24 @@ function stoneLantern(stone: EnvBucket, glow: EnvBucket, s: number, x: number, y
   stone.add(at(cap, x, y + h + 0.1 * s, z), tone);
 }
 
-/** Dark trunk, a couple of limbs, a cloud of pink. */
-function cherryTree(
-  wood: EnvBucket,
-  blossom: EnvBucket,
+/** A weathered garden stone: rolled, bedded, never a ball on the ground. */
+function gardenStone(
+  rock: EnvBucket,
   rng: Rng,
+  x: number, y: number, z: number,
+  size: number,
+  standing: boolean,
   detail: number,
-  x: number,
-  y: number,
-  z: number,
-  scale: number,
-  fade: number,
-  blobDetail: number,
+  tone: number,
 ): void {
-  const trunkH = 2.4 * scale;
-  const lean = rng.signed() * 0.09;
-  const trunk = envCyl(0.2 * scale, 0.4 * scale, trunkH, 7);
-  trunk.rotateZ(lean);
-  // Warm charcoal, not near-black: at 0x33272f the trunk vanished into the
-  // gravel and every tree read as a pink cloud with nothing holding it up.
-  wood.add(at(trunk, x, y, z), 0x53414a);
-  // A root mound, so the trunk is visibly planted instead of stopping in the
-  // dark. Without it the tree reads as a lollipop pasted onto the sky.
-  const mound = envBlob(0.5 * scale, Math.max(0, detail - 1));
-  mound.scale(1.5, 0.42, 1.5);
-  wood.add(at(mound, x, y + 0.06 * scale, z, rng.range(0, TAU)), 0x241d22);
-
-  const limbs = detail > 0 ? 3 : 2;
-  for (let i = 0; i < limbs; i++) {
-    const a = rng.range(0, TAU);
-    const len = rng.range(0.7, 1.3) * scale;
-    const limb = envCyl(0.045 * scale, 0.1 * scale, len, 5);
-    limb.rotateZ(rng.range(0.5, 0.95));
-    limb.rotateY(a);
-    wood.add(at(limb, x + lean * -trunkH, y + trunkH * rng.range(0.55, 0.85), z), 0x53414a);
-  }
-
-  // Soft pink against the dark blue is the theme's signature contrast, so the
-  // distance wash is deliberately weak — desaturate, never darken to maroon.
-  //
-  // A cherry canopy is an UMBRELLA: much wider than it is tall, and made of
-  // several overlapping masses. One centred ball on a stick is a lollipop, and
-  // that is exactly what this used to read as.
-  const blobs = detail > 0 ? 7 : 5;
-  const pinks = [0xfcc8d6, 0xf7b4c8, 0xffdbe4, 0xf2a9c0];
-  for (let i = 0; i < blobs; i++) {
-    const a = (i / blobs) * TAU + rng.range(-0.5, 0.5);
-    const rr = (i === 0 ? 0 : rng.range(0.5, 1.7)) * scale;
-    const size = rng.range(0.62, 0.98) * scale;
-    const blob = envBlob(size, blobDetail);
-    blob.scale(1.25, rng.range(0.5, 0.68), 1.25);
-    const tint = new THREE.Color(rng.pick(pinks));
-    tint.lerp(new THREE.Color(0x8fa2b4), fade);
-    blossom.add(
-      at(
-        blob,
-        x + Math.cos(a) * rr,
-        y + trunkH + rng.range(0.0, 0.34) * scale - rr * 0.16,
-        z + Math.sin(a) * rr,
-      ),
-      tint.getHex(),
-    );
-  }
+  const g = envBlob(size, detail);
+  if (standing) g.scale(rng.range(0.6, 0.82), rng.range(1.25, 1.7), rng.range(0.62, 0.86));
+  else g.scale(rng.range(1.1, 1.6), rng.range(0.42, 0.66), rng.range(1.0, 1.45));
+  roughen(g, size * 0.16, 3.2, rng.int(0, 64));
+  g.rotateX(rng.signed() * 0.16);
+  g.rotateZ(rng.signed() * 0.16);
+  // bedded: a stone is buried to a third of its depth, never balanced on top
+  rock.add(at(g, x, y + size * (standing ? 0.5 : 0.24), z, rng.range(0, TAU)), tone);
 }
 
 /** Posts and three rails, built straight then swung out to a bearing. */
@@ -1357,7 +1746,7 @@ function bambooFence(
   y: number,
   tone: number,
 ): void {
-  const h = 1.35;
+  const h = 1.2;
   const bays = Math.max(2, Math.round(span / 1.5));
   const cx = Math.cos(bearing) * radius;
   const cz = Math.sin(bearing) * radius;
@@ -1370,11 +1759,20 @@ function bambooFence(
   for (let r = 0; r < 3; r++) {
     const rail = envRodX(0.045, 0.045, span, 5);
     rail.rotateY(yaw);
-    wood.add(at(rail, cx, y + 0.28 + r * 0.44, cz), tone);
+    wood.add(at(rail, cx, y + 0.26 + r * 0.38, cz), tone);
   }
 }
 
-/** Glowing paper, a dark lattice in front of it, a heavy eave over the top. */
+/**
+ * A teahouse wall: stone plinth, dark posts, a band of lit paper under a heavy
+ * tiled eave.
+ *
+ * It used to be three units of glowing paper standing 4.2 above the garden,
+ * which put its roofline straight through the horizon band and made it the
+ * brightest object in the theme by a wide margin. Cut to a single low band of
+ * shoji it still supplies the only warm light in the frame, but it now sits
+ * UNDER the ridgelines where a garden wall belongs.
+ */
 function shojiWall(
   wood: EnvBucket,
   glow: EnvBucket,
@@ -1384,7 +1782,8 @@ function shojiWall(
   y: number,
   bars: number,
 ): void {
-  const h = 3.3;
+  const h = 1.02;
+  const sill = 0.52;
   const cx = Math.cos(bearing) * radius;
   const cz = Math.sin(bearing) * radius;
   const yaw = -bearing + Math.PI / 2;
@@ -1392,28 +1791,370 @@ function shojiWall(
   const nz = -Math.sin(yaw);
 
   // a stone plinth, so the lit paper is not hovering over the gravel
-  wood.add(at(envBox(span + 0.9, 0.52, 1.5), cx, y, cz, yaw), 0x232a30);
-  glow.add(at(envBox(span, h, 0.1), cx, y + 0.5, cz, yaw), 0xffb877);
+  wood.add(at(envBox(span + 0.9, sill, 1.5), cx, y, cz, yaw), 0x1e242a);
+  glow.add(at(envBox(span, h, 0.1), cx, y + sill, cz, yaw), 0xffb877);
+  // dark boarding above the paper, so the wall has mass without more light
+  wood.add(at(envBox(span + 0.2, 0.62, 0.34), cx, y + sill + h, cz, yaw), 0x171310);
   // lattice: sits a few centimetres proud of the paper on the camera side
   const px = -Math.cos(bearing) * 0.09;
   const pz = -Math.sin(bearing) * 0.09;
   for (let i = 0; i <= bars; i++) {
     const u = (i / bars - 0.5) * span;
-    wood.add(at(envBox(0.07, h, 0.06), cx + nx * u + px, y + 0.5, cz + nz * u + pz, yaw), 0x140f0d);
+    wood.add(at(envBox(0.06, h, 0.05), cx + nx * u + px, y + sill, cz + nz * u + pz, yaw), 0x140f0d);
   }
-  for (let i = 0; i < 3; i++) {
-    wood.add(
-      at(envBox(span, 0.07, 0.06), cx + px, y + 0.5 + (i + 1) * (h / 4), cz + pz, yaw),
-      0x140f0d,
-    );
-  }
-  wood.add(at(envBox(span + 0.5, 0.16, 0.14), cx + px, y + 0.5 + h, cz + pz, yaw), 0x140f0d);
-  // eave
-  wood.add(at(envBox(span + 1.2, 0.2, 1.0), cx, y + 0.5 + h + 0.16, cz, yaw), 0x0e0b0a);
+  wood.add(at(envBox(span, 0.05, 0.05), cx + px, y + sill + h * 0.52, cz + pz, yaw), 0x140f0d);
+  // eave: a deep dark overhang, which is what reads as a roof at this size
+  wood.add(at(envBox(span + 1.15, 0.14, 1.15), cx, y + sill + h + 0.62, cz, yaw), 0x0e0b0a);
+  wood.add(at(envBox(span + 0.8, 0.16, 0.7), cx, y + sill + h + 0.74, cz, yaw), 0x181310);
   // posts down to the ground
   for (const s of [-1, 1]) {
-    wood.add(at(envBox(0.16, h + 0.6, 0.16), cx + nx * (span / 2) * s, y, cz + nz * (span / 2) * s, yaw), 0x140f0d);
+    wood.add(at(envBox(0.14, sill + h + 0.62, 0.14), cx + nx * (span / 2) * s, y, cz + nz * (span / 2) * s, yaw), 0x140f0d);
   }
+}
+
+// --- blossom ---------------------------------------------------------------
+
+/** Where the key and the rim actually come from, so the mass can be graded. */
+const KEY_DIR = new THREE.Vector3(-4.5, 4.72, 5.0).normalize();
+const RIM_DIR = new THREE.Vector3(2.4, 5.6, -6.4).normalize();
+
+const BLOSSOM_DEEP = new THREE.Color(0xb05e7d);
+const BLOSSOM_MID = new THREE.Color(0xf5a8c2);
+const BLOSSOM_PALE = new THREE.Color(0xffd6e4);
+const BLOSSOM_LIGHT = new THREE.Color(0xfff5f9);
+const BLOSSOM_HAZE = new THREE.Color(0x8fa2b4);
+const BLOSSOM_TMP = new THREE.Color();
+const BLOSSOM_TMP2 = new THREE.Color();
+
+/**
+ * Colour through the mass, which is the entire difference between a canopy and
+ * a pink ball: deep dusky rose where a cluster faces away and sits inside the
+ * crown, near-white where it faces the key on the outside of the silhouette.
+ */
+function blossomTint(lit: number, rim: number, out: number, fade: number): number {
+  const t = smooth01(lit * 0.5 + 0.5);
+  BLOSSOM_TMP.copy(BLOSSOM_DEEP).lerp(BLOSSOM_MID, smooth01(out * 0.55 + t * 0.55));
+  BLOSSOM_TMP.lerp(BLOSSOM_PALE, t * t * out);
+  BLOSSOM_TMP.lerp(BLOSSOM_LIGHT, 0.5 * t * t * t * out);
+  // the warm rim catches the far edge of the crown
+  if (rim > 0) BLOSSOM_TMP.lerp(BLOSSOM_TMP2.setRGB(1, 0.78, 0.7), 0.16 * rim * rim * out);
+  return BLOSSOM_TMP.lerp(BLOSSOM_HAZE, fade).getHex();
+}
+
+/**
+ * A cherry in blossom: flared trunk, a fan of limbs, and a crown built from
+ * scattered clusters rather than a facet ball.
+ *
+ * The old canopy was seven icosahedra, and beyond about twelve units it read
+ * as exactly what it was — pink hexagons. The fix is not more subdivision, it
+ * is smaller forms: forty clusters of four to eight triangles each break the
+ * silhouette, let the limbs show through the gaps, and carry their own colour
+ * so the crown has depth instead of a single flat pink.
+ */
+function cherryTree(
+  wood: EnvBucket,
+  blossom: EnvBucket,
+  rng: Rng,
+  q: QualityTier,
+  x: number, y: number, z: number,
+  scale: number,
+  fade: number,
+  clusters: number,
+): void {
+  const bark = 0x53414a;
+  const sides = q === 'low' ? 5 : 6;
+  const trunkH = 1.9 * scale;
+  const lean = rng.signed() * 0.11;
+
+  // a root mound, so the trunk is visibly planted instead of stopping in the
+  // dark. Without it the tree reads as a lollipop pasted onto the sky.
+  const mound = envBlob(0.44 * scale, q === 'low' ? 0 : 1);
+  mound.scale(1.6, 0.34, 1.6);
+  wood.add(at(mound, x, y + 0.02 * scale, z, rng.range(0, TAU)), 0x241d22);
+  // flare, then the shaft: a cherry swells hard at the ground
+  wood.add(at(envCyl(0.17 * scale, 0.31 * scale, 0.34 * scale, sides), x, y, z), bark);
+  const trunk = envCyl(0.1 * scale, 0.18 * scale, trunkH, sides);
+  trunk.rotateZ(lean);
+  wood.add(at(trunk, x, y + 0.32 * scale, z), bark);
+
+  const tx = x - Math.sin(lean) * trunkH;
+  const ty = y + 0.32 * scale + Math.cos(lean) * trunkH;
+  const tz = z;
+
+  // The crown is ONE umbrella: an oblate shell, much wider than it is tall,
+  // filled with overlapping lumps and fringed with small ones. Five separate
+  // lobes on five limbs read as five puffs of candyfloss; a cherry reads as a
+  // single cloud with structure inside it.
+  const crownR = rng.range(1.02, 1.42) * scale;
+  const crownH = rng.range(0.44, 0.64) * scale;
+  const limbs = q === 'low' ? 3 : 5;
+  for (let i = 0; i < limbs; i++) {
+    const a = (i / limbs) * TAU + rng.range(-0.5, 0.5);
+    const reach = crownR * rng.range(0.45, 0.85);
+    const ex = tx + Math.cos(a) * reach;
+    const ey = ty + rng.range(0.1, 0.42) * scale;
+    const ez = tz + Math.sin(a) * reach;
+    wood.add(envStrut(tx, ty - 0.34 * scale, tz, ex, ey, ez, 0.028 * scale, 0.06 * scale, 4), bark);
+    if (q !== 'low') {
+      const ta = a + rng.range(-1.1, 1.1);
+      const tr = crownR * rng.range(0.3, 0.6);
+      wood.add(
+        envStrut(
+          ex, ey, ez,
+          ex + Math.cos(ta) * tr, ey + rng.range(0.02, 0.24) * scale, ez + Math.sin(ta) * tr,
+          0.014 * scale, 0.028 * scale, 4,
+        ),
+        bark,
+      );
+    }
+  }
+
+  /** Place one blossom form at a spherical offset inside the crown shell. */
+  const put = (u: number, shell: number, up: number, size: number, small: boolean): void => {
+    const ox = Math.cos(u) * crownR * shell;
+    const oz = Math.sin(u) * crownR * shell;
+    const oy = crownH * up;
+    const len = Math.hypot(ox / crownR, oy / crownH, oz / crownR) || 1;
+    const lit = (ox / crownR * KEY_DIR.x + (oy / crownH) * KEY_DIR.y + (oz / crownR) * KEY_DIR.z) / len;
+    const rim = (ox / crownR * RIM_DIR.x + (oy / crownH) * RIM_DIR.y + (oz / crownR) * RIM_DIR.z) / len;
+    const geo = small ? envTetra(size * 1.25) : envOcta(size);
+    geo.scale(1.24, 0.8, 1.24);
+    geo.rotateX(rng.signed() * 0.55);
+    blossom.add(
+      at(geo, tx + ox, ty + oy, tz + oz, rng.range(0, TAU)),
+      blossomTint(lit, rim, clamp01(Math.hypot(shell, up * 0.7)), fade),
+    );
+  };
+
+  // the body: a dozen fat lumps filling the umbrella
+  const masses = q === 'low' ? 7 : q === 'medium' ? 10 : 13;
+  for (let i = 0; i < masses; i++) {
+    const u = (i / masses) * TAU + rng.range(-0.5, 0.5);
+    put(
+      u,
+      i === 0 ? rng.range(0, 0.25) : rng.range(0.2, 0.72),
+      rng.range(-0.45, 0.85),
+      rng.range(0.27, 0.44) * scale,
+      false,
+    );
+  }
+  // the fringe: small forms out on the shell, which is what tears the outline
+  for (let i = 0; i < clusters; i++) {
+    const u = rng.range(0, TAU);
+    const shell = 0.68 + 0.42 * Math.sqrt(rng.next());
+    const small = rng.bool(0.55);
+    put(
+      u,
+      shell,
+      rng.range(-0.85, 1.05) * (1.15 - shell * 0.5),
+      (small ? rng.range(0.075, 0.13) : rng.range(0.14, 0.23)) * scale,
+      small,
+    );
+  }
+}
+
+// --- the horizon -----------------------------------------------------------
+
+/**
+ * Mount Fuji.
+ *
+ * The profile is the point. Fuji is not a triangle: its flanks are concave,
+ * steep at the summit (about 32 degrees) and flattening to almost nothing at
+ * the skirt, and the summit itself is a small rounded crown rather than a
+ * point. That is `y = H (1 - u)^n` for `u = r/R` with n around 2.6, capped
+ * with a quadratic that meets the flank tangentially, and it is instantly
+ * recognisable where a cone is not.
+ *
+ * Only the top of the cone is built. The skirt of a mountain this size runs
+ * halfway across the world and there is no terrain out there to bury it in, so
+ * the mesh stops where the vertex alpha reaches zero and the rest of the
+ * mountain is haze, which is also how it actually looks.
+ */
+/**
+ * Solve for the world height that lands a given fraction down the frame at a
+ * given distance from the camera, measured at the framing a run starts in:
+ * eye 5.5 above the plate, 23 degree half-FOV, 0.5 rad of downward pitch.
+ *
+ * Everything on the horizon is authored through this rather than by world
+ * size, because a tenth of a frame is the whole difference between a mountain
+ * and a smudge, and the arithmetic that gets you there is not intuitive: the
+ * top of frame is already 5.6 degrees BELOW the true horizon, so a hill
+ * standing on the garden floor forty units out projects HIGHER than Fuji's
+ * summit unless it is deliberately sunk below the floor plane.
+ */
+const CAM_EYE = 5.5;
+const CAM_HALF_FOV = 0.4014;
+const CAM_PITCH = 0.5;
+function heightAtFrame(frac: number, distance: number): number {
+  return CAM_EYE - distance * Math.tan(CAM_PITCH - CAM_HALF_FOV + frac * 2 * CAM_HALF_FOV);
+}
+
+const FUJI_R = 35;
+const FUJI_H = 8.76;
+const FUJI_N = 2.6;
+const FUJI_U0 = 0.055;
+/** Where the alpha fade starts and finishes, as heights up the full cone. */
+const FUJI_FADE_LO = 1.8;
+const FUJI_FADE_HI = 4.2;
+
+function fujiProfile(u: number): number {
+  if (u >= FUJI_U0) return FUJI_H * Math.pow(1 - u, FUJI_N);
+  // quadratic cap, C1-continuous with the flank: a slightly flattened summit
+  const k = (FUJI_N * FUJI_H * Math.pow(1 - FUJI_U0, FUJI_N - 1)) / (2 * FUJI_U0);
+  const top = FUJI_H * Math.pow(1 - FUJI_U0, FUJI_N) + k * FUJI_U0 * FUJI_U0;
+  return top - k * u * u;
+}
+
+/** Radius where the cone reaches a given height. Inverse of the flank. */
+function fujiRadiusAt(h: number): number {
+  const t = clamp01(h / FUJI_H);
+  return (1 - Math.pow(t, 1 / FUJI_N)) * FUJI_R;
+}
+
+const FUJI_ROCK = new THREE.Color(0x1c2836);
+const FUJI_ROCK_DARK = new THREE.Color(0x0a0f16);
+/**
+ * Snow, deliberately over-bright. At 60 units the exponential fog has already
+ * eaten 60% of this before it reaches the frame, so a snowcap authored at
+ * paper-white lands as mid-grey and Fuji becomes a bald hill. Vertex colours
+ * are a straight linear multiplier and three does not clamp them, so the cap
+ * is pushed past 1 and the fog brings it back to white.
+ */
+const FUJI_SNOW = new THREE.Color(0xcfe2f5).multiplyScalar(2.1);
+const FUJI_TMP = new THREE.Color();
+
+/**
+ * @param seg  azimuthal segments — the snow tongues are only as ragged as this
+ * @param rings vertical rings from the fade line up to the summit
+ */
+function buildFuji(seg: number, rings: number, baseY: number): THREE.BufferGeometry {
+  const uMax = 1 - Math.pow(FUJI_FADE_LO / FUJI_H, 1 / FUJI_N);
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+
+  // Snow line about a third down, with tongues running lower in the gullies.
+  const snowLine = (a: number): number =>
+    FUJI_H * (0.66 + 0.075 * Math.sin(a * 7.3 + 0.9) + 0.055 * Math.sin(a * 13.1 - 2.1) + 0.04 * Math.sin(a * 3.7 + 1.7));
+
+  for (let ri = 0; ri <= rings; ri++) {
+    const t = ri / rings;
+    // pack the rings toward the summit, where the curvature lives
+    const u = uMax * (1 - t) * (1 - t * 0.35);
+    const h = fujiProfile(u);
+    for (let si = 0; si < seg; si++) {
+      const a = (si / seg) * TAU;
+      // the mountain is not a solid of revolution: ridges and a broad shoulder
+      const swell = 1 + 0.075 * Math.sin(a + 0.8) + 0.04 * Math.sin(a * 2 - 1.3) + 0.022 * Math.sin(a * 5 + 0.4);
+      const rr = u * FUJI_R * swell;
+      const y = h + 0.06 * FUJI_H * Math.sin(a * 3.1 + 2.2) * u;
+      pos.push(Math.cos(a) * rr, baseY + y, Math.sin(a) * rr);
+      // outward-and-up, which is close enough for something this hazed
+      const slope = 0.42 + 0.5 * (1 - u);
+      const nl = Math.hypot(1, slope);
+      nrm.push(Math.cos(a) / nl, slope / nl, Math.sin(a) / nl);
+
+      const sn = smooth01((y - snowLine(a)) / (FUJI_H * 0.045));
+      FUJI_TMP.copy(FUJI_ROCK_DARK).lerp(FUJI_ROCK, smooth01(0.35 + Math.cos(a + 0.7) * 0.5));
+      FUJI_TMP.lerp(FUJI_SNOW, sn);
+      const alpha = smooth01((y - FUJI_FADE_LO) / (FUJI_FADE_HI - FUJI_FADE_LO));
+      col.push(FUJI_TMP.r, FUJI_TMP.g, FUJI_TMP.b, alpha);
+    }
+  }
+  for (let ri = 0; ri < rings; ri++) {
+    const a0 = ri * seg;
+    const b0 = a0 + seg;
+    for (let si = 0; si < seg; si++) {
+      const s1 = (si + 1) % seg;
+      idx.push(a0 + si, b0 + si, a0 + s1);
+      idx.push(a0 + s1, b0 + si, b0 + s1);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  g.setIndex(idx);
+  return g;
+}
+
+/**
+ * A ridgeline: a closed silhouette all the way round, whose top edge is fbm
+ * and whose bottom dissolves. Two of them at different radii is what turns a
+ * flat horizon into distance, and because it closes on itself there is no yaw
+ * where the far edge of the garden is empty.
+ */
+function buildRidge(
+  seg: number,
+  radius: number,
+  crestY: number,
+  amp: number,
+  drop: number,
+  seed: number,
+  tint: THREE.Color,
+  peak: number,
+): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  const rows = 3;
+
+  for (let si = 0; si < seg; si++) {
+    const a = (si / seg) * TAU;
+    const wob = fbm2(Math.cos(a) * 5.5 + seed, Math.sin(a) * 5.5 - seed, 3);
+    const wob2 = fbm2(Math.cos(a) * 13.5 - seed, Math.sin(a) * 13.5 + seed, 2);
+    const top = crestY + amp * (wob * 0.8 + wob2 * 0.34);
+    const rr = radius * (1 + 0.05 * wob);
+    for (let ri = 0; ri <= rows; ri++) {
+      const t = ri / rows;
+      const y = top - t * drop;
+      pos.push(Math.cos(a) * rr, y, Math.sin(a) * rr);
+      // Straight up, not outward. A ridge normal that follows the azimuth
+      // makes the hills bright on the key's side of the ring and invisible on
+      // the other, which is a lighting swing the horizon cannot afford when
+      // the camera turns a full circle.
+      nrm.push(0, 1, 0);
+      // brighter along the crest, where the sky rakes across the ridge
+      const lift = 1 + peak * (1 - t) * (1 - t);
+      const alpha = ri === 0 ? 1 : smooth01(1.3 - t * 2.2);
+      col.push(tint.r * lift, tint.g * lift, tint.b * lift, alpha);
+    }
+  }
+  for (let si = 0; si < seg; si++) {
+    const a0 = si * (rows + 1);
+    const b0 = ((si + 1) % seg) * (rows + 1);
+    for (let ri = 0; ri < rows; ri++) {
+      idx.push(a0 + ri, a0 + ri + 1, b0 + ri);
+      idx.push(b0 + ri, a0 + ri + 1, b0 + ri + 1);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  g.setIndex(idx);
+  return g;
+}
+
+/** DEV-ONLY probe: per-environment draw calls and triangles. Removed at the end. */
+function envStats(name: string, root: THREE.Object3D): void {
+  if (typeof window === 'undefined') return;
+  let draws = 0;
+  let tris = 0;
+  root.traverse((o) => {
+    const mm = o as THREE.Mesh;
+    if (!mm.isMesh || !mm.geometry) return;
+    draws++;
+    const g = mm.geometry;
+    const pos = g.getAttribute('position');
+    tris += (g.index ? g.index.count : pos ? pos.count : 0) / 3;
+  });
+  const w = window as unknown as { __envStats?: Record<string, [number, number]> };
+  w.__envStats = { ...(w.__envStats ?? {}), [name]: [draws, Math.round(tris)] };
 }
 
 // --- the build -------------------------------------------------------------
@@ -1436,14 +2177,30 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     map: m.texture('sushi.env.hinoki.map', paintHinoki, { size: 256, repeat: [0.1, 0.62] }),
     bumpMap: m.dataTexture('sushi.env.hinoki.bump', paintHinokiBump, { size: 256, repeat: [0.1, 0.62] }),
     bumpScale: 0.004,
-    roughness: 0.4,
+    // Blond wood under a 2.6-intensity key was the second brightest surface in
+    // the frame and it owned the bottom third of it. The answer is not more
+    // brown paint — it is to stop the slab behaving like a mirror. At 0.4 the
+    // whole top carried one broad specular sheet; at 0.68 it goes matte, the
+    // env map contribution falls with it, and the salmon gets its highlight
+    // back. The rest of the fix is the light pool baked in below.
+    roughness: 0.68,
     metalness: 0,
     vertexColors: true,
   });
-  const gravelMat = m.standard('sushi.env.gravel', {
+  const gravelMat = m.standard('sushi.env.karesansui', {
     color: 0xffffff,
-    map: m.texture('sushi.env.gravel.map', paintGravel, { size: 256, repeat: [1, 1] }),
-    roughness: 0.96,
+    map: m.texture('sushi.env.karesansui.map', paintKaresansui, {
+      size: 1024,
+      repeat: [1, 1],
+      wrap: THREE.ClampToEdgeWrapping,
+    }),
+    normalMap: m.dataTexture('sushi.env.karesansui.nrm', paintKaresansuiNormal, {
+      size: 1024,
+      repeat: [1, 1],
+      wrap: THREE.ClampToEdgeWrapping,
+    }),
+    normalScale: 1.15,
+    roughness: 0.93,
     metalness: 0,
     vertexColors: true,
     transparent: true,
@@ -1469,75 +2226,117 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     clearcoatRoughness: 0.1,
     vertexColors: true,
   });
-  const blossomMat = m.physical('sushi.env.blossom', {
+  const blossomMat = m.physical('sushi.env.blossom2', {
     color: 0xffffff,
-    roughness: 0.86,
+    roughness: 0.82,
     metalness: 0,
-    sheen: 0.6,
+    sheen: 0.9,
     sheenColor: 0xffd7e2,
-    sheenRoughness: 0.6,
-    // A faint rose self-light. Flat-shaded facets turned away from the key
-    // were falling to maroon, and maroon blossom against a blue night is the
-    // one thing this theme cannot afford — the pink IS the signature image.
-    emissive: 0x3d1a26,
-    emissiveIntensity: 0.5,
+    sheenRoughness: 0.55,
+    // A whisper of self-light, no more. The clusters now carry their own
+    // shading in vertex colour, so the emissive lift that used to keep the
+    // shadow side off maroon can come most of the way back down — and the
+    // crown finally has a dark side, which is what gives it volume.
+    emissive: 0x2a1119,
+    emissiveIntensity: 0.34,
     vertexColors: true,
-    flatShading: true,
   });
   const glowMat = m.standard('sushi.env.glow', {
     color: 0x120a06,
     emissive: 0xffb877,
-    emissiveIntensity: 1.15,
+    emissiveIntensity: 1.05,
     roughness: 1,
     metalness: 0,
     vertexColors: true,
   });
-  const petalMat = m.standard('sushi.env.petal', {
-    color: 0x1a1014,
-    emissive: 0xffb8cc,
-    emissiveIntensity: 0.62,
+  const petalMat = m.physical('sushi.env.petal2', {
+    // Lit, not emissive. A real albedo plus sheen means a petal turning
+    // through the rim light flashes warm and then falls back to cool, which is
+    // the whole reason to have them.
+    color: 0xffdbe6,
+    roughness: 0.72,
+    metalness: 0,
+    sheen: 1,
+    sheenColor: 0xffffff,
+    sheenRoughness: 0.35,
+    emissive: 0x2a161e,
+    emissiveIntensity: 0.3,
+    transparent: true,
+    opacity: 0.93,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const hazeMat = m.standard('sushi.env.haze', {
+    color: 0xffffff,
     roughness: 1,
     metalness: 0,
+    vertexColors: true,
     transparent: true,
-    opacity: 0.9,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
 
   const counter = new EnvBucket();
   const matte = new EnvBucket();
-  const wood = new EnvBucket();
-  const satin = new EnvBucket();
   const blossom = new EnvBucket();
   const glow = new EnvBucket();
+  // On low the satin and wood families fold into the matte draw: a clearcoat
+  // and a semi-gloss are a luxury next to holding the draw count down, and
+  // every one of those props is under a hundred pixels on a phone.
+  const satin = q === 'low' ? matte : new EnvBucket();
+  const wood = q === 'low' ? matte : new EnvBucket();
 
   // ---- the counter -------------------------------------------------------
-  // A single thick slab of hinoki. Its top surface is the plate's table.
-  const slabR = envPick(q, 1, 2, 3);
-  const slab = roundedBox(COUNTER_W, COUNTER_T, COUNTER_D, 0.05, slabR);
-  counter.add(at(slab, 0, deck - COUNTER_T, 0), 0xffffff);
+  // A single thick slab of hinoki, tessellated across the top so a pool of
+  // lantern light can be baked into it.
+  const slab = new THREE.BoxGeometry(COUNTER_W, COUNTER_T, COUNTER_D, envPick(q, 10, 14, 18), 1, envPick(q, 4, 6, 8));
+  slab.translate(0, deck - COUNTER_T / 2, 0);
+  /**
+   * The counter's real problem was never its albedo, it was that a flat plane
+   * two metres wide takes the key light evenly from end to end and therefore
+   * reads as one enormous highlight. A bar is not lit like that: it is lit in
+   * a pool around where the chef is working, and falls away into the dark at
+   * both ends. Baked here rather than added as a light, because the rig is
+   * three-point studio and shared by every theme.
+   */
+  const pool = (x: number, y: number, z: number): number => {
+    const r = Math.hypot(x * 0.82, z);
+    const fall = 1 - 0.74 * smooth01((r - 1.2) / 3.9);
+    const lip = y < deck - COUNTER_T * 0.4 ? 0.55 : 1;
+    return 0.94 * fall * lip;
+  };
+  counter.add(slab, 0xffffff, pool);
   // end grain: a hair proud of each short end so the edge reads as a cut face
   for (const s of [-1, 1]) {
     counter.add(
       at(envBox(0.05, COUNTER_T * 0.92, COUNTER_D * 0.985), s * (COUNTER_W / 2), deck - COUNTER_T * 0.96, 0),
       0xd8c8a4,
+      pool,
+    );
+  }
+  // a lacquered nosing along both long edges: the bevel, and a dark line that
+  // stops the slab from meeting the gravel as one continuous pale field
+  for (const s of [-1, 1]) {
+    matte.add(
+      at(envBox(COUNTER_W + 0.06, 0.075, 0.1), 0, deck - 0.075, s * (COUNTER_D / 2 + 0.02)),
+      0x140f11,
     );
   }
   // recessed base, so the slab reads as thick and floating
   const baseH = FLOOR_DROP - COUNTER_T;
-  counter.add(at(envBox(COUNTER_W * 0.78, baseH, COUNTER_D * 0.5), 0, floorY, 0), 0x6d6152);
-  counter.add(at(envBox(COUNTER_W * 0.82, 0.09, COUNTER_D * 0.56), 0, floorY, 0), 0x4a4238);
+  matte.add(at(envBox(COUNTER_W * 0.78, baseH, COUNTER_D * 0.5), 0, floorY, 0), 0x2b2822);
+  matte.add(at(envBox(COUNTER_W * 0.82, 0.09, COUNTER_D * 0.56), 0, floorY, 0), 0x1c1a16);
 
   // ---- on the counter ----------------------------------------------------
   // Everything on the bar is pushed down to the far ends of it: rule (b), out
   // past PROP_R and never more than PROP_LIFT proud of the counter.
   // PROP_R is a floor on the CENTRE; each prop is clamped with enough extra
   // margin that its widest reach — a chopstick tip, a twig — also clears.
-  const [dishX, dishZ] = clearOf(4.85 + rng.range(-0.15, 0.2), 1.35 + rng.range(-0.12, 0.12), 5.2);
+  const [dishX, dishZ] = clearOf(4.35 + rng.range(-0.15, 0.2), 1.2 + rng.range(-0.12, 0.12), 4.75);
   satin.add(at(envCyl(0.42, 0.36, 0.11, 20), dishX, deck, dishZ), 0x0b1013);
   satin.add(at(envCyl(0.34, 0.34, 0.02, 20), dishX, deck + 0.075, dishZ), 0x241a12);
 
-  const [restX, restZ] = clearOf(-(5.05 + rng.range(-0.1, 0.2)), -(1.3 + rng.range(-0.12, 0.12)), 5.3);
+  const [restX, restZ] = clearOf(-(4.5 + rng.range(-0.1, 0.2)), -(1.2 + rng.range(-0.12, 0.12)), 4.85);
   const rest = pillow(0.44, 0.11, 0.17, { round: 0.75, segments: 12, squash: 0.45 });
   satin.add(at(rest, restX, deck, restZ, rng.range(-0.3, 0.3)), 0x22333c);
   for (let i = 0; i < 2; i++) {
@@ -1548,12 +2347,12 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // a folded indigo cloth
-  const [clothX, clothZ] = clearOf(-(4.85 + rng.range(0, 0.3)), 1.4 + rng.range(-0.12, 0.12), 5.4);
+  const [clothX, clothZ] = clearOf(-(4.4 + rng.range(0, 0.3)), 1.25 + rng.range(-0.12, 0.12), 4.9);
   matte.add(at(envBox(0.95, 0.05, 0.62), clothX, deck, clothZ, 0.22), 0x14243f);
   matte.add(at(envBox(0.86, 0.05, 0.5), clothX - 0.04, deck + 0.05, clothZ + 0.02, 0.18), 0x1b2f4e);
 
   // a single branch in a vase — the ikebana. Capped at PROP_LIFT.
-  const [vaseX, vaseZ] = clearOf(4.9 + rng.range(0, 0.3), -(1.35 + rng.range(-0.12, 0.15)), 5.4);
+  const [vaseX, vaseZ] = clearOf(4.4 + rng.range(0, 0.3), -(1.2 + rng.range(-0.12, 0.15)), 4.9);
   satin.add(at(envCyl(0.17, 0.24, 0.55, 14), vaseX, deck, vaseZ), 0x16323a);
   satin.add(at(envCyl(0.2, 0.17, 0.08, 14), vaseX, deck + 0.53, vaseZ), 0x1d3f47);
   const branch = envCyl(0.014, 0.032, 0.82, 5);
@@ -1564,24 +2363,34 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     twig.rotateZ(rng.range(0.6, 1.1) * (i % 2 ? 1 : -1));
     twig.rotateY(rng.range(0, TAU));
     wood.add(at(twig, vaseX + 0.11 + i * 0.08, deck + 0.78 + i * 0.14, vaseZ - i * 0.06), 0x3a2b2d);
-    blossom.add(
-      at(envBlob(rng.range(0.07, 0.1), detail), vaseX + 0.17 + i * 0.13, deck + 0.9 + i * 0.16, vaseZ - rng.next() * 0.12),
-      0xfcc8d6,
-    );
+    for (let b = 0; b < 3; b++) {
+      const s = rng.range(0.03, 0.055);
+      const bud = rng.bool(0.5) ? envOcta(s) : envTetra(s * 1.2);
+      blossom.add(
+        at(
+          bud,
+          vaseX + 0.15 + i * 0.13 + rng.signed() * 0.07,
+          deck + 0.88 + i * 0.16 + rng.range(0, 0.1),
+          vaseZ - rng.next() * 0.14,
+          rng.range(0, TAU),
+        ),
+        blossomTint(rng.range(-0.4, 1), 0, 1, 0),
+      );
+    }
   }
 
   // ---- the garden floor --------------------------------------------------
-  const gseg = envPick(q, 28, 44, 60);
+  const gseg = envPick(q, 30, 46, 64);
   const radii = envPick<readonly number[]>(
     q,
-    [2.4, 7, 13, 20, 26, 31],
-    [1.8, 4.2, 8, 12.5, 17, 21, 26, 31],
-    [1.6, 3.4, 6.4, 10, 14, 18, 22, 26, 31],
+    [2.4, 7, 13, 20, 26, GROUND_R],
+    [1.8, 4.2, 8, 12.5, 17, 21, 26, GROUND_R],
+    [1.6, 3.4, 6.4, 10, 14, 18, 22, 26, GROUND_R],
   );
   // The fade has to start BEYOND the treeline or the trunks stand on nothing.
-  const ground = envGround(radii, gseg, 0.19, (r) => {
-    const fade = 1 - THREE.MathUtils.smoothstep(r, 19, 30);
-    const dark = 1 - 0.4 * THREE.MathUtils.smoothstep(r, 3, 24);
+  const ground = envGround(radii, gseg, (r) => {
+    const fade = 1 - smooth01((r - 19) / 11);
+    const dark = 1 - 0.34 * smooth01((r - 3) / 21);
     return [dark, dark * 0.99, dark * 1.02, fade];
   });
   ground.translate(0, floorY, 0);
@@ -1590,6 +2399,45 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   groundMesh.receiveShadow = false;
   groundMesh.renderOrder = -1;
   root.add(groundMesh);
+
+  // ---- the stones --------------------------------------------------------
+  // Fifteen stones in five groups, at the fixed bearings the rake was baked
+  // around. Sizes descend inside a group so each one has a clear parent.
+  for (const grp of STONE_GROUPS) {
+    const grng = new Rng(grp.seed);
+    const gx = Math.cos(grp.a) * grp.r;
+    const gz = Math.sin(grp.a) * grp.r;
+    for (let i = 0; i < grp.n; i++) {
+      const a = grng.range(0, TAU);
+      const rr = i === 0 ? 0 : grp.spread * (0.35 + 0.65 * Math.sqrt(grng.next()));
+      const size = grp.tall * (i === 0 ? 1 : grng.range(0.42, 0.78));
+      gardenStone(
+        matte,
+        grng,
+        gx + Math.cos(a) * rr,
+        floorY,
+        gz + Math.sin(a) * rr,
+        size,
+        i === 0 && grp.n > 2,
+        detail,
+        grng.bool(0.6) ? 0x424a52 : 0x333b42,
+      );
+    }
+    // a low moss swell under the group, so the stones sit in something
+    const mound = envBlob(grp.spread * 1.5, detail);
+    mound.scale(1.25, 0.16, 1.15);
+    matte.add(
+      at(mound, gx + Math.cos(grp.a + 1.9) * grp.spread * 0.5, floorY, gz + Math.sin(grp.a + 1.9) * grp.spread * 0.5, grng.range(0, TAU)),
+      0x2c4630,
+    );
+  }
+  // the three free moss islands get a swell too
+  for (let i = 5; i < MOSS.length; i++) {
+    const p = MOSS[i];
+    const mound = envBlob(p.r * 0.92, detail);
+    mound.scale(1.3, 0.13, 1.1);
+    matte.add(at(mound, p.x, floorY, p.z, p.seed), 0x2c4630);
+  }
 
   // ---- mid ground --------------------------------------------------------
   // tsukubai: a squat stone basin, a bamboo spout, a black disc of water
@@ -1608,22 +2456,8 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // the thread of water, hung from the spout's mouth down to the basin
   satin.add(at(envCyl(0.013, 0.011, 0.33, 4), bx + 0.13, floorY + 0.99, bz + 0.24), 0x8fb6c4);
 
-  // rocks and moss, never evenly spaced
-  const rocks = envPick(q, 5, 9, 13);
-  for (let i = 0; i < rocks; i++) {
-    const a = (i / rocks) * TAU + rng.range(-0.35, 0.35);
-    const r = rng.range(7.5, 12.5);
-    const s = rng.range(0.3, 0.85);
-    const rock = envBlob(s, detail);
-    rock.scale(rng.range(0.9, 1.5), rng.range(0.4, 0.7), rng.range(0.9, 1.4));
-    matte.add(
-      at(rock, Math.cos(a) * r, floorY + s * 0.2, Math.sin(a) * r, rng.range(0, TAU)),
-      rng.bool(0.6) ? 0x2c3239 : 0x1e2a25,
-    );
-  }
-
   // ---- background --------------------------------------------------------
-  const fences = envPick(q, 5, 7, 9);
+  const fences = envPick(q, 4, 6, 8);
   for (let i = 0; i < fences; i++) {
     const bearing = (i / fences) * TAU + rng.range(-0.16, 0.16);
     bambooFence(wood, rng, rng.range(9.6, 10.8), bearing, rng.range(5.5, 7.5), floorY, 0x8d8a5c);
@@ -1636,51 +2470,98 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     stoneLantern(matte, glow, rng.range(0.85, 1.15), Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0, TAU), 0x424a52);
   }
 
-  // A near-continuous lit wall: the warm paper behind the dark garden is the
-  // only warm light in the theme and it has to be on screen at every yaw.
+  // A near-continuous run of lit paper: the warm light behind the dark garden
+  // is the only warm note in the theme and it has to be on screen at every
+  // yaw — but low, so it sits under the ridgelines rather than through them.
   const walls = envPick(q, 4, 6, 7);
   for (let i = 0; i < walls; i++) {
     const bearing = (i / walls) * TAU + rng.range(-0.12, 0.12) + 0.6;
-    shojiWall(wood, glow, rng.range(13.5, 15.5), bearing, rng.range(6.5, 8.5), floorY, envPick(q, 3, 4, 5));
+    shojiWall(wood, glow, rng.range(15.5, 17.5), bearing, rng.range(6.5, 8.5), floorY, envPick(q, 3, 4, 5));
   }
 
-  // A treeline, not a lollipop: more trees, each smaller, all of them planted
-  // well inside the solid part of the ground so a trunk always has earth under
-  // it. Canopy tops land around the counter plane, so the blossom reads as a
-  // band of pink beside the tower rather than a mass behind its top.
-  const trees = envPick(q, 10, 16, 20);
+  // A treeline, not a lollipop: many small trees rather than a few big ones,
+  // all planted inside the solid part of the ground so a trunk always has
+  // earth under it, and with crowns topping out just above the counter plane
+  // so the blossom bands beside the tower instead of massing behind its top.
+  const trees = envPick(q, 16, 20, 24);
+  const clusters = envPick(q, 20, 28, 34);
   for (let i = 0; i < trees; i++) {
-    const a = (i / trees) * TAU + rng.range(-0.18, 0.18);
-    const r = rng.range(10.6, 15.5);
-    // a floor on the wash so even the nearest canopy is blossom-pink, not magenta
-    const fade = THREE.MathUtils.clamp((r - 10) / 20, 0.14, 0.36);
-    // LOD by DISTANCE, not by size: beyond 12.5 units a canopy is a
-    // 20-triangle facet ball and nobody counts facets out there.
+    const a = (i / trees) * TAU + rng.range(-0.2, 0.2);
+    const r = rng.range(10.8, 15.0);
+    // a floor on the wash so even the nearest canopy is blossom-pink, not grey
+    const fade = clamp((r - 10) / 24, 0.05, 0.24);
     cherryTree(
       wood,
       blossom,
       rng,
-      detail,
+      q,
       Math.cos(a) * r,
       floorY,
       Math.sin(a) * r,
-      rng.range(0.82, 1.15),
+      rng.range(0.92, 1.26),
       fade,
-      r > 12.5 ? 0 : detail,
+      // the far half of the treeline is small on screen; spend the clusters
+      // where they are actually resolvable
+      Math.round(clusters * (r > 12.8 ? 0.62 : 1)),
     );
   }
 
+  // ---- the horizon -------------------------------------------------------
+  // Three depths, all drawn before the ground so they layer back to front:
+  // Fuji, a far ridge, a near ridge. Each dissolves at its base rather than
+  // standing on a line, because there is no terrain out there to stand on.
+  const fujiSeg = envPick(q, 34, 52, 72);
+  const fujiRings = envPick(q, 6, 9, 12);
+  // On the play camera's axis, nudged a few degrees off so the cone is not a
+  // perfectly centred hat on the tower. Fixed, never rolled: a landmark has a
+  // place. The orbit swings it through frame; the ridges keep every other yaw
+  // occupied, so no bearing is ever an empty horizon.
+  const fujiA = Math.PI * 1.25 + 0.11;
+  // 50 out from the middle, so 60 from the camera when it is looking straight
+  // at it. The summit is pinned 8% down the frame; everything else on the
+  // horizon then has to sit BELOW that, which is what the sunken ridge crests
+  // below are doing.
+  const fuji = buildFuji(fujiSeg, fujiRings, heightAtFrame(0.08, 60) - fujiProfile(0));
+  fuji.translate(Math.cos(fujiA) * 50, 0, Math.sin(fujiA) * 50);
+
+  // These carry RGB *and* alpha per vertex, so they cannot go through the
+  // tinting buckets — those overwrite the colour attribute with a flat RGB and
+  // the whole dissolve goes with it. Merged by hand, far layer first, so the
+  // blend order runs back to front inside the single draw.
+  const ridgeSeg = envPick(q, 48, 72, 96);
+  const horizon = mergeAll([
+    fuji,
+    buildRidge(ridgeSeg, 39, heightAtFrame(0.138, 49), 1.15, 3.4, 5.3, new THREE.Color(0x1b2634), 0.42),
+    buildRidge(ridgeSeg, 31, heightAtFrame(0.168, 41), 0.95, 3.2, 19.7, new THREE.Color(0x121a25), 0.32),
+  ]);
+  if (horizon) {
+    const hm = new THREE.Mesh(horizon, hazeMat);
+    hm.castShadow = false;
+    hm.receiveShadow = false;
+    hm.renderOrder = -6;
+    hm.frustumCulled = false;
+    root.add(hm);
+  }
+
   // ---- assemble ----------------------------------------------------------
-  const meshes: Array<THREE.Mesh | null> = [
-    counter.build(hinokiMat, false, true),
-    satin.build(satinMat, true, true),
-    matte.build(matteMat, false, true),
-    wood.build(woodMat, false, false),
-    blossom.build(blossomMat, false, false),
-    glow.build(glowMat, false, false),
-    buildPetals(envPick(q, 12, 34, 56), deck, rng, petalMat),
-  ];
-  for (const mesh of meshes) if (mesh) root.add(mesh);
+  const built = new Set<EnvBucket>();
+  const add = (b: EnvBucket, mat: THREE.Material, cast: boolean, receive: boolean, order = 0): void => {
+    if (built.has(b)) return;
+    built.add(b);
+    const mesh = b.build(mat, cast, receive);
+    if (!mesh) return;
+    mesh.renderOrder = order;
+    root.add(mesh);
+  };
+  add(counter, hinokiMat, false, true);
+  add(satin, satinMat, true, true);
+  add(matte, matteMat, false, true);
+  add(wood, woodMat, false, false);
+  add(blossom, blossomMat, false, false);
+  add(glow, glowMat, false, false);
+  const petals = buildPetals(envPick(q, 12, 34, 56), deck, rng, petalMat);
+  if (petals) root.add(petals);
+  envStats('sushi', root);
   return root;
 }
 
@@ -1773,6 +2654,8 @@ export const sushiTheme: ThemeDef = {
   glyph: '🍣',
   price: 1.99,
   palette: {
+    // Night, no disc, a cool moon halo and the only star field in the game.
+    sky: SKY_PRESETS.sushi,
     bgTop: 0x22384a,
     bgBottom: 0x0a1218,
     fog: 0x16242f,

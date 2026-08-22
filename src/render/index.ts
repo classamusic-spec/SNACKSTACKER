@@ -11,13 +11,13 @@ import { Backdrop, createBackdrop } from './backdrop';
 import { createEnvironment, EnvironmentRig } from './environment';
 import { createLightRig, LightRig, shadowMapSizeFor } from './lighting';
 import { createMaterialLibrary, MaterialLib } from './MaterialLibrary';
-import { copyPalette, DEFAULT_PALETTE, PALETTE_FADE } from './palette';
+import { copyPalette, DEFAULT_PALETTE, PALETTE_FADE, SKY_PRESETS } from './palette';
 import { createPostChain, PostChain } from './post';
 import { CameraShake } from './shake';
 import { cssHex, makeSurface } from './surface';
 
 export type { PostChain } from './post';
-export { DEFAULT_PALETTE } from './palette';
+export { DEFAULT_PALETTE, SKY_PRESETS } from './palette';
 export { MaterialLib } from './MaterialLibrary';
 
 export interface SceneKitOpts {
@@ -43,6 +43,34 @@ const DPR_CAP: Record<QualityTier, number> = { high: 2, medium: 1.75, low: 1.35 
 function clampDpr(tier: QualityTier, requested: number): number {
   const wanted = Number.isFinite(requested) && requested > 0 ? requested : 1;
   return Math.max(1, Math.min(wanted, DPR_CAP[tier]));
+}
+
+/**
+ * TEMPORARY — REMOVE. Content owns `palette.sky` and has not wired it yet, so
+ * this stands the presets up against the real themes long enough to measure
+ * them. Keyed on bgTop because that is unique per palette, and off by default
+ * unless the probe harness seeds the flag.
+ */
+const TEMP_SKY_BY_BGTOP: Record<number, keyof typeof SKY_PRESETS> = {
+  0xffe7c4: 'diner',
+  0x22384a: 'sushi',
+  0xffe3f5: 'candy',
+  0xffc46b: 'taco',
+  0xfff3d6: 'breakfast',
+  0xffe9c7: 'pizza',
+};
+let TEMP_skyFlag: string | null | undefined;
+function TEMP_injectSky(p: ThemePaletteLike): ThemePaletteLike {
+  if (TEMP_skyFlag === undefined) {
+    try {
+      TEMP_skyFlag = localStorage.getItem('snackery.sky');
+    } catch {
+      TEMP_skyFlag = null;
+    }
+  }
+  if (TEMP_skyFlag !== 'on' || p.sky) return p;
+  const id = TEMP_SKY_BY_BGTOP[p.bgTop];
+  return id ? { ...p, sky: SKY_PRESETS[id] } : p;
 }
 
 function nextTierDown(tier: QualityTier): QualityTier {
@@ -143,7 +171,7 @@ class Kit implements SceneKit {
       palette: start,
     });
 
-    this.backdrop = createBackdrop({ direct: this.post === null });
+    this.backdrop = createBackdrop({ direct: this.post === null, quality: tier });
     this.scene.add(this.backdrop.group);
 
     this.quality = {
@@ -181,6 +209,7 @@ class Kit implements SceneKit {
   // ------------------------------------------------------------- palette
 
   applyPalette(p: ThemePaletteLike, duration = PALETTE_FADE): void {
+    p = TEMP_injectSky(p);
     copyPalette(p, this.palette);
 
     this.fromFog.copy(this.fog.color);
@@ -337,6 +366,8 @@ class Kit implements SceneKit {
     });
     this.quality.bloom = this.post !== null;
     this.backdrop.setDirect(this.post === null);
+    // Fewer cloud octaves at the new tier. Only recompiles if a sky is up.
+    this.backdrop.setQuality(tier);
 
     // Toggling shadow maps changes every lit program's permutation, and three
     // only re-derives that when a material asks it to.

@@ -148,14 +148,22 @@ for (const id of THEMES) {
     { id, tier: TIER, sky: SKY },
   );
   await page.goto(process.env.SNACKERY_URL ?? 'http://localhost:4173/', {
-    waitUntil: 'networkidle',
+    waitUntil: 'load',
+    timeout: 120000,
   });
   await page.waitForTimeout(WAIT);
+  if (process.env.SN_PLAY === '1') {
+    // The home screen orbits, so two captures are never the same frame. Start
+    // a run instead: CAM_YAW is fixed at pi/4 there, which makes the sky
+    // reproducible shot to shot.
+    await page.getByRole('button', { name: /play/i }).first().click({ timeout: 20000 });
+    await page.waitForTimeout(3500);
+  }
   await page.evaluate(() => {
     const app = document.getElementById('app');
     if (app) app.style.display = 'none';
   });
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(1500);
 
   let fps = null;
   if (WANT_FPS) {
@@ -173,6 +181,14 @@ for (const id of THEMES) {
   const name = `${id}-${TIER}${TAG ? '-' + TAG : ''}`;
   const file = `${OUT}/${name}.png`;
   await page.screenshot({ path: file, timeout: 180000 });
+  // SN_SPIN=n: the home screen turntables a full revolution, so n extra shots
+  // spaced across it are the only way to see the sun disc, which sits 93 deg
+  // off the play camera's axis.
+  const spin = Number(process.env.SN_SPIN ?? 0);
+  for (let i = 1; i <= spin; i++) {
+    await page.waitForTimeout(Number(process.env.SN_SPIN_GAP ?? 9000));
+    await page.screenshot({ path: `${OUT}/${name}-spin${i}.png`, timeout: 180000 });
+  }
   const img = decodePng(readFileSync(file));
   const rows = POINTS.map(([label, u, v]) => {
     const x = Math.min(img.w - 1, Math.round(u * img.w));

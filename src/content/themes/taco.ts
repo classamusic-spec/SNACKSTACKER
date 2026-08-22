@@ -9,7 +9,8 @@
 import * as THREE from 'three';
 import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import { Rng } from '../../core/rng';
-import { TAU, clamp, clamp01 } from '../../core/math';
+import { TAU, clamp, clamp01, lerp } from '../../core/math';
+import { SKY_PRESETS } from '../../render/palette';
 import {
   fbm2,
   foldedShell,
@@ -25,16 +26,19 @@ import {
   areaRatio,
   catenary,
   envSeg,
+  facingQuad,
   fillFlat,
   fillGradient,
   finalize,
   flagLine,
+  hazeByRadius,
   lathe,
   longAxis,
   mergeEnv,
   noiseWash,
   propCount,
   propScale,
+  radialGlow,
   ribbon,
   safeD,
   safeH,
@@ -816,15 +820,15 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 // environment — a string-lit patio at dusk
 // ---------------------------------------------------------------------------
 //
-// Warm dusk turning to night: worn turquoise paint on a wooden table, a serape
-// runner under the plate, terracotta in the near field, and papel picado and
-// festoon bulbs strung against the last of the light.
+// The sun has just gone down behind the hill. The bulbs are on, the sky over
+// the wall is still hot at the bottom and going violet above it, and the town
+// is a stack of flat silhouettes between the two.
 //
 // The camera dictates the layout. It sits ~10 units out from the tower axis at
 // a fixed 0.5 rad pitch, which means:
 //
-//   * the horizon is off the top of frame, so the table has to reach past ~5.4
-//     units in every direction or the bottom of the screen falls off its edge;
+//   * the table has to reach past ~5.4 units in every direction or the bottom
+//     of the screen falls off its edge;
 //   * the table's far edge hides the foot of anything standing further out and
 //     lower down, which is how the pots and the wall stand on a patio floor
 //     that is never modelled;
@@ -833,6 +837,27 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 //     string here is a chord of a ring at 11.9-12.6 units for that reason —
 //     and because a chord of a ring is always broadside to a camera orbiting
 //     the middle, which is what makes the flags read from every angle.
+//
+// ## Where the sky is, and why the landscape is so low
+//
+// The frame top looks 4.5 degrees BELOW the true horizon, so the horizon line
+// is off the top of the screen and the whole world is seen from above. Two
+// consequences run through every number in the distance layers below.
+//
+// The band of open sky is the gap between the frame top and whatever the eye
+// last cleared, and it OPENS AS THE TOWER GROWS: the camera rides up with the
+// tower, the wall drops away under it, and the sky goes from about 7% of the
+// frame on the home screen to a quarter of it by layer fifteen. The sky is
+// therefore the thing that gets better the longer a run lasts, which is
+// exactly the right thing to spend the background budget on.
+//
+// And distant objects project HIGHER, so each successive layer has to be
+// physically LOWER than the one in front of it or it rides up out of frame.
+// The four crest heights below are not a landscape profile, they are the
+// solution to `y <= camY - distance * tan(frameTop)` evaluated at the lowest
+// camera the game ever uses (the first drop of a run), with enough margin left
+// over that the top third of the sky band stays empty. Move any of them up and
+// the ridge behind eats the sunset in front of it.
 
 /** Half-extents of the table. Both must clear the bottom of frame. */
 const TABLE_HALF_W = 6.4;
@@ -844,8 +869,35 @@ const PATIO_DROP = 2.7;
 const WALL_R = 12.9;
 const PAPEL_R = 12.4;
 const FESTOON_R = 11.9;
+/** The bulb run pinned to the wall itself — close enough to actually light it. */
+const WALL_LAMP_R = 12.45;
 /** The arc directly behind the tower in the play camera's view. */
 const BACK_ARC = Math.PI * 1.25;
+
+/** The four silhouette layers past the wall, nearest first. */
+const ROOF_R = 17.2;
+const TOWN_R = 26;
+const RIDGE_R = 42;
+const MESA_R = 60;
+
+/**
+ * Crest height of each layer, relative to the table top. Derived, not styled —
+ * see the note above. They descend because the layers recede.
+ */
+const ROOF_TOP = 2.16;
+const TOWN_TOP = 1.22;
+const RIDGE_TOP = -0.57;
+const MESA_TOP = -2.41;
+
+/** What the distance fades toward: the hot band of sky just over the wall. */
+const DUSK_HAZE = 0xf0b06a;
+
+/**
+ * Bearing of the sunset, taken from the sky preset rather than typed twice.
+ * The wall, the roofs and the ridge are all shaded against it, so if the
+ * render agent ever re-aims the sun the whole patio turns with it.
+ */
+const SUN_AZ = SKY_PRESETS.taco.sunAzimuth;
 
 const PAPEL_COLORS = [0xf2542d, 0xffb03a, 0x4cb944, 0xff7bb0, 0x7ad7f0, 0xfff0c9] as const;
 const CLAY_TINTS = [0xb0573a, 0xc06b45, 0x9c4a33, 0xc98055] as const;
@@ -928,11 +980,190 @@ function paintPatioWood(c: CanvasRenderingContext2D, size: number): void {
   noiseWash(c, size, 6, 0.1, 19, '#1E4A46', '#7FC0B5');
 }
 
-/** Sun-bleached stucco: warm rose plaster, mottled and chalky. */
+/**
+ * Hand-floated stucco. The albedo is colourless on purpose — every bit of hue
+ * on this wall comes from vertex colour, so the map can be a pure record of
+ * TROWEL, and it tiles eleven times around a 40-unit circle without ever
+ * showing a repeat because there is no feature in it big enough to recognise.
+ */
 function paintStucco(c: CanvasRenderingContext2D, size: number): void {
   fillFlat(c, size, '#FFFFFF');
-  noiseWash(c, size, 4, 0.26, 63, '#C6A090', '#FFFFFF');
-  speckle(c, size, 300, ['#EFDACE', '#CBA795'], 0.002, 0.012, 64, 0.35);
+  noiseWash(c, size, 4, 0.3, 63, '#B08C7E', '#FFFFFF');
+  // long, shallow float marks: the arcs a plasterer's trowel leaves
+  const rng = new Rng(0x51c0);
+  c.save();
+  for (let i = 0; i < 26; i++) {
+    const cx = rng.next() * size;
+    const cy = rng.next() * size;
+    const r = size * rng.range(0.18, 0.45);
+    const a0 = rng.range(0, TAU);
+    const pts: Array<[number, number]> = [];
+    for (let s = 0; s <= 8; s++) {
+      const a = a0 + (s / 8) * rng.range(0.5, 1.1);
+      pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r * 0.5]);
+    }
+    softStroke(c, pts, size * rng.range(0.004, 0.014), rng.bool(0.5) ? '#C9AB9C' : '#FFF8F2', 0.5, 4);
+  }
+  c.restore();
+  speckle(c, size, 420, ['#F3E2D8', '#C0A091', '#8E7062'], 0.0015, 0.009, 64, 0.4);
+}
+
+/** The same trowel, as height: this is what stops the wall reading as paper. */
+function paintStuccoBump(c: CanvasRenderingContext2D, size: number): void {
+  fillFlat(c, size, '#808080');
+  noiseWash(c, size, 3, 0.55, 63, '#3A3A3A', '#D8D8D8');
+  speckle(c, size, 520, ['#FFFFFF', '#2A2A2A'], 0.0015, 0.008, 64, 0.5);
+}
+
+/**
+ * Light the adobe wall by hand.
+ *
+ * The reason this exists: at the play camera the wall directly behind the
+ * tower faces about 87 degrees away from the key, so the key contributes
+ * essentially nothing to the only arc the player ever sees during a run. The
+ * previous fix was an emissive lift, which does raise it — uniformly, which is
+ * precisely what makes a wall look like a painted flat.
+ *
+ * What actually happens on that wall at dusk is three separate things, and
+ * doing them separately is what gives it form back:
+ *
+ *   * **sky bounce, by bearing.** The face pointing back at the sunset is warm
+ *     terracotta; the face pointing away from it is lit by the cool half of
+ *     the sky and goes violet. Across the ~46 degrees of wall a player sees
+ *     during a run that is a real gradient, not a tint.
+ *   * **sky bounce, by height.** Higher on the wall sees more sky, so it is
+ *     lighter. Down at the patio floor it sees mostly ground and goes dark.
+ *   * **the bulbs.** Inverse-square pools from the run of lamps pinned under
+ *     the coping. This is the part that lifts the shadow side, and because it
+ *     is LOCAL it lifts it into scallops instead of into a flat.
+ *
+ * Plus a shadow band under the coping, because a lip with no shadow under it
+ * is not a lip.
+ */
+function shadeAdobe(
+  geo: THREE.BufferGeometry,
+  opts: {
+    floorY: number;
+    crestY: number;
+    lamps: ReadonlyArray<THREE.Vector3>;
+    lampGain?: number;
+    lampReach?: number;
+    coping?: boolean;
+  },
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute | undefined;
+  if (!pos) return geo;
+  const { floorY, crestY, lamps } = opts;
+  const gain = opts.lampGain ?? 1;
+  const reach = Math.max(opts.lampReach ?? 1.9, 0.2);
+  const coping = opts.coping ?? true;
+
+  const shadeLow = new THREE.Color(0x3d2445).convertSRGBToLinear();
+  const shadeHigh = new THREE.Color(0x9a7290).convertSRGBToLinear();
+  const sunLow = new THREE.Color(0x8f5340).convertSRGBToLinear();
+  const sunHigh = new THREE.Color(0xe0a276).convertSRGBToLinear();
+  const lampColor = new THREE.Color(0xffa447).convertSRGBToLinear();
+
+  const span = Math.max(crestY - floorY, 1e-3);
+  const arr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      arr[i * 3] = arr[i * 3 + 1] = arr[i * 3 + 2] = 1;
+      continue;
+    }
+    const h = clamp01((y - floorY) / span);
+    // the inner face of a ring is lit where its own bearing is opposite the sun
+    const sunFace = clamp01(-Math.cos(Math.atan2(x, z) - SUN_AZ));
+    const warm = Math.pow(sunFace, 0.75);
+
+    let r = lerp(
+      lerp(shadeLow.r, shadeHigh.r, h),
+      lerp(sunLow.r, sunHigh.r, h),
+      warm,
+    );
+    let g = lerp(
+      lerp(shadeLow.g, shadeHigh.g, h),
+      lerp(sunLow.g, sunHigh.g, h),
+      warm,
+    );
+    let b = lerp(
+      lerp(shadeLow.b, shadeHigh.b, h),
+      lerp(sunLow.b, sunHigh.b, h),
+      warm,
+    );
+
+    if (coping) {
+      // a soft band of shadow thrown down the wall by the lip on top of it
+      const under = clamp01((y - (crestY - 0.42)) / 0.42) * clamp01((crestY - y) / 0.1);
+      const k = 1 - 0.42 * under;
+      r *= k;
+      g *= k;
+      b *= k;
+    }
+
+    let lit = 0;
+    for (let l = 0; l < lamps.length; l++) {
+      const p = lamps[l];
+      const dx = x - p.x;
+      const dy = y - p.y;
+      const dz = z - p.z;
+      const d2 = (dx * dx + dy * dy + dz * dz) / (reach * reach);
+      lit += 1 / (1 + d2 * d2);
+    }
+    lit = Math.min(lit * gain, 1.5);
+    r += lampColor.r * lit;
+    g += lampColor.g * lit;
+    b += lampColor.b * lit;
+
+    arr[i * 3] = Math.min(r, 4);
+    arr[i * 3 + 1] = Math.min(g, 4);
+    arr[i * 3 + 2] = Math.min(b, 4);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+/**
+ * A closed ring of ground seen edge-on — the whole trick behind the ridge and
+ * the mesa. Two triangles per segment, one draw for the entire horizon, and
+ * because it is a ring it reads identically at every yaw the home screen
+ * turns through.
+ */
+function ridgeRing(
+  segments: number,
+  baseY: number,
+  sample: (angle: number) => { r: number; y: number },
+): THREE.BufferGeometry | null {
+  const n = Math.max(8, Math.round(segments));
+  const verts: number[] = [];
+  let prev = sample(0);
+  if (!Number.isFinite(prev.r) || !Number.isFinite(prev.y)) return null;
+  for (let i = 1; i <= n; i++) {
+    const a0 = ((i - 1) / n) * TAU;
+    const a1 = (i / n) * TAU;
+    const cur = i === n ? sample(0) : sample(a1);
+    if (!Number.isFinite(cur.r) || !Number.isFinite(cur.y)) return null;
+    const x0 = Math.sin(a0) * prev.r;
+    const z0 = Math.cos(a0) * prev.r;
+    const x1 = Math.sin(a1) * cur.r;
+    const z1 = Math.cos(a1) * cur.r;
+    verts.push(x0, baseY, z0, x1, baseY, z1, x1, cur.y, z1);
+    verts.push(x0, baseY, z0, x1, cur.y, z1, x0, prev.y, z0);
+    prev = cur;
+  }
+  if (!verts.length) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Continuous around the ring by construction — noise sampled on the circle. */
+function ringNoise(angle: number, freq: number, seed: number): number {
+  return fbm2(Math.sin(angle) * freq + seed, Math.cos(angle) * freq - seed, 3);
 }
 
 function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
@@ -953,13 +1184,21 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const glass: Array<THREE.BufferGeometry | null> = [];
   const plant: Array<THREE.BufferGeometry | null> = [];
   const stucco: Array<THREE.BufferGeometry | null> = [];
+  const far: Array<THREE.BufferGeometry | null> = [];
   const papel: Array<THREE.BufferGeometry | null> = [];
   const bulbs: Array<THREE.BufferGeometry | null> = [];
-  // The low tier has a draw-call budget of about six, so the glossy salsa and
-  // the flat-shaded plants ride along in the matte clay pass there. Both keep
-  // their colour — only the finish is lost, and at that tier it never reads.
-  const foodOut = lo ? clay : food;
+  const glow: Array<THREE.BufferGeometry | null> = [];
+  // Low tier gets seven draws, and it buys them by dropping whole materials
+  // rather than by folding one look into another. The flat-shaded plants ride
+  // in the matte clay pass (at that tier they are eight pixels of cactus and
+  // the facet break never reads), the papel joins the distance pass (same
+  // matte double-sided vertex-coloured material, so it is a free merge), and
+  // the bottle glass and the bulb spheres are simply not built — the bulbs are
+  // carried by their glow sprites alone, which is the half of them that
+  // matters. What does NOT happen any more is the salsa losing its gloss:
+  // wet food two units from the lens is the last thing to economise on.
   const plantOut = lo ? clay : plant;
+  const papelOut = lo ? far : papel;
 
   // --- the table ----------------------------------------------------------
   // The serape is what the plate actually sits on, so the wood is dropped by
@@ -1020,10 +1259,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // --- props on the table -------------------------------------------------
-  // The frame is only ~22 degrees wide, so the two slots either side of the
-  // tower are the only ones on screen while playing; the rest are placed for
-  // the home screen's turntable.
-  const seg = envSeg(q, 16, 13, 9);
+  // The frame is only ~22 degrees wide and the tower itself covers the middle
+  // 61% of it, so at four units out a prop is only ON SCREEN during a run
+  // between about 0.42 and 0.72 radians either side of BACK_ARC. That window
+  // is 17 degrees wide and it is the entire near-field stage; everything
+  // outside it is placed for the home screen's turntable instead.
+  const propSeg = envSeg(q, 16, 13, 9);
 
   /** Terracotta salsa bowl with a pool of pico in it. */
   const salsaBowl = (arc: number, r: number): void => {
@@ -1044,7 +1285,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         [0.26, 0.08],
         [0, 0.06],
       ],
-      seg,
+      propSeg,
     );
     if (bowl) {
       bowl.translate(x, top, z);
@@ -1058,22 +1299,18 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         [0.3, 0.035],
         [0, 0.045],
       ],
-      seg,
+      propSeg,
     );
     if (salsa) {
       salsa.translate(x, top + 0.25, z);
-      foodOut.push(tintGeometry(salsa, 0xb3271b));
+      food.push(tintGeometry(salsa, 0xb3271b));
     }
     if (rich) {
       for (let i = 0; i < 7; i++) {
         const d = new THREE.BoxGeometry(0.05, 0.04, 0.05);
         d.rotateY(rng.range(0, TAU));
-        d.translate(
-          x + rng.signed() * 0.26,
-          top + 0.28,
-          z + rng.signed() * 0.26,
-        );
-        foodOut.push(tintGeometry(d, i % 3 === 0 ? 0x4cb944 : i % 3 === 1 ? 0xf2f0d8 : 0xd8382a));
+        d.translate(x + rng.signed() * 0.26, top + 0.28, z + rng.signed() * 0.26);
+        food.push(tintGeometry(d, i % 3 === 0 ? 0x4cb944 : i % 3 === 1 ? 0xf2f0d8 : 0xd8382a));
       }
     }
   };
@@ -1095,7 +1332,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         [0.28, 0.06],
         [0, 0.04],
       ],
-      seg,
+      propSeg,
     );
     if (dish) {
       dish.translate(x, top, z);
@@ -1131,7 +1368,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         wedge.rotateZ(0.1);
         wedge.rotateY(a + w * 2.1 + 0.6);
         wedge.translate(x + rng.signed() * 0.12, top + 0.13, z + rng.signed() * 0.12);
-        foodOut.push(wedge);
+        food.push(wedge);
       }
     }
   };
@@ -1156,7 +1393,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         [0.095, h],
         [0, h],
       ],
-      seg,
+      propSeg,
     );
     if (body) {
       body.translate(x, top, z);
@@ -1197,7 +1434,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         [0.19, 0.79],
         [0, 0.79],
       ],
-      seg,
+      propSeg,
     );
     if (body) {
       body.translate(x, top, z);
@@ -1210,13 +1447,72 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     clay.push(tintGeometry(handle, CLAY_TINTS[1]));
   };
 
-  salsaBowl(-0.52, 4.0);
-  coldBottle(0.5, 4.5);
+  /**
+   * The hurricane lamp: the one light source close enough to the plate to put
+   * warmth on the food. Everything else warm in this scene is eleven units
+   * away and can only light the wall.
+   */
+  const hurricaneLamp = (arc: number, r: number): void => {
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const base = lathe(
+      [
+        [0, 0],
+        [0.24, 0],
+        [0.26, 0.03],
+        [0.22, 0.07],
+        [0.19, 0.09],
+        [0.2, 0.13],
+        [0, 0.13],
+      ],
+      propSeg,
+    );
+    if (base) {
+      base.translate(x, top, z);
+      clay.push(tintGeometry(base, 0x4a3226));
+    }
+    // the chimney: a waisted glass shade, open at the top
+    const shade = lathe(
+      [
+        [0.2, 0],
+        [0.235, 0.12],
+        [0.235, 0.4],
+        [0.19, 0.56],
+        [0.185, 0.7],
+        [0.2, 0.78],
+      ],
+      propSeg,
+    );
+    if (shade) {
+      shade.translate(x, top + 0.11, z);
+      glass.push(shade);
+    }
+    const collar = new THREE.TorusGeometry(0.205, 0.022, 4, envSeg(q, 12, 10, 7));
+    collar.rotateX(Math.PI / 2);
+    collar.translate(x, top + 0.9, z);
+    clay.push(tintGeometry(collar, 0x4a3226));
+    // the flame, and the pool of light it puts on the cloth
+    const flame = new THREE.SphereGeometry(0.075, envSeg(q, 8, 7, 6), envSeg(q, 7, 6, 5));
+    flame.scale(0.8, 1.9, 0.8);
+    flame.translate(x, top + 0.36, z);
+    bulbs.push(flame);
+    glow.push(facingQuad(x, top + 0.38, z, 1.5, 1.5));
+    const pool = new THREE.PlaneGeometry(3.1, 3.1);
+    pool.rotateX(-Math.PI / 2);
+    pool.translate(x, top + 0.008, z);
+    glow.push(pool);
+  };
+
+  hurricaneLamp(-0.55, 4.5);
+  salsaBowl(0.47, 4.0);
+  if (rich) coldBottle(0.73, 4.95);
   if (rich) limeDish(-1.25, 3.9);
   if (rich) clayJug(2.1, 4.3);
   if (!lo) salsaBowl(2.95, 3.7);
   if (q === 'high') limeDish(3.05, 4.5);
   if (q === 'high') clayJug(-2.35, 4.6);
+  if (lo) coldBottle(0.73, 4.95);
 
   // Limes and a chilli rolled across the near edge of the table. The near arc
   // lands low in the frame, which is otherwise bare cloth and paint.
@@ -1232,20 +1528,21 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         chilli.rotateZ(Math.PI / 2);
         chilli.rotateY(rng.range(0, TAU));
         chilli.translate(x, top + 0.06, z);
-        foodOut.push(tintGeometry(chilli, rng.bool(0.5) ? 0xd8382a : 0x3f8f2f));
+        food.push(tintGeometry(chilli, rng.bool(0.5) ? 0xd8382a : 0x3f8f2f));
       } else {
         const lime = new THREE.SphereGeometry(0.15, envSeg(q, 10, 8, 6), envSeg(q, 8, 6, 5));
         lime.scale(1, 0.86, 1.18);
         lime.rotateY(rng.range(0, TAU));
         lime.translate(x, top + 0.12, z);
-        foodOut.push(tintGeometry(lime, rng.bool(0.5) ? 0x62a52c : 0x7bb534));
+        food.push(tintGeometry(lime, rng.bool(0.5) ? 0x62a52c : 0x7bb534));
       }
     }
   }
 
   // --- terracotta pots on the patio floor ---------------------------------
-  // The first two land either side of the tower in the play view; at 10 units
-  // out the frame is only about 20 degrees wide, so they have to be aimed.
+  // The first two land either side of the tower in the play view; at ten units
+  // out the on-screen window is only 0.25-0.45 rad off BACK_ARC, so they have
+  // to be aimed rather than scattered.
   const potArcs = lo
     ? [-0.33, 0.34, 2.4]
     : q === 'medium'
@@ -1314,23 +1611,270 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
   }
 
-  // --- stucco wall --------------------------------------------------------
-  const wallSeg = envSeg(q, 40, 30, 22);
+  // --- the wall's lamps, built first so the wall can be lit by them --------
   const wallLow = floor - 3.5;
-  const wallHigh = top + 1.55;
-  const wall = new THREE.CylinderGeometry(WALL_R, WALL_R, wallHigh - wallLow, wallSeg, 3, true);
-  wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
-  // The map is a colourless plaster mottle; the hue and the dusk falloff come
-  // from vertex colour, so the wall darkens into the patio instead of tiling.
-  stucco.push(tintGradientY(wall, 0xc4826a, 0xf2c79f, floor + 0.2, wallHigh));
-  // a pale coping course along the top, so the wall ends on a line of light
-  const coping = new THREE.CylinderGeometry(WALL_R + 0.16, WALL_R + 0.16, 0.22, wallSeg, 1, true);
-  coping.translate(0, wallHigh - 0.11, 0);
-  stucco.push(tintGradientY(coping, 0xeab694, 0xfbd6b2, wallHigh - 0.22, wallHigh));
-  const capRing = new THREE.RingGeometry(WALL_R - 0.05, WALL_R + 0.17, wallSeg, 1);
-  capRing.rotateX(-Math.PI / 2);
-  capRing.translate(0, wallHigh, 0);
-  stucco.push(tintGeometry(capRing, 0xfbdcbb));
+  const wallHigh = top + 1.15;
+  const lamps: THREE.Vector3[] = [];
+  {
+    const hooks = lo ? 14 : q === 'medium' ? 18 : 24;
+    for (let i = 0; i < hooks; i++) {
+      const a0 = (i / hooks) * TAU;
+      const a1 = ((i + 1) / hooks) * TAU;
+      const hookY = wallHigh - 0.34;
+      const pA = new THREE.Vector3(Math.sin(a0) * WALL_LAMP_R, hookY, Math.cos(a0) * WALL_LAMP_R);
+      const pB = new THREE.Vector3(Math.sin(a1) * WALL_LAMP_R, hookY, Math.cos(a1) * WALL_LAMP_R);
+      const path = catenary(pA, pB, 0.3, lo ? 4 : 6);
+      const cord = ribbon(path, 0.016, { tubular: lo ? 5 : 8, radial: 3 });
+      if (cord) papelOut.push(tintGeometry(cord, 0x3d2a20));
+      const p = path[Math.floor(path.length / 2)];
+      lamps.push(p.clone());
+      if (!lo) {
+        const bulb = new THREE.SphereGeometry(0.105, envSeg(q, 8, 7, 5), envSeg(q, 6, 5, 4));
+        bulb.scale(1, 1.3, 1);
+        bulb.translate(p.x, p.y - 0.06, p.z);
+        bulbs.push(bulb);
+      }
+      glow.push(facingQuad(p.x * 0.985, p.y - 0.06, p.z * 0.985, 1.15, 1.15));
+    }
+  }
+
+  // --- stucco wall --------------------------------------------------------
+  // Broken top line, a real coping course, piers standing proud of the face,
+  // and every bit of its colour computed rather than tinted. See shadeAdobe.
+  const wallSeg = envSeg(q, 56, 40, 28);
+  {
+    const wall = new THREE.CylinderGeometry(
+      WALL_R,
+      WALL_R,
+      wallHigh - wallLow,
+      wallSeg,
+      envSeg(q, 5, 4, 3),
+      true,
+    );
+    wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
+    stucco.push(shadeAdobe(wall, { floorY: floor - 0.4, crestY: wallHigh, lamps, lampGain: 0.62 }));
+
+    // Piers: eight buttresses standing 0.24 proud of the face. They are what
+    // give the wall a shadow of its own from the key, which is the difference
+    // between a wall and a backdrop.
+    const piers = lo ? 6 : 8;
+    for (let i = 0; i < piers; i++) {
+      const a = BACK_ARC + 0.4 + (i / piers) * TAU;
+      const h = wallHigh + 0.1 - (floor - 0.6);
+      const pier = new THREE.BoxGeometry(0.9, h, 0.5);
+      pier.rotateY(a);
+      pier.translate(
+        Math.sin(a) * (WALL_R - 0.2),
+        floor - 0.6 + h / 2,
+        Math.cos(a) * (WALL_R - 0.2),
+      );
+      stucco.push(
+        shadeAdobe(pier, {
+          floorY: floor - 0.4,
+          crestY: wallHigh,
+          lamps,
+          lampGain: 0.5,
+          coping: false,
+        }),
+      );
+    }
+
+    // Coping: individual blocks, so the top line staggers instead of ruling a
+    // perfect circle across the sunset. Every fourth one is a taller cap.
+    const blocks = lo ? 22 : q === 'medium' ? 30 : 40;
+    for (let i = 0; i < blocks; i++) {
+      const a = (i / blocks) * TAU;
+      const wide = ((TAU * (WALL_R + 0.16)) / blocks) * 0.94;
+      const tall = 0.2 + (i % 4 === 0 ? 0.14 : 0) + rng.range(0, 0.07);
+      const block = new THREE.BoxGeometry(wide, tall, 0.62);
+      block.rotateY(a);
+      block.translate(Math.sin(a) * (WALL_R + 0.02), wallHigh + tall * 0.5 - 0.06, Math.cos(a) * (WALL_R + 0.02));
+      stucco.push(
+        shadeAdobe(block, {
+          floorY: wallHigh - 1.6,
+          crestY: wallHigh + 0.3,
+          lamps,
+          lampGain: 0.34,
+          coping: false,
+        }),
+      );
+    }
+  }
+
+  // --- the distance: four layers of silhouette ----------------------------
+  // Near to far, each one lower than the last so it clears the frame top, and
+  // each one hazed harder toward the colour of the sky it sits against.
+  {
+    /** Rooftops just past the wall — flat roofs, parapets, a water tank. */
+    const roofParts: Array<THREE.BufferGeometry | null> = [];
+    const roofs = lo ? 13 : q === 'medium' ? 20 : 28;
+    for (let i = 0; i < roofs; i++) {
+      const a = (i / roofs) * TAU + rng.signed() * 0.06;
+      const r = ROOF_R + rng.range(-1.7, 1.9);
+      const x = Math.sin(a) * r;
+      const z = Math.cos(a) * r;
+      const roofY = top + rng.range(1.2, ROOF_TOP);
+      const w = rng.range(1.5, 2.7);
+      const d = rng.range(1.3, 2.3);
+      const body = new THREE.BoxGeometry(w, roofY - (top - 5.5), d);
+      body.rotateY(a + rng.signed() * 0.25);
+      body.translate(x, (roofY + top - 5.5) * 0.5, z);
+      // sunward faces warm, the rest fall away into the violet
+      const face = clamp01(-Math.cos(a - SUN_AZ));
+      roofParts.push(tintGeometry(body, face > 0.35 ? 0xa9614a : 0x7c4448));
+      const parapet = new THREE.BoxGeometry(w * 1.06, 0.22, d * 1.06);
+      parapet.rotateY(a + rng.signed() * 0.25);
+      parapet.translate(x, roofY + 0.06, z);
+      roofParts.push(tintGeometry(parapet, 0xc07a58));
+      if (!lo && i % 4 === 1) {
+        // a roof water tank on stilts, the shape that says "town" fastest
+        const tankH = Math.min(0.5, top + ROOF_TOP - roofY - 0.24);
+        if (tankH > 0.12) {
+          const tank = new THREE.CylinderGeometry(0.36, 0.36, tankH, envSeg(q, 9, 8, 6), 1);
+          tank.translate(x + rng.signed() * 0.6, roofY + 0.26 + tankH * 0.5, z + rng.signed() * 0.6);
+          roofParts.push(tintGeometry(tank, 0x4d3040));
+        }
+      }
+    }
+    const roofGeo = mergeEnv(roofParts);
+    if (roofGeo) far.push(hazeByRadius(roofGeo, DUSK_HAZE, 13, 20, 0.44, 1.05));
+  }
+
+  {
+    const town: Array<THREE.BufferGeometry | null> = [];
+    /** The church: the landmark, aimed at the on-screen window during play. */
+    const church = (arc: number, scale: number): void => {
+      const a = BACK_ARC + arc;
+      const r = TOWN_R + rng.range(-1, 1);
+      const x = Math.sin(a) * r;
+      const z = Math.cos(a) * r;
+      const tipY = top + TOWN_TOP * scale;
+      const shaftTop = tipY - 0.62 * scale;
+      const shaft = new THREE.BoxGeometry(1.5 * scale, shaftTop - (top - 6), 1.5 * scale);
+      shaft.rotateY(a);
+      shaft.translate(x, (shaftTop + top - 6) * 0.5, z);
+      town.push(tintGeometry(shaft, 0xb08063));
+      const belfry = new THREE.BoxGeometry(1.72 * scale, 0.34 * scale, 1.72 * scale);
+      belfry.rotateY(a);
+      belfry.translate(x, shaftTop + 0.17 * scale, z);
+      town.push(tintGeometry(belfry, 0x4a2c3c));
+      const dome = new THREE.SphereGeometry(0.78 * scale, envSeg(q, 12, 9, 7), envSeg(q, 7, 5, 4), 0, TAU, 0, Math.PI * 0.5);
+      dome.scale(1, 0.72, 1);
+      dome.translate(x, shaftTop + 0.34 * scale, z);
+      town.push(tintGeometry(dome, 0xc98a5e));
+      const spike = new THREE.CylinderGeometry(0.012 * scale, 0.05 * scale, 0.34 * scale, 4, 1);
+      spike.translate(x, tipY - 0.17 * scale, z);
+      town.push(tintGeometry(spike, 0x3d2436));
+      // nave, running off to one side and much lower
+      const nave = new THREE.BoxGeometry(3.4 * scale, shaftTop - 0.8 - (top - 6), 2.2 * scale);
+      nave.rotateY(a);
+      nave.translate(
+        x + Math.sin(a + Math.PI / 2) * 2.3 * scale,
+        (shaftTop - 0.8 + top - 6) * 0.5,
+        z + Math.cos(a + Math.PI / 2) * 2.3 * scale,
+      );
+      town.push(tintGeometry(nave, 0x91614f));
+    };
+
+    church(0.23, 1);
+    if (!lo) church(-2.4, 0.86);
+
+    const blocksN = lo ? 10 : q === 'medium' ? 15 : 20;
+    for (let i = 0; i < blocksN; i++) {
+      const a = (i / blocksN) * TAU + rng.signed() * 0.08;
+      const r = TOWN_R + rng.range(-2.6, 2.8);
+      const x = Math.sin(a) * r;
+      const z = Math.cos(a) * r;
+      const roofY = top + rng.range(0.15, TOWN_TOP - 0.34);
+      const w = rng.range(2.2, 3.8);
+      const d = rng.range(1.8, 3.0);
+      const body = new THREE.BoxGeometry(w, roofY - (top - 6), d);
+      body.rotateY(a + rng.signed() * 0.3);
+      body.translate(x, (roofY + top - 6) * 0.5, z);
+      const face = clamp01(-Math.cos(a - SUN_AZ));
+      town.push(tintGeometry(body, face > 0.4 ? 0x9c6250 : 0x6f4450));
+    }
+    const townGeo = mergeEnv(town);
+    if (townGeo) {
+      // Mist in the streets: pale at the feet, dark at the roofline. This is
+      // what separates one silhouette layer from the next — a dark crest read
+      // against the pale base of the layer behind it — and it is the reason
+      // four flat cut-outs read as distance rather than as one brown mass.
+      tintGradientY(townGeo, 0xf0c39a, 0x8a5560, top - 3.4, top + TOWN_TOP);
+      far.push(hazeByRadius(townGeo, DUSK_HAZE, 17, 28, 0.6, 1.12));
+    }
+  }
+
+  {
+    /** Rolling hills, with saguaro on the crest where it catches the light. */
+    const seed = 0x2c;
+    const crestY = top + RIDGE_TOP;
+    const ridgeAt = (a: number): number =>
+      crestY - 1.35 + ringNoise(a, 1.9, seed) * 1.5 - Math.abs(ringNoise(a, 4.4, seed + 7)) * 0.55;
+    const ring = ridgeRing(envSeg(q, 96, 72, 48), top - 12, (a) => ({
+      r: RIDGE_R + ringNoise(a, 1.2, seed + 3) * 3.4,
+      y: ridgeAt(a),
+    }));
+    const parts: Array<THREE.BufferGeometry | null> = [];
+    if (ring) parts.push(tintGeometry(ring, 0x6d4256));
+
+    const cacti = lo ? 6 : q === 'medium' ? 10 : 15;
+    for (let i = 0; i < cacti; i++) {
+      const a = (i / cacti) * TAU + rng.signed() * 0.12;
+      const rr = RIDGE_R + ringNoise(a, 1.2, seed + 3) * 3.4 - 0.6;
+      const x = Math.sin(a) * rr;
+      const z = Math.cos(a) * rr;
+      const footY = ridgeAt(a) - 0.15;
+      const tipY = Math.min(crestY, footY + rng.range(1.1, 2.0));
+      if (tipY - footY < 0.5) continue;
+      const trunk = new THREE.CylinderGeometry(0.16, 0.2, tipY - footY, 5, 1);
+      trunk.translate(x, (tipY + footY) * 0.5, z);
+      parts.push(tintGeometry(trunk, 0x4c3350));
+      if (!lo) {
+        for (let arm = 0; arm < 2; arm++) {
+          const side = arm === 0 ? 1 : -1;
+          const armH = rng.range(0.4, 0.75);
+          const armY = footY + (tipY - footY) * rng.range(0.42, 0.62);
+          const ox = Math.sin(a + Math.PI / 2) * 0.36 * side;
+          const oz = Math.cos(a + Math.PI / 2) * 0.36 * side;
+          const upper = new THREE.CylinderGeometry(0.12, 0.13, armH, 5, 1);
+          upper.translate(x + ox, armY + armH * 0.5, z + oz);
+          parts.push(tintGeometry(upper, 0x4c3350));
+          const elbow = new THREE.BoxGeometry(0.74, 0.24, 0.24);
+          elbow.rotateY(a);
+          elbow.translate(x + ox * 0.5, armY, z + oz * 0.5);
+          parts.push(tintGeometry(elbow, 0x4c3350));
+        }
+      }
+    }
+    const ridgeGeo = mergeEnv(parts);
+    if (ridgeGeo) {
+      tintGradientY(ridgeGeo, 0xf4cba6, 0x6d4a68, top - 5, crestY);
+      far.push(hazeByRadius(ridgeGeo, DUSK_HAZE, 26, 43, 0.74, 1.2));
+    }
+  }
+
+  {
+    /**
+     * The mesa. Clamping the noise from above is what makes the flat tops —
+     * everywhere the hill wants to be taller than the cap it is sheared off
+     * instead, which is the whole silhouette of a butte in one line.
+     */
+    const seed = 0x51;
+    const cap = top + MESA_TOP;
+    const ring = ridgeRing(envSeg(q, 84, 64, 44), top - 16, (a) => {
+      const n = ringNoise(a, 1.35, seed);
+      const raw = cap - 3.4 + (n + 0.55) * 4.6;
+      return {
+        r: MESA_R + ringNoise(a, 0.9, seed + 11) * 5.5,
+        y: Math.min(cap, raw),
+      };
+    });
+    if (ring) {
+      tintGradientY(ring, 0xf7d6b4, 0x76567e, top - 8, cap);
+      far.push(hazeByRadius(ring, DUSK_HAZE, 38, 60, 0.86, 1.32));
+    }
+  }
 
   // --- papel picado and festoon lights ------------------------------------
   // Two rings at different radii and heights, with the chords offset, so from
@@ -1340,7 +1884,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const z = Math.cos(a) * r;
     const post = new THREE.CylinderGeometry(0.055, 0.075, h, 5, 1);
     post.translate(x, wallHigh + h / 2, z);
-    papel.push(tintGeometry(post, 0x5a3a2c));
+    papelOut.push(tintGeometry(post, 0x5a3a2c));
     return new THREE.Vector3(x, wallHigh + h, z);
   };
 
@@ -1367,7 +1911,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       twist: 0.22,
       segments: lo ? 10 : 16,
     });
-    if (line) papel.push(line);
+    if (line) papelOut.push(line);
   }
 
   const festoonLines = lo ? 4 : 6;
@@ -1381,18 +1925,21 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const pB = new THREE.Vector3(Math.sin(a1) * FESTOON_R, yB, Math.cos(a1) * FESTOON_R);
     const path = catenary(pA, pB, rng.range(0.5, 0.75), lo ? 10 : 16);
     const cord = ribbon(path, 0.02, { tubular: lo ? 10 : 16, radial: 3 });
-    if (cord) papel.push(tintGeometry(cord, 0x6a4a38));
+    if (cord) papelOut.push(tintGeometry(cord, 0x6a4a38));
     const perLine = lo ? 6 : 8;
     for (let b = 0; b < perLine; b++) {
       const t = (b + 0.5) / perLine;
       const p = path[Math.min(path.length - 1, Math.round(t * (path.length - 1)))];
-      const bulb = new THREE.SphereGeometry(0.135, envSeg(q, 7, 6, 5), envSeg(q, 5, 5, 4));
-      bulb.scale(1, 1.25, 1);
-      bulb.translate(p.x, p.y - 0.16, p.z);
-      bulbs.push(bulb);
+      if (!lo) {
+        const bulb = new THREE.SphereGeometry(0.15, envSeg(q, 8, 7, 5), envSeg(q, 6, 5, 4));
+        bulb.scale(1, 1.28, 1);
+        bulb.translate(p.x, p.y - 0.18, p.z);
+        bulbs.push(bulb);
+      }
+      glow.push(facingQuad(p.x * 0.99, p.y - 0.18, p.z * 0.99, 1.3, 1.3));
       const collar = new THREE.CylinderGeometry(0.04, 0.055, 0.06, 5, 1);
       collar.translate(p.x, p.y - 0.05, p.z);
-      papel.push(tintGeometry(collar, 0x3d2a20));
+      papelOut.push(tintGeometry(collar, 0x3d2a20));
     }
   }
 
@@ -1440,6 +1987,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     ior: 1.48,
     clearcoat: 1,
     clearcoatRoughness: 0.05,
+    side: THREE.DoubleSide,
   });
   const plantMat = ctx.materials.standard('taco.env.plant', {
     color: 0xffffff,
@@ -1448,6 +1996,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     metalness: 0,
     flatShading: true,
   });
+  // No emissive. Every value on this wall is vertex colour, and the colour is
+  // computed from the sunset bearing, the height and the lamps — see shadeAdobe.
   const stuccoMat = ctx.materials.standard('taco.env.stucco', {
     color: 0xffffff,
     vertexColors: true,
@@ -1455,9 +2005,19 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       size: 256,
       repeat: [11, 3],
     }),
-    emissive: 0x6b3223,
-    emissiveIntensity: 0.5,
-    roughness: 0.96,
+    bumpMap: ctx.materials.dataTexture('taco.env.stucco.bump', paintStuccoBump, {
+      size: 256,
+      repeat: [11, 3],
+    }),
+    bumpScale: lo ? 0.35 : 0.8,
+    roughness: 0.97,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const farMat = ctx.materials.standard('taco.env.far', {
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.98,
     metalness: 0,
     side: THREE.DoubleSide,
   });
@@ -1469,11 +2029,31 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     side: THREE.DoubleSide,
   });
   const bulbMat = ctx.materials.standard('taco.env.bulb', {
-    color: 0x6b4a20,
-    emissive: 0xffc472,
-    emissiveIntensity: 2.4,
+    color: 0x2a1a0e,
+    emissive: 0xffb35e,
+    emissiveIntensity: 2.6,
     roughness: 0.35,
     metalness: 0,
+  });
+  // The halo. A quad wearing a radial alpha, hung on the same ring as the bulb
+  // so it stays broadside to an orbiting camera — this is the part that makes
+  // the bulbs read as sources rather than as dots, and it is also the pool the
+  // hurricane lamp puts on the cloth.
+  const glowMat = ctx.materials.standard('taco.env.glow', {
+    color: 0x000000,
+    emissive: 0xffb060,
+    emissiveIntensity: 1.75,
+    map: ctx.materials.texture('taco.env.glow.sprite', (c, s) => radialGlow(c, s, '#FFB25E', 0.1, 2.4), {
+      size: 128,
+      wrap: THREE.ClampToEdgeWrapping,
+    }),
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    toneMapped: true,
   });
 
   const add = (
@@ -1493,8 +2073,15 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   add(glass, glassMat, false, false);
   add(plant, plantMat, false, false);
   add(stucco, stuccoMat, false, false);
+  add(far, farMat, false, false);
   add(papel, papelMat, false, false);
   add(bulbs, bulbMat, false, false);
+  const glowGeo = mergeEnv(glow);
+  if (glowGeo) {
+    const m = mesh(glowGeo, glowMat, { cast: false, receive: false });
+    m.renderOrder = 3;
+    g.add(m);
+  }
 
   return g;
 }
@@ -1588,6 +2175,10 @@ export const tacoTheme: ThemeDef = {
   glyph: '🌮',
   price: 1.99,
   palette: {
+    // The one theme that is genuinely outdoors, and the sky is now most of
+    // what the frame gains as a run climbs — see the environment's note on
+    // where the open band actually is.
+    sky: SKY_PRESETS.taco,
     bgTop: 0xffc46b,
     bgBottom: 0x5e2751,
     fog: 0xb4664f,

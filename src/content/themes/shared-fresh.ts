@@ -868,4 +868,117 @@ export function rectPerimeter(halfW: number, halfD: number, angle: number, round
   return new THREE.Vector2(a * c * k, b * s * k);
 }
 
+/**
+ * Bake aerial perspective into vertex colours by distance from the tower axis.
+ *
+ * `FogExp2` at the densities the palettes authorise does almost nothing at the
+ * distances an environment actually occupies: the wall a theme stands in front
+ * of is ~23 units from the camera and comes back around 11% fogged, which is
+ * invisible. So a background layer that is supposed to *recede* has to be
+ * painted receding, and painting it by hand per prop is how a scene ends up
+ * with a distant ridge that is darker than the roofs in front of it.
+ *
+ * This does it by measurement instead. Radius from the tower axis is the right
+ * distance to use rather than range from the camera, because the home screen
+ * orbits a full turn: a ridge that greys out correctly at one yaw has to grey
+ * out identically at every other one, and radius is yaw-independent by
+ * construction.
+ *
+ * Multiplies into whatever colour the geometry already carries, so it composes
+ * after `tintGeometry` / `tintGradientY` rather than replacing them.
+ */
+export function hazeByRadius(
+  geo: THREE.BufferGeometry,
+  haze: number,
+  near: number,
+  far: number,
+  maxMix = 0.8,
+  lift = 1,
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute | undefined;
+  if (!pos) return geo;
+  const prev = geo.attributes.color as THREE.BufferAttribute | undefined;
+  const h = new THREE.Color(haze).convertSRGBToLinear();
+  // In-scattered light ADDS, it does not tint: a ridge ten units further back
+  // is not just closer to the sky's hue, it is closer to the sky's brightness,
+  // and the sky is written straight to the framebuffer while the ridge has to
+  // survive a key light and a tone curve first. `lift` is the licence to push
+  // the target past 1.0 in linear space so the far layers actually arrive
+  // where the sky is instead of stopping at a dark version of its colour.
+  const l = Math.max(lift, 0);
+  h.multiplyScalar(l);
+  const span = Math.abs(far - near) > 1e-6 ? far - near : 1;
+  const cap = clamp01(maxMix);
+  const arr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const r = Math.hypot(x, z);
+    const t = (Number.isFinite(r) ? clamp01((r - near) / span) : 0) * cap;
+    const cr = prev ? prev.getX(i) : 1;
+    const cg = prev ? prev.getY(i) : 1;
+    const cb = prev ? prev.getZ(i) : 1;
+    arr[i * 3] = lerp(cr, h.r, t);
+    arr[i * 3 + 1] = lerp(cg, h.g, t);
+    arr[i * 3 + 2] = lerp(cb, h.b, t);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+/**
+ * A soft radial falloff painted with real alpha, for use as the `map` of a
+ * transparent emissive material.
+ *
+ * This is how a light source gets to look like one without costing a light: a
+ * quad wearing this texture, hung tangentially on the same ring as the bulb it
+ * belongs to, stays broadside to a camera that only ever orbits horizontally.
+ * The same texture lying flat on a table is the pool the lamp throws.
+ */
+export function radialGlow(
+  c: CanvasRenderingContext2D,
+  size: number,
+  color = '#ffffff',
+  core = 0.14,
+  gamma = 2.2,
+): void {
+  c.clearRect(0, 0, size, size);
+  const half = size / 2;
+  const g = c.createRadialGradient(half, half, 0, half, half, half);
+  const steps = 12;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const inner = clamp01((t - core) / Math.max(1 - core, 1e-3));
+    const a = Math.pow(1 - inner, gamma);
+    g.addColorStop(t, `rgba(255,255,255,${a.toFixed(4)})`);
+  }
+  c.save();
+  c.fillStyle = color;
+  c.fillRect(0, 0, size, size);
+  c.globalCompositeOperation = 'destination-in';
+  c.fillStyle = g;
+  c.fillRect(0, 0, size, size);
+  c.restore();
+}
+
+/**
+ * A quad standing on a ring, facing the tower axis — the billboard a merged,
+ * static environment is allowed to have. Because the camera only ever orbits
+ * horizontally, a quad whose normal points at the axis is within a few degrees
+ * of broadside at every yaw, which is the same reason the flag lines read from
+ * anywhere.
+ */
+export function facingQuad(
+  x: number,
+  y: number,
+  z: number,
+  width: number,
+  height: number,
+): THREE.BufferGeometry {
+  const geo = new THREE.PlaneGeometry(Math.max(width, 1e-3), Math.max(height, 1e-3));
+  geo.rotateY(Math.atan2(x, z) + Math.PI);
+  geo.translate(x, y, z);
+  return geo;
+}
+
 export { THREE };

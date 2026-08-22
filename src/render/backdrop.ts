@@ -59,9 +59,10 @@ import {
  *   VERTICAL    the `sweep` coordinate — frame-relative, with a slice of view
  *               direction mixed in. `SKY_HORIZON` and `SKY_ZENITH` map it onto
  *               a pretend 0..90 degrees of elevation. Measured against the
- *               shipped environments, the visible band is roughly sweep 0.62
- *               (the diner's fence line) to 0.99 (top of frame), so the haze
- *               sits at 0.66 and the zenith is placed just past the top edge.
+ *               shipped environments, the visible band is only sweep 0.82 (the
+ *               diner's fence line) to 0.99 (top of frame) — about 125px of a
+ *               393x852 frame — so the haze sits at 0.78 and the zenith is
+ *               placed past the top edge.
  *   HORIZONTAL  the true world bearing of the view direction. Nothing forces
  *               this one, so it costs nothing to be honest: the sun stays put
  *               in the world while the home screen orbits a full turn, and the
@@ -79,23 +80,45 @@ const CONTACT_ALPHA = 0.4;
 
 /**
  * Sweep value the sky treats as the horizon, and the one it treats as the
- * zenith. The zenith sits just above the top of frame (which lands near 0.99)
- * so the cloud field bunches into the top edge rather than converging on a
- * visible point.
+ * zenith.
+ *
+ * Both are measured off the shipped frames, not chosen. Sampling the diner
+ * home screen at 393x852: the top of frame lands at sweep 0.986 and the fence
+ * line — the highest thing any environment puts against the sky — at 0.819.
+ * So the entire visible sky is a 0.17-wide strip of sweep about 125px tall,
+ * and the horizon has to sit just under it or the haze band never reaches the
+ * scenery it is supposed to dissolve. 0.66 was tried first, from the fence's
+ * height before content raised it, and put the haze a whole screen too low.
+ *
+ * The zenith sits past the top edge so the deck bunches into it rather than
+ * converging on a visible vanishing point.
  */
-const SKY_HORIZON = 0.66;
-const SKY_ZENITH = 1.1;
+const SKY_HORIZON = 0.78;
+const SKY_ZENITH = 1.14;
 /** Radians of pretend elevation per unit of `e`. Used to keep cells square. */
 const SKY_SPAN = SKY_ZENITH - SKY_HORIZON;
 
 /** Angular radius of the disc, in screen radians. The real sun is 0.0047. */
 const SUN_RADIUS = 0.0085;
-/** Feature size of the cloud deck, in units of the deck's height. */
-const CLOUD_SCALE = 1.35;
+/**
+ * Noise cells per deck unit.
+ *
+ * Solved against the strip above, not guessed: 22 puts a cell at roughly
+ * 61x28 device pixels, so about six across the frame and four up it, which
+ * with the fBm's low-frequency structure comes out at three or four distinct
+ * masses. 9 was tried and gives one cloud the size of the sky; past ~26 the
+ * top octave falls under two pixels and fizzes.
+ */
+const CLOUD_SCALE = 22;
 /** How far the domain warp can drag the field. Higher = more curdled. */
 const CLOUD_WARP = 0.9;
-/** Cloud phase wrap, in deck units. Large enough never to be reached in play. */
-const CLOUD_WRAP = 2048;
+/**
+ * Cloud phase wrap, in noise cells. Not larger: `hash12` floors its input, and
+ * a coordinate in the thousands loses enough float mantissa that the top
+ * octaves go blocky. 64 cells is about four hours at the fastest preset drift,
+ * and the field re-rolls rather than jumping a visible distance.
+ */
+const CLOUD_WRAP = 64;
 
 const VERT = /* glsl */ `
 varying vec3 vDir;
@@ -206,11 +229,15 @@ function skyBody(octaves: number, warpSamples: number, litSample: boolean): stri
     float dEl = ( sweep - uSunSweep ) * uSweepToRad;
     float sunAng = sqrt( dAz * dAz + dEl * dEl );
 
-    // Core plus a broad skirt. The skirt is the part that reads as time of
-    // day: during a run the disc is 93 degrees off-axis and this is all of the
-    // sun the player ever sees.
-    float gk = 1.0 / max( uGlowSpread, 0.05 );
-    float glowAmt = exp( -sunAng * gk ) + 0.55 * exp( -sunAng * gk * 0.28 );
+    // Core plus a skirt, in units of the authored spread. The skirt is the
+    // part that reads as time of day — during a run the disc is 93 degrees
+    // off-axis and the skirt is all of the sun the player ever sees — but it
+    // has to actually reach zero. A second exponential in x does not: at three
+    // spreads out it was still lifting the whole sky, which on the night
+    // palette meant a flat slate wash 30 steps above the authored bgTop. A
+    // gaussian in x falls off the way a real halo does and is dead by four.
+    float x = min( sunAng / max( uGlowSpread, 0.05 ), 6.0 );
+    float glowAmt = exp( -x ) + 0.5 * exp( -x * x * 0.25 );
     // Thicker air low down. Also keeps the palette's own gradient alive at the
     // top of frame instead of flattening the whole sky to one colour.
     glowAmt = min( glowAmt * mix( 1.0, 0.5, e ) * uSkyAmount, 1.0 );
@@ -225,40 +252,61 @@ function skyBody(octaves: number, warpSamples: number, litSample: boolean): stri
       vec2 cf = sp - ci;
       vec2 at = vec2( hash12( ci + 7.31 ), hash12( ci + 3.17 ) );
       float star = step( 1.0 - 0.55 * uStars, hash12( ci ) );
-      star *= 1.0 - smoothstep( 0.0, 0.17, length( cf - at ) );
-      star *= smoothstep( 0.03, 0.30, e );
+      // Soft-edged on purpose: the high tier's finishing pass puts ~1px of
+      // chromatic aberration on the frame, and a hard 2px star picks that up
+      // as a coloured fringe.
+      star *= 1.0 - smoothstep( 0.02, 0.20, length( cf - at ) );
+      star *= smoothstep( 0.04, 0.28, e );
       star *= 1.0 - min( 1.0, glowAmt * 1.6 );
       col = mix( col, uStarColor, star * uSkyAmount * 0.85 );
     }
 
     float cloudA = 0.0;
     if ( uCloudCover > 0.001 ) {
-      // A flat deck one unit up: r = cot(elevation). Real perspective, so the
-      // field compresses into the horizon the way a real one does.
-      float r = min( ( 1.0 - e ) / max( e, 0.045 ), 22.0 );
-      vec2 cp = dxz * r * ${CLOUD_SCALE.toFixed(2)} + uCloudOffset;
-      float lod = clamp( 1.0 - r * 0.055, 0.25, 1.0 );
+      // Distance to a flat deck overhead. True cot(elevation) is the honest
+      // form and it was tried first; over the sliver of sky this frame shows
+      // it spreads r by 7x, and at 7x every cloud renders as a horizontal
+      // smear.
+      //
+      // This is cot flattened until the deck compresses about 2.2x more
+      // vertically than horizontally. Solved, not guessed: across the visible
+      // strip a pixel of bearing is 0.00074 deck units and the r span has to
+      // be ~0.21 over 125px to be twice that. Get it wrong in the other
+      // direction — too flat — and the clouds hang down like stalactites.
+      float r = min( 0.07 / ( e + 0.12 ) + 0.55, 1.5 );
+      vec2 cp = dxz * r * ${CLOUD_SCALE.toFixed(1)} + uCloudOffset;
+      // Detail dies with distance. Without it the deck fizzes exactly where it
+      // is meant to be dissolving into haze.
+      float lod = clamp( 1.0 - ( r - 0.66 ) * 2.6, 0.35, 1.0 );
 ${warp}
       float body;
-      float f = cloudFbm( wp, lod, body );
+      // Named dens, not f: main() already has an f for the floor roll-off and
+      // GLSL would quietly shadow it.
+      float dens = cloudFbm( wp, lod, body );
       // Value noise piles up around 0.5; stretch it or nothing ever clears the
       // threshold and "scattered" comes out as "faint haze".
-      f = clamp( ( f - 0.5 ) * 1.75 + 0.5, 0.0, 1.0 );
+      // 2.4 is not arbitrary: the two-octave field has a standard deviation of
+      // about 0.14, and the coverage threshold below is solved against a
+      // spread of ~0.34. At 3.2 most of the field clamped and cover 0.44 read
+      // as overcast.
+      dens = clamp( ( dens - 0.5 ) * 2.4 + 0.5, 0.0, 1.0 );
 
-      float cov = clamp( uCloudCover * mix( 0.62, 1.18, smoothstep( 0.0, 0.85, e ) ), 0.0, 1.0 );
-      float thr = mix( 1.02, 0.06, cov );
-      float wid = mix( 0.30, 0.11, cov );
-      cloudA = smoothstep( thr, thr + wid, f );
-      // Thin out into the haze rather than ending at a line.
-      cloudA *= smoothstep( 0.02, 0.26, e );
+      float cov = clamp( uCloudCover * mix( 0.62, 1.18, smoothstep( 0.05, 0.60, e ) ), 0.0, 1.0 );
+      float thr = mix( 0.99, 0.02, cov );
+      float wid = mix( 0.22, 0.06, cov );
+      cloudA = smoothstep( thr, thr + wid, dens );
+      // Thin out into the haze rather than ending at a line. The window is
+      // the bottom third of the VISIBLE strip, not of the notional sky — the
+      // sky only starts at e 0.11 here, and a fade keyed to e 0 never fired.
+      cloudA *= smoothstep( 0.05, 0.30, e );
 
       // Seen from underneath, a cumulus is bright at the fringe and grey
       // through the thick middle, because that is where the light from above
       // does not get through. That single term is the difference between a
       // volume and a white blob; the directional sample only tilts it.
-      float depth = smoothstep( thr, min( thr + wid * 2.8, 1.05 ), f );
+      float depth = smoothstep( thr, min( thr + wid * 3.5, 1.05 ), dens );
 ${lit}
-      float litMix = clamp( ( 1.0 - depth ) * 0.55 + lightSide * 0.45, 0.0, 1.0 );
+      float litMix = clamp( ( 1.0 - depth ) * 0.9 + ( lightSide - 0.5 ) * 0.5 + 0.05, 0.0, 1.0 );
       vec3 cloudRgb = mix( uCloudShade, mix( uCloudLit, uGlowColor, glowAmt * 0.6 ), litMix );
       col = mix( col, cloudRgb, cloudA * uSkyAmount );
     }
@@ -268,10 +316,10 @@ ${lit}
     float du = max( sweep - ${SKY_HORIZON.toFixed(2)}, 0.0 ) / uHorizonBand.x;
     float dd = max( ${SKY_HORIZON.toFixed(2)} - sweep, 0.0 ) / uHorizonBand.y;
     float hz = exp( -( du * du + dd * dd ) );
-    col = mix( col, mix( uHorizonColor, uGlowColor, glowAmt * 0.55 ), hz * 0.9 * uSkyAmount );
+    col = mix( col, mix( uHorizonColor, uGlowColor, glowAmt * 0.55 ), hz * 0.62 * uSkyAmount );
 
     discShape = 1.0 - smoothstep( uSunSize.x, uSunSize.y, sunAng );
-    discShape *= ( 1.0 - cloudA * uSkyAmount ) * ( 1.0 - hz * 0.55 ) * uSkyAmount;
+    discShape *= ( 1.0 - cloudA * uSkyAmount ) * ( 1.0 - hz * 0.5 ) * uSkyAmount;
   }
 `;
 }
@@ -752,15 +800,17 @@ export class Backdrop {
     const shade = THREE.MathUtils.clamp(s.cloudShadow, 0, 1);
     out.cloudShade
       .copy(out.cloudLit)
-      .multiplyScalar(1 - shade * 0.8)
-      // A cloud base is not just a darker cloud; it picks up the haze under it.
-      .lerp(TMP_HAZE.setHex(s.horizonColor, THREE.SRGBColorSpace), shade * 0.3);
+      .multiplyScalar(1 - shade * 0.62)
+      // A cloud base is not just a darker cloud; it picks up the haze under
+      // it, and at 0.3 of that the diner's cumulus came out neutral grey and
+      // read as rain against a golden sky.
+      .lerp(TMP_HAZE.setHex(s.horizonColor, THREE.SRGBColorSpace), shade * 0.5);
     out.cloudCover = THREE.MathUtils.clamp(s.cloudCover, 0, 1);
     out.cloudDrift = s.cloudDrift;
 
     out.horizon.setHex(s.horizonColor, THREE.SRGBColorSpace);
     const soft = THREE.MathUtils.clamp(s.horizonSoftness, 0, 1);
-    out.horizonUp = lerp(0.05, 0.3, soft);
+    out.horizonUp = lerp(0.045, 0.22, soft);
     out.horizonDown = lerp(0.1, 0.26, soft);
 
     out.stars = THREE.MathUtils.clamp(s.stars, 0, 1);

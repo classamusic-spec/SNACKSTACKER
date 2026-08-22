@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { damp, smootherstep } from '../core/math';
 import type { QualityTier } from '../core/types';
 import type { ThemePaletteLike } from './api';
-import { PALETTE_FADE } from './palette';
+import { PALETTE_FADE } from './constants';
 
 /**
  * Three-point studio rig.
