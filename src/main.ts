@@ -43,7 +43,22 @@ function actionLabel(
   };
 }
 
+/**
+ * Boot phase timings. A stacker has to open instantly, so it is worth knowing
+ * which phase costs what rather than guessing — especially the split between
+ * CPU work (procedural geometry and canvas textures, which a faster GPU will
+ * not help) and shader compilation.
+ */
+const bootMarks: Array<[string, number]> = [];
+let lastMark = 0;
+function mark(name: string): void {
+  const now = performance.now();
+  bootMarks.push([name, Math.round(now - lastMark)]);
+  lastMark = now;
+}
+
 async function boot(): Promise<void> {
+  lastMark = performance.now();
   const canvas = document.getElementById('gl') as HTMLCanvasElement | null;
   const appRoot = document.getElementById('app');
   if (!canvas || !appRoot) throw new Error('Snackery: missing #gl or #app');
@@ -70,9 +85,11 @@ async function boot(): Promise<void> {
     reducedMotion: settings().reducedMotion,
   });
 
+  mark('renderer');
   const rig = new CameraRig(kit.camera);
   const vfx = createVfx(kit.scene, kit.camera, kit.materials, kit.quality.tier);
   const audio = createAudioEngine();
+  mark('vfx+audio');
 
   let state: AppState = 'boot';
   let lastResult: RunResult | null = null;
@@ -436,8 +453,10 @@ async function boot(): Promise<void> {
   // start
   // ---------------------------------------------------------------------------
 
+  mark('ui');
   ui.setLoadProgress(0.35);
   applyTheme(theme, false);
+  mark('theme');
   onResize();
   ui.setSettings(settings());
   kit.setShakeScale(settings().reducedMotion ? 0 : 1);
@@ -452,9 +471,11 @@ async function boot(): Promise<void> {
   // Build the home state and render one frame before dismissing the boot veil,
   // so the first thing the player sees is the tower, not an empty canvas.
   goHome();
+  mark('scene');
   rig.update(1 / 60, 1e6);
   kit.update(1 / 60, 0);
   kit.render();
+  mark('first-render');
   ui.setLoadProgress(1);
 
   // A small, always-on probe. The QA harness reads it; it costs one object
@@ -468,6 +489,7 @@ async function boot(): Promise<void> {
     tier: kit.quality.tier as string,
     state: state as string,
     offset: null as number | null,
+    boot: bootMarks as ReadonlyArray<readonly [string, number]>,
   };
   (window as unknown as { __snackeryStats?: typeof stats }).__snackeryStats = stats;
   // The post chain renders several passes per frame and each one resets

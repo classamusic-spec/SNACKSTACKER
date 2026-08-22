@@ -13,7 +13,10 @@ import { mkdirSync, existsSync } from 'node:fs';
 
 const OUT = 'shots/env';
 const TIER = process.env.SN_TIER ?? 'low';
-const WAIT = Number(process.env.SN_WAIT ?? 3000);
+// Software rendering spends 3-5s compiling shaders on the first frame, so the
+// boot veil is still dissolving at 3s. Real hardware does this in a fraction
+// of the time; see the boot marks in __snackeryStats for the split.
+const WAIT = Number(process.env.SN_WAIT ?? 6500);
 const THEMES = (process.argv[2] ?? 'diner,sushi,candy,taco,breakfast,pizza').split(',');
 const CHROME = [
   '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',

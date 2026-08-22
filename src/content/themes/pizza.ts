@@ -1318,16 +1318,20 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const pots = envPick(q, 4, 7, 9);
   for (let i = 0; i < pots; i++) {
     const a = (i / pots) * TAU + rng.range(-0.3, 0.3);
-    const r = rng.range(7.4, 10.2);
+    // Out past FAR_R: at 7.4 a cypress spire landed directly behind the tower
+    // and, though it cleared the rule, it still cut into the food's outline.
+    const r = rng.range(9.8, 12.6);
     const px = Math.cos(a) * r;
     const pz = Math.sin(a) * r;
     const s = rng.range(0.85, 1.2);
     const rim = pot(terra, px, floorY, pz, s, sides);
-    if (rng.bool(0.6)) {
-      // Height comes from the headroom left under PROP_LIFT, not from a blind
-      // random range: a tall roll of the dice used to poke a cypress up past
-      // the clearance ceiling on some seeds.
-      const ceiling = deck + PROP_LIFT - 0.3;
+    if (rng.bool(0.55)) {
+      // A cypress is a tall dark cone, and a tall dark cone parked behind the
+      // tower reads as a spike growing out of the pizza. Its tip is therefore
+      // pinned just above the table plane — well under PROP_LIFT — so at every
+      // yaw of the home-screen orbit it stays beside the food, never through
+      // it. It still has a 6:1 spire ratio, so the silhouette survives.
+      const ceiling = deck + 0.55;
       const coneH = Math.max(1.2, Math.min(rng.range(2.6, 3.4) * s, ceiling - (rim - 0.05)));
       const cone = envCyl(0.03, 0.44 * s, coneH, envPick(q, 5, 7, 8));
       roughen(cone, 0.05, 5, i + 2);
