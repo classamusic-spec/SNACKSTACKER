@@ -521,6 +521,12 @@ async function boot(): Promise<void> {
     state: state as string,
     offset: null as number | null,
     boot: bootMarks as ReadonlyArray<readonly [string, number]>,
+    // Leak detection: these must return to a steady state across runs.
+    geometries: 0,
+    textures: 0,
+    programs2: 0,
+    offcuts: 0,
+    heapMb: 0,
   };
   (window as unknown as { __snackeryStats?: typeof stats }).__snackeryStats = stats;
   // The post chain renders several passes per frame and each one resets
@@ -545,6 +551,11 @@ async function boot(): Promise<void> {
     stats.layers = game.layerCount;
     stats.tier = kit.quality.tier;
     stats.state = state;
+    stats.geometries = kit.renderer.info.memory.geometries;
+    stats.textures = kit.renderer.info.memory.textures;
+    stats.programs2 = kit.renderer.info.programs?.length ?? 0;
+    const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+    stats.heapMb = mem ? Math.round(mem.usedJSHeapSize / 1048576) : 0;
     stats.offset = game.dropOffset;
     kit.renderer.info.reset();
   });
