@@ -22,6 +22,34 @@ const KEY_OFFSET = new THREE.Vector3(-4.5, 4.72, 5.0); // |xz| 6.73, y 4.72 -> ~
 const FILL_OFFSET = new THREE.Vector3(5.6, 2.6, 3.2);
 const RIM_OFFSET = new THREE.Vector3(2.4, 5.6, -6.4);
 
+/**
+ * The key light expressed as a compass bearing and an altitude, so the sky can
+ * put its sun in the same place the shadows say it is.
+ *
+ * `KEY_AZIMUTH` is `atan2(x, z)` — the same convention the camera rig uses for
+ * yaw — and works out at -0.733 rad (-42 deg), i.e. front-left of the plate.
+ * `KEY_ELEVATION` is 0.612 rad (35 deg), the studio rig's authored altitude.
+ *
+ * A sky is allowed to disagree about ALTITUDE: a golden-hour sun sits far
+ * lower than the key, and all that changes is how long the shadows read, which
+ * nobody measures. It must not disagree about BEARING. The cast shadow points
+ * at KEY_AZIMUTH + pi, and a glow on the wrong side of the frame from the
+ * shadows is the single fastest way to make a rendered sky look pasted on.
+ * Every preset in palette.ts therefore uses KEY_AZIMUTH verbatim.
+ *
+ * Worth knowing: at the play camera (CAM_YAW pi/4, so a view bearing of -135
+ * deg) the sun sits about 93 deg off the view axis, well outside the ~22 deg
+ * horizontal field. During a run the disc is off-frame to the left and only
+ * the glow's skirt is visible — which is why the glow is authored wide and the
+ * disc small. The home screen orbits a full turn, so the disc does swing
+ * through frame there.
+ */
+export const KEY_AZIMUTH = /* @__PURE__ */ Math.atan2(KEY_OFFSET.x, KEY_OFFSET.z);
+export const KEY_ELEVATION = /* @__PURE__ */ Math.atan2(
+  KEY_OFFSET.y,
+  Math.hypot(KEY_OFFSET.x, KEY_OFFSET.z),
+);
+
 /** Half-extent of the shadow frustum in world units. Tight = crisp. */
 const SHADOW_EXTENT_XZ = 5.2;
 const SHADOW_EXTENT_Y = 6.4;

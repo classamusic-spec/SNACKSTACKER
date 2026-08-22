@@ -1,9 +1,15 @@
 import * as THREE from 'three';
-import type { ThemePaletteLike } from './api';
+import type { SkyConfig, ThemePaletteLike } from './api';
+import type { QualityTier } from '../core/types';
 import { PALETTE_FADE } from './palette';
 import { GLSL_ACES_INVERSE, GLSL_DITHER, GLSL_SRGB } from './shaders';
 import { makeSurface } from './surface';
-import { acesInMatrixInverse, acesOutMatrixInverse, directOverlayAlpha } from './tonemap';
+import {
+  acesInMatrixInverse,
+  acesOutMatrixInverse,
+  directOverlayAlpha,
+  sunLinearScale,
+} from './tonemap';
 
 /**
  * The cyclorama.
@@ -32,6 +38,37 @@ import { acesInMatrixInverse, acesOutMatrixInverse, directOverlayAlpha } from '.
  * A floor also contradicts the design bible outright — "no skyboxes, no
  * horizons, no clutter". So the floor now renders nothing but the shadow that
  * lands on it, and the plate is grounded by the contact blob instead.
+ *
+ * ## The sky, and why it is only half world-anchored
+ *
+ * Every outdoor theme now has a real place around the plate, and a two-stop
+ * sweep behind a picket fence reads as a wall. `palette.sky` turns the sweep
+ * into atmosphere: a sun, a wide glow, a drifting cloud deck, a haze band and
+ * (at night) stars.
+ *
+ * The temptation is to build that from the world view direction, the way a
+ * skybox does. It does not work here, for exactly the reason the floor disc
+ * did not work: the same 4.5 degrees. The camera looks DOWN, so every pixel in
+ * the frame has a negative world elevation — a world-anchored sky would sit
+ * entirely off the top of the screen at every camera angle the game uses, and
+ * the player would see none of it. The clearance-cylinder lesson again: the
+ * geometry is necessary, the frame is what decides.
+ *
+ * So the sky is anchored like the sweep it replaces:
+ *
+ *   VERTICAL    the `sweep` coordinate — frame-relative, with a slice of view
+ *               direction mixed in. `SKY_HORIZON` and `SKY_ZENITH` map it onto
+ *               a pretend 0..90 degrees of elevation. Measured against the
+ *               shipped environments, the visible band is roughly sweep 0.62
+ *               (the diner's fence line) to 0.99 (top of frame), so the haze
+ *               sits at 0.66 and the zenith is placed just past the top edge.
+ *   HORIZONTAL  the true world bearing of the view direction. Nothing forces
+ *               this one, so it costs nothing to be honest: the sun stays put
+ *               in the world while the home screen orbits a full turn, and the
+ *               cloud deck slides past instead of turning with the camera.
+ *
+ * The sun's bearing is `KEY_AZIMUTH` from lighting.ts in every preset — see
+ * the note there for why the bearing must match and the altitude need not.
  */
 
 const SKY_RADIUS = 100;
@@ -39,6 +76,26 @@ const SKY_RADIUS = 100;
 const SHADOW_CATCHER_RADIUS = 14;
 /** Alpha of the plate's contact blob on the composer path. */
 const CONTACT_ALPHA = 0.4;
+
+/**
+ * Sweep value the sky treats as the horizon, and the one it treats as the
+ * zenith. The zenith sits just above the top of frame (which lands near 0.99)
+ * so the cloud field bunches into the top edge rather than converging on a
+ * visible point.
+ */
+const SKY_HORIZON = 0.66;
+const SKY_ZENITH = 1.1;
+/** Radians of pretend elevation per unit of `e`. Used to keep cells square. */
+const SKY_SPAN = SKY_ZENITH - SKY_HORIZON;
+
+/** Angular radius of the disc, in screen radians. The real sun is 0.0047. */
+const SUN_RADIUS = 0.0085;
+/** Feature size of the cloud deck, in units of the deck's height. */
+const CLOUD_SCALE = 1.35;
+/** How far the domain warp can drag the field. Higher = more curdled. */
+const CLOUD_WARP = 0.9;
+/** Cloud phase wrap, in deck units. Large enough never to be reached in play. */
+const CLOUD_WRAP = 2048;
 
 const VERT = /* glsl */ `
 varying vec3 vDir;
@@ -48,7 +105,184 @@ void main() {
 }
 `;
 
-const FRAG = /* glsl */ `
+/** Uniforms only the open-sky variant declares. */
+const SKY_UNIFORMS = /* glsl */ `uniform float uSkyAmount;
+uniform float uSweepToRad;
+uniform vec2 uSunDir;
+uniform float uSunSweep;
+uniform vec2 uSunSize;
+uniform float uSunAmt;
+uniform vec3 uSunTint;
+uniform vec3 uSunLin;
+uniform vec3 uGlowColor;
+uniform float uGlowSpread;
+uniform vec3 uCloudLit;
+uniform vec3 uCloudShade;
+uniform float uCloudCover;
+uniform vec2 uCloudOffset;
+uniform vec3 uHorizonColor;
+uniform vec2 uHorizonBand;
+uniform float uStars;
+uniform vec3 uStarColor;`;
+
+/**
+ * Value noise on the dither hash. Four hashes an octave — that number is the
+ * entire fill-rate budget for this feature, so it is the one to count.
+ */
+const SKY_NOISE = /* glsl */ `float vnoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = p - i;
+  f = f * f * ( 3.0 - 2.0 * f );
+  float a = hash12( i );
+  float b = hash12( i + vec2( 1.0, 0.0 ) );
+  float c = hash12( i + vec2( 0.0, 1.0 ) );
+  float d = hash12( i + vec2( 1.0, 1.0 ) );
+  return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
+}`;
+
+/**
+ * fBm, unrolled to the tier's octave count so there is no dynamic loop.
+ *
+ * `lod` folds the higher octaves away with distance. Without it the deck turns
+ * to fizz as it converges on the horizon, which is where a procedural sky
+ * usually gives itself away.
+ */
+function skyFbm(octaves: number): string {
+  let body = '';
+  for (let i = 0; i < octaves; i++) {
+    body += `  s += a * vnoise( p );\n  norm += a;\n`;
+    if (i === 1 || octaves === 1) body += `  body = s / max( norm, 1e-4 );\n`;
+    if (i < octaves - 1) {
+      body += `  a *= 0.5 * lod;\n  p = p * 2.03 + ${(17.3 + i * 7.7).toFixed(2)};\n`;
+    }
+  }
+  return /* glsl */ `float cloudFbm( vec2 p, float lod, out float body ) {
+  float s = 0.0;
+  float a = 0.5;
+  float norm = 0.0;
+  body = 0.0;
+${body}  return s / max( norm, 1e-4 );
+}`;
+}
+
+/**
+ * The sky itself, spliced into main() after the sweep and before the softbox
+ * gain. Everything here composites in the same display-referred space the
+ * gradient uses, and everything is a `mix`, never an add — an add would push
+ * the value into the ACES shoulder that `acesInverse` has to run backwards
+ * through, and the inverse is wildly ill-conditioned up there. The one
+ * exception is the sun, which is handed to the two paths separately at the
+ * bottom of main() precisely so it can be HDR on the one that blooms.
+ */
+function skyBody(octaves: number, warpSamples: number, litSample: boolean): string {
+  const warp =
+    warpSamples >= 2
+      ? `    vec2 wq = vec2( vnoise( cp * 0.45 ), vnoise( cp * 0.45 + 19.7 ) );
+    vec2 wp = cp + ( wq - 0.5 ) * ${CLOUD_WARP.toFixed(2)};`
+      : warpSamples === 1
+        ? `    float w0 = vnoise( cp * 0.45 );
+    vec2 wp = cp + ( vec2( w0, 1.0 - w0 ) - 0.5 ) * ${CLOUD_WARP.toFixed(2)};`
+        : `    vec2 wp = cp;`;
+
+  // Lit side needs one more sample of the field, offset toward the sun. On the
+  // low tier it is dropped and the density term carries the shading alone.
+  const lit = litSample
+    ? `    float lightSide = clamp( 0.5 + ( vnoise( wp + uSunDir * 0.55 ) - body ) * 2.4, 0.0, 1.0 );`
+    : `    float lightSide = 0.5;`;
+
+  return /* glsl */ `
+  // ---- sky ---------------------------------------------------------------
+  float discShape = 0.0;
+  if ( uSkyAmount > 0.0 ) {
+    // Pretend elevation: 0 at the haze line, 1 at the zenith. See the header
+    // for why this is the sweep and not vDir.y.
+    float e = clamp( ( sweep - ${SKY_HORIZON.toFixed(2)} ) / ${SKY_SPAN.toFixed(2)}, 0.0, 1.0 );
+    vec2 dxz = vDir.xz / max( length( vDir.xz ), 1e-4 );
+
+    // Angular distance to the sun, in screen radians: true bearing across,
+    // sweep scaled into radians up. The chord form of the bearing difference
+    // is stable right at the disc where acos is not.
+    float dAz = 2.0 * asin( min( 1.0, 0.5 * length( dxz - uSunDir ) ) );
+    float dEl = ( sweep - uSunSweep ) * uSweepToRad;
+    float sunAng = sqrt( dAz * dAz + dEl * dEl );
+
+    // Core plus a broad skirt. The skirt is the part that reads as time of
+    // day: during a run the disc is 93 degrees off-axis and this is all of the
+    // sun the player ever sees.
+    float gk = 1.0 / max( uGlowSpread, 0.05 );
+    float glowAmt = exp( -sunAng * gk ) + 0.55 * exp( -sunAng * gk * 0.28 );
+    // Thicker air low down. Also keeps the palette's own gradient alive at the
+    // top of frame instead of flattening the whole sky to one colour.
+    glowAmt = min( glowAmt * mix( 1.0, 0.5, e ) * uSkyAmount, 1.0 );
+    col = mix( col, uGlowColor, glowAmt * 0.8 );
+
+    if ( uStars > 0.0 ) {
+      float az = atan( vDir.x, vDir.z );
+      // One unit of e is SKY_SPAN * uSweepToRad radians, so scaling both axes
+      // by the same number keeps the cells square whatever the FOV.
+      vec2 sp = vec2( az, e * ${SKY_SPAN.toFixed(2)} * uSweepToRad ) * ( 34.0 + 46.0 * uStars );
+      vec2 ci = floor( sp );
+      vec2 cf = sp - ci;
+      vec2 at = vec2( hash12( ci + 7.31 ), hash12( ci + 3.17 ) );
+      float star = step( 1.0 - 0.55 * uStars, hash12( ci ) );
+      star *= 1.0 - smoothstep( 0.0, 0.17, length( cf - at ) );
+      star *= smoothstep( 0.03, 0.30, e );
+      star *= 1.0 - min( 1.0, glowAmt * 1.6 );
+      col = mix( col, uStarColor, star * uSkyAmount * 0.85 );
+    }
+
+    float cloudA = 0.0;
+    if ( uCloudCover > 0.001 ) {
+      // A flat deck one unit up: r = cot(elevation). Real perspective, so the
+      // field compresses into the horizon the way a real one does.
+      float r = min( ( 1.0 - e ) / max( e, 0.045 ), 22.0 );
+      vec2 cp = dxz * r * ${CLOUD_SCALE.toFixed(2)} + uCloudOffset;
+      float lod = clamp( 1.0 - r * 0.055, 0.25, 1.0 );
+${warp}
+      float body;
+      float f = cloudFbm( wp, lod, body );
+      // Value noise piles up around 0.5; stretch it or nothing ever clears the
+      // threshold and "scattered" comes out as "faint haze".
+      f = clamp( ( f - 0.5 ) * 1.75 + 0.5, 0.0, 1.0 );
+
+      float cov = clamp( uCloudCover * mix( 0.62, 1.18, smoothstep( 0.0, 0.85, e ) ), 0.0, 1.0 );
+      float thr = mix( 1.02, 0.06, cov );
+      float wid = mix( 0.30, 0.11, cov );
+      cloudA = smoothstep( thr, thr + wid, f );
+      // Thin out into the haze rather than ending at a line.
+      cloudA *= smoothstep( 0.02, 0.26, e );
+
+      // Seen from underneath, a cumulus is bright at the fringe and grey
+      // through the thick middle, because that is where the light from above
+      // does not get through. That single term is the difference between a
+      // volume and a white blob; the directional sample only tilts it.
+      float depth = smoothstep( thr, min( thr + wid * 2.8, 1.05 ), f );
+${lit}
+      float litMix = clamp( ( 1.0 - depth ) * 0.55 + lightSide * 0.45, 0.0, 1.0 );
+      vec3 cloudRgb = mix( uCloudShade, mix( uCloudLit, uGlowColor, glowAmt * 0.6 ), litMix );
+      col = mix( col, cloudRgb, cloudA * uSkyAmount );
+    }
+
+    // Haze band. Wide below the line so the fence and the facades dissolve
+    // into air instead of ending, tight above so the sky stays the sky.
+    float du = max( sweep - ${SKY_HORIZON.toFixed(2)}, 0.0 ) / uHorizonBand.x;
+    float dd = max( ${SKY_HORIZON.toFixed(2)} - sweep, 0.0 ) / uHorizonBand.y;
+    float hz = exp( -( du * du + dd * dd ) );
+    col = mix( col, mix( uHorizonColor, uGlowColor, glowAmt * 0.55 ), hz * 0.9 * uSkyAmount );
+
+    discShape = 1.0 - smoothstep( uSunSize.x, uSunSize.y, sunAng );
+    discShape *= ( 1.0 - cloudA * uSkyAmount ) * ( 1.0 - hz * 0.55 ) * uSkyAmount;
+  }
+`;
+}
+
+/**
+ * @param open false returns the studio sweep, character for character as it
+ * has always been — two themes depend on that and a `mix` by zero is not the
+ * same promise as code that never runs.
+ */
+function buildFrag(open: boolean, octaves: number, warp: number, lit: boolean): string {
+  return /* glsl */ `
 uniform vec3 uTop;
 uniform vec3 uBottom;
 uniform vec3 uFloor;
@@ -63,13 +297,13 @@ uniform float uDirect;
 uniform float uExposure;
 uniform mat3 uAcesInInv;
 uniform mat3 uAcesOutInv;
-
+${open ? SKY_UNIFORMS + '\n' : ''}
 varying vec3 vDir;
 
 ${GLSL_ACES_INVERSE}
 ${GLSL_SRGB}
 ${GLSL_DITHER}
-
+${open ? '\n' + SKY_NOISE + '\n\n' + skyFbm(octaves) + '\n' : ''}
 void main() {
   vec2 uv = gl_FragCoord.xy / uResolution;
   vec2 d = uv - vec2( 0.5, 0.56 );
@@ -89,7 +323,7 @@ void main() {
   // cyclorama's curve does.
   float f = smoothstep( 0.08, -0.22, sweep );
   col = mix( col, uFloor, f * 0.5 );
-
+${open ? skyBody(octaves, warp, lit) : ''}
   // The softbox behind the subject, and the lens falloff. Both are gains, not
   // additions: an addition here would push the pre-divided colour into the
   // ACES shoulder, where the inverse is wildly ill-conditioned.
@@ -102,7 +336,7 @@ void main() {
     // it has to stand in for the finishing pass's vignette. Same curve, same
     // place in the order (after the encode), so the sweep measures the same on
     // both tiers instead of being ~30 steps brighter at the frame edge here.
-    col = clamp( col * glow * vig, 0.0, 1.0 );
+    col = clamp( ${open ? 'mix( col, uSunTint, discShape * uSunAmt )' : 'col'} * glow * vig, 0.0, 1.0 );
     col = encodeSRGB( col );
     float aspect = uResolution.x / max( uResolution.y, 1.0 );
     vec2 pq = vec2( ( uv.x - 0.5 ) * aspect, uv.y - 0.5 );
@@ -113,12 +347,41 @@ void main() {
     // A tone mapper is downstream. Pre-divide so the sweep lands on the exact
     // palette hex instead of being tone-mapped into mush. See tonemap.ts for
     // how the bloom threshold is kept above whatever this produces.
-    col = acesInverse( col, uExposure, uAcesInInv, uAcesOutInv ) * glow * vig;
+    col = acesInverse( col, uExposure, uAcesInInv, uAcesOutInv ) * glow * vig;${
+      open
+        ? `
+    // The one additive term in the shader, and the only one that can be: it
+    // goes in AFTER the inverse, in linear scene units, so it never touches
+    // the ill-conditioned end of the curve. uSunLin is sized in tonemap.ts to
+    // clear the bloom threshold that the rest of this shader sits under.
+    col += uSunLin * discShape * discShape;`
+        : ''
+    }
   }
 
   gl_FragColor = vec4( col, 1.0 );
 }
 `;
+}
+
+/** Noise budget per pixel, per tier. Measured, not guessed — see the report. */
+interface SkyTier {
+  octaves: number;
+  /** Domain-warp samples. 0 drops the warp and the field reads as noise. */
+  warp: number;
+  /** Whether the cloud gets a second field sample for its lit side. */
+  lit: boolean;
+}
+
+const SKY_TIERS: Record<QualityTier, SkyTier> = {
+  // 5 + 2 + 1 = 8 value-noise fetches (32 hashes) a pixel.
+  high: { octaves: 5, warp: 2, lit: true },
+  // 3 + 1 + 1 = 5 fetches (20 hashes).
+  medium: { octaves: 3, warp: 1, lit: true },
+  // 2 + 0 + 0 = 2 fetches (8 hashes). No warp, no directional sample; the
+  // density term alone still gives the deck a lit fringe and a grey core.
+  low: { octaves: 2, warp: 0, lit: false },
+};
 
 function paintBlob(size: number, hardness: number): THREE.Texture | null {
   const s = makeSurface(size);
@@ -142,11 +405,56 @@ function paintBlob(size: number, hardness: number): THREE.Texture | null {
   return tex;
 }
 
+/** Everything the shader needs to draw one sky, in shader-ready units. */
+class SkyState {
+  amount = 0;
+  sunDir = new THREE.Vector2(0, 1);
+  sunSweep = SKY_HORIZON;
+  sunAmt = 0;
+  readonly sunTint = new THREE.Color(0xffffff);
+  readonly sunLin = new THREE.Color(0, 0, 0);
+  readonly glow = new THREE.Color(0xffffff);
+  glowSpread = 1;
+  readonly cloudLit = new THREE.Color(0xffffff);
+  readonly cloudShade = new THREE.Color(0x808080);
+  cloudCover = 0;
+  cloudDrift = 0;
+  readonly horizon = new THREE.Color(0xffffff);
+  horizonUp = 0.12;
+  horizonDown = 0.16;
+  stars = 0;
+  readonly starColor = new THREE.Color(0xffffff);
+
+  copy(o: SkyState): void {
+    this.amount = o.amount;
+    this.sunDir.copy(o.sunDir);
+    this.sunSweep = o.sunSweep;
+    this.sunAmt = o.sunAmt;
+    this.sunTint.copy(o.sunTint);
+    this.sunLin.copy(o.sunLin);
+    this.glow.copy(o.glow);
+    this.glowSpread = o.glowSpread;
+    this.cloudLit.copy(o.cloudLit);
+    this.cloudShade.copy(o.cloudShade);
+    this.cloudCover = o.cloudCover;
+    this.cloudDrift = o.cloudDrift;
+    this.horizon.copy(o.horizon);
+    this.horizonUp = o.horizonUp;
+    this.horizonDown = o.horizonDown;
+    this.stars = o.stars;
+    this.starColor.copy(o.starColor);
+  }
+}
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
 export interface BackdropOpts {
   /** Height of the studio floor. The plate's top sits at y = 0. */
   groundY?: number;
   /** True when nothing downstream will tone-map or encode the frame. */
   direct: boolean;
+  /** Sets the cloud octave budget. Defaults to the middle tier. */
+  quality?: QualityTier;
 }
 
 export class Backdrop {
@@ -185,8 +493,18 @@ export class Backdrop {
   /** Sweep colour immediately behind the plate; the blob blends over this. */
   private readonly behindPlate = new THREE.Color(0xe07a5f);
 
+  // sky
+  private tier: QualityTier;
+  private skyOpen = false;
+  private readonly fromSky = new SkyState();
+  private readonly toSky = new SkyState();
+  private readonly liveSky = new SkyState();
+  /** Integrated, not `time * drift`, so a drift change does not jump. */
+  private cloudPhase = 0;
+
   constructor(opts: BackdropOpts) {
     this.group.name = 'cyclorama';
+    this.tier = opts.quality ?? 'medium';
     const inIn = acesInMatrixInverse();
     const outIn = acesOutMatrixInverse();
 
@@ -194,7 +512,7 @@ export class Backdrop {
     this.skyMat = new THREE.ShaderMaterial({
       name: 'cyclorama',
       vertexShader: VERT,
-      fragmentShader: FRAG,
+      fragmentShader: buildFrag(false, 0, 0, false),
       side: THREE.BackSide,
       depthWrite: false,
       depthTest: false,
@@ -215,6 +533,25 @@ export class Backdrop {
         uExposure: { value: 1.05 },
         uAcesInInv: { value: inIn },
         uAcesOutInv: { value: outIn },
+        // --- sky; inert until a palette brings one ---
+        uSkyAmount: { value: 0 },
+        uSweepToRad: { value: 0.75 },
+        uSunDir: { value: new THREE.Vector2(0, 1) },
+        uSunSweep: { value: SKY_HORIZON },
+        uSunSize: { value: new THREE.Vector2(SUN_RADIUS * 0.7, SUN_RADIUS * 1.35) },
+        uSunAmt: { value: 0 },
+        uSunTint: { value: new THREE.Color(0xffffff) },
+        uSunLin: { value: new THREE.Color(0, 0, 0) },
+        uGlowColor: { value: new THREE.Color(0xffffff) },
+        uGlowSpread: { value: 1 },
+        uCloudLit: { value: new THREE.Color(0xffffff) },
+        uCloudShade: { value: new THREE.Color(0x808080) },
+        uCloudCover: { value: 0 },
+        uCloudOffset: { value: new THREE.Vector2(0, 0) },
+        uHorizonColor: { value: new THREE.Color(0xffffff) },
+        uHorizonBand: { value: new THREE.Vector2(0.12, 0.16) },
+        uStars: { value: 0 },
+        uStarColor: { value: new THREE.Color(0xffffff) },
       },
     });
     this.sky = new THREE.Mesh(skyGeo, this.skyMat);
@@ -278,6 +615,23 @@ export class Backdrop {
   }
 
   /**
+   * Cloud octave budget. Recompiles only when the tier actually moves and the
+   * sky is open; a studio theme never pays for a program it does not use.
+   */
+  setQuality(tier: QualityTier): void {
+    if (tier === this.tier) return;
+    this.tier = tier;
+    if (this.skyOpen) this.compileVariant(true);
+  }
+
+  private compileVariant(open: boolean): void {
+    const t = SKY_TIERS[this.tier];
+    this.skyMat.fragmentShader = buildFrag(open, t.octaves, t.warp, t.lit);
+    this.skyMat.needsUpdate = true;
+    this.skyOpen = open;
+  }
+
+  /**
    * Everything whose correct value depends on whether a tone mapper runs after
    * us: the stand-in vignette, and the contact blob's alpha.
    */
@@ -333,6 +687,7 @@ export class Backdrop {
     this.fromGround.copy(this.groundMat.color);
     this.fromVig = u.uVignette.value as number;
     this.fromPostVig = this.postVig;
+    this.fromSky.copy(this.liveSky);
 
     this.toTop.setHex(p.bgTop, THREE.SRGBColorSpace);
     this.toBottom.setHex(p.bgBottom, THREE.SRGBColorSpace);
@@ -343,6 +698,7 @@ export class Backdrop {
     this.toGround.setHex(p.ground, THREE.SRGBColorSpace).lerp(BLACK, 0.6);
     this.toVig = p.vignette * 0.6;
     this.toPostVig = p.vignette;
+    this.resolveSky(p, this.toSky);
 
     // The blob blends over the bottom of the sweep, which is bgBottom pulled
     // partway toward the floor tint by the roll-off in the shader.
@@ -350,10 +706,65 @@ export class Backdrop {
     this.behindPlate.lerp(TMP_GROUND.setHex(p.ground, THREE.SRGBColorSpace), 0.3);
     this.paletteExposure = p.exposure;
 
+    // Either end of the fade needs the sky program; only when both ends are
+    // studio can the plain sweep run, and it must, byte for byte.
+    if (this.fromSky.amount > 0 || this.toSky.amount > 0) {
+      if (!this.skyOpen) this.compileVariant(true);
+    }
+
     this.setExposure(p.exposure);
     this.fadeDur = Math.max(0, duration);
     this.fadeT = 0;
     if (this.fadeDur === 0) this.commit(1);
+  }
+
+  /**
+   * Palette -> shader units. A studio palette keeps whatever colours are
+   * already loaded and simply fades `amount` to zero, so a swap out of an open
+   * sky dissolves instead of lerping toward nothing.
+   */
+  private resolveSky(p: ThemePaletteLike, out: SkyState): void {
+    const s = p.sky;
+    if (!s || s.kind !== 'open') {
+      out.copy(this.fromSky);
+      out.amount = 0;
+      out.cloudDrift = 0;
+      return;
+    }
+    out.amount = 1;
+    out.sunDir.set(Math.sin(s.sunAzimuth), Math.cos(s.sunAzimuth));
+    const elev = THREE.MathUtils.clamp(s.sunElevation, -0.1, Math.PI / 2);
+    out.sunSweep = SKY_HORIZON + (elev / (Math.PI / 2)) * SKY_SPAN;
+
+    const intensity = Math.max(0, s.sunIntensity);
+    out.sunAmt = THREE.MathUtils.clamp(intensity, 0, 1);
+    // The core of any sun reads white; the authored hue survives at the rim
+    // and, much more visibly, in the glow.
+    out.sunTint.setHex(s.sunColor, THREE.SRGBColorSpace).lerp(WHITE, 0.5);
+    out.sunLin
+      .setHex(s.sunColor, THREE.SRGBColorSpace)
+      .multiplyScalar(sunLinearScale(p) * intensity);
+
+    out.glow.setHex(s.glowColor, THREE.SRGBColorSpace);
+    out.glowSpread = Math.max(0.05, s.glowSpread);
+
+    out.cloudLit.setHex(s.cloudColor, THREE.SRGBColorSpace);
+    const shade = THREE.MathUtils.clamp(s.cloudShadow, 0, 1);
+    out.cloudShade
+      .copy(out.cloudLit)
+      .multiplyScalar(1 - shade * 0.8)
+      // A cloud base is not just a darker cloud; it picks up the haze under it.
+      .lerp(TMP_HAZE.setHex(s.horizonColor, THREE.SRGBColorSpace), shade * 0.3);
+    out.cloudCover = THREE.MathUtils.clamp(s.cloudCover, 0, 1);
+    out.cloudDrift = s.cloudDrift;
+
+    out.horizon.setHex(s.horizonColor, THREE.SRGBColorSpace);
+    const soft = THREE.MathUtils.clamp(s.horizonSoftness, 0, 1);
+    out.horizonUp = lerp(0.05, 0.3, soft);
+    out.horizonDown = lerp(0.1, 0.26, soft);
+
+    out.stars = THREE.MathUtils.clamp(s.stars, 0, 1);
+    out.starColor.setHex(s.glowColor, THREE.SRGBColorSpace).lerp(WHITE, 0.75);
   }
 
   private commit(t: number): void {
@@ -365,8 +776,57 @@ export class Backdrop {
     this.groundMat.color.lerpColors(this.fromGround, this.toGround, t);
     u.uVignette.value = this.fromVig + (this.toVig - this.fromVig) * t;
     this.postVig = this.fromPostVig + (this.toPostVig - this.fromPostVig) * t;
+    this.commitSky(t);
     this.syncPathDependent();
     this.fadeT = t;
+  }
+
+  private commitSky(t: number): void {
+    if (!this.skyOpen) return;
+    const a = this.fromSky;
+    const b = this.toSky;
+    const s = this.liveSky;
+
+    s.amount = lerp(a.amount, b.amount, t);
+    s.sunDir.lerpVectors(a.sunDir, b.sunDir, t);
+    if (s.sunDir.lengthSq() > 1e-6) s.sunDir.normalize();
+    s.sunSweep = lerp(a.sunSweep, b.sunSweep, t);
+    s.sunAmt = lerp(a.sunAmt, b.sunAmt, t);
+    s.sunTint.lerpColors(a.sunTint, b.sunTint, t);
+    s.sunLin.lerpColors(a.sunLin, b.sunLin, t);
+    s.glow.lerpColors(a.glow, b.glow, t);
+    s.glowSpread = lerp(a.glowSpread, b.glowSpread, t);
+    s.cloudLit.lerpColors(a.cloudLit, b.cloudLit, t);
+    s.cloudShade.lerpColors(a.cloudShade, b.cloudShade, t);
+    s.cloudCover = lerp(a.cloudCover, b.cloudCover, t);
+    s.cloudDrift = lerp(a.cloudDrift, b.cloudDrift, t);
+    s.horizon.lerpColors(a.horizon, b.horizon, t);
+    s.horizonUp = lerp(a.horizonUp, b.horizonUp, t);
+    s.horizonDown = lerp(a.horizonDown, b.horizonDown, t);
+    s.stars = lerp(a.stars, b.stars, t);
+    s.starColor.lerpColors(a.starColor, b.starColor, t);
+
+    const u = this.skyMat.uniforms;
+    u.uSkyAmount.value = s.amount;
+    (u.uSunDir.value as THREE.Vector2).copy(s.sunDir);
+    u.uSunSweep.value = s.sunSweep;
+    u.uSunAmt.value = s.sunAmt;
+    (u.uSunTint.value as THREE.Color).copy(s.sunTint);
+    (u.uSunLin.value as THREE.Color).copy(s.sunLin);
+    (u.uGlowColor.value as THREE.Color).copy(s.glow);
+    u.uGlowSpread.value = s.glowSpread;
+    (u.uCloudLit.value as THREE.Color).copy(s.cloudLit);
+    (u.uCloudShade.value as THREE.Color).copy(s.cloudShade);
+    u.uCloudCover.value = s.cloudCover;
+    (u.uHorizonColor.value as THREE.Color).copy(s.horizon);
+    (u.uHorizonBand.value as THREE.Vector2).set(s.horizonUp, s.horizonDown);
+    u.uStars.value = s.stars;
+    (u.uStarColor.value as THREE.Color).copy(s.starColor);
+
+    // Fade finished on a studio palette: drop back to the plain sweep, which
+    // is the only way to promise byte-identical output rather than approximate
+    // it with a multiply by zero.
+    if (t >= 1 && b.amount === 0) this.compileVariant(false);
   }
 
   /**
@@ -378,6 +838,21 @@ export class Backdrop {
       this.commit(Math.min(1, this.fadeT + dt / this.fadeDur));
     }
     this.sky.position.copy(camera.position);
+    if (!this.skyOpen) return;
+
+    // The deck is the only thing in the sky that moves, and it is what stops
+    // the world reading as a painting. Integrated rather than time * drift so
+    // a crossfade between two drift rates does not teleport the clouds.
+    this.cloudPhase += dt * this.liveSky.cloudDrift;
+    if (this.cloudPhase > CLOUD_WRAP) this.cloudPhase -= CLOUD_WRAP;
+    (this.skyMat.uniforms.uCloudOffset.value as THREE.Vector2).set(
+      this.cloudPhase,
+      this.cloudPhase * 0.32,
+    );
+    this.skyMat.uniforms.uSweepToRad.value = sweepToRadians(
+      camera,
+      this.skyMat.uniforms.uParallax.value as number,
+    );
   }
 
   dispose(): void {
@@ -388,8 +863,43 @@ export class Backdrop {
 }
 
 const BLACK = /* @__PURE__ */ new THREE.Color(0x000000);
+const WHITE = /* @__PURE__ */ new THREE.Color(0xffffff);
 const TMP_GROUND = /* @__PURE__ */ new THREE.Color();
+const TMP_HAZE = /* @__PURE__ */ new THREE.Color();
+const TMP_FWD = /* @__PURE__ */ new THREE.Vector3();
+
+/**
+ * Radians of screen angle per unit of `sweep`, at the centre of the frame.
+ *
+ * The sun has to be round, and it is placed with a bearing across (true
+ * radians) and a sweep value up (a frame coordinate). Without this conversion
+ * the disc comes out as a heavily stretched ellipse, and the stars come out in
+ * vertical stripes. Derived from the live camera rather than hard-coded so it
+ * stays right when the rig changes FOV or the parallax term is retuned.
+ */
+function sweepToRadians(camera: THREE.Camera, parallax: number): number {
+  const persp = camera as THREE.PerspectiveCamera;
+  const fov = persp.isPerspectiveCamera ? persp.fov : 46;
+  TMP_FWD.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  const pitch = Math.asin(THREE.MathUtils.clamp(-TMP_FWD.y, -1, 1));
+  // d(ray elevation) / d(uv.y) at frame centre.
+  const dThetaDuv = 2 * Math.tan(THREE.MathUtils.degToRad(fov) * 0.5);
+  const dSweepDuv = 1 + parallax * Math.cos(pitch) * dThetaDuv;
+  return dThetaDuv / Math.max(dSweepDuv, 1e-4);
+}
 
 export function createBackdrop(opts: BackdropOpts): Backdrop {
   return new Backdrop(opts);
 }
+
+/** Exported for the probe harness and for anything that wants to reason about
+ * where the sky's horizon falls in sweep units. */
+export const SKY_LEVELS = { horizon: SKY_HORIZON, zenith: SKY_ZENITH } as const;
+
+/** Value-noise fetches per pixel at each tier. Reported, not guessed. */
+export function skyNoiseBudget(tier: QualityTier): number {
+  const t = SKY_TIERS[tier];
+  return t.octaves + t.warp + (t.lit ? 1 : 0);
+}
+
+export type { SkyConfig };

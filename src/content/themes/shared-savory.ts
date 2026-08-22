@@ -1113,6 +1113,39 @@ export class PropBatch {
     return this.add(geo, color, at);
   }
 
+  /**
+   * An open cylindrical arc: a wall pier, the spandrel over a window, the
+   * curved back of a bench. Cheap, and it is what lets a round room have real
+   * openings in it instead of a bright rectangle painted on a solid wall.
+   */
+  arc(
+    r: number,
+    h: number,
+    thetaStart: number,
+    thetaLength: number,
+    color: number,
+    at: PlaceOpts = {},
+    segs = 12,
+  ): this {
+    const span = Math.abs(num(thetaLength));
+    if (span < 1e-4) return this;
+    const n = clamp(Math.round(segs), 1, 96);
+    const geo = new THREE.CylinderGeometry(
+      safe(r),
+      safe(r),
+      safe(h),
+      n,
+      1,
+      true,
+      num(thetaStart),
+      span,
+    );
+    // Faces point outward by default; a room is seen from the inside.
+    geo.scale(-1, 1, 1);
+    geo.computeVertexNormals();
+    return this.add(geo, color, at);
+  }
+
   strut(a: THREE.Vector3, b: THREE.Vector3, thickness: number, color: number, square = false): this {
     return this.add(strut(a, b, thickness, square), color);
   }
@@ -1140,6 +1173,90 @@ export function tintEach(
     arr[i * 3 + 2] = c.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+/**
+ * Per-vertex tint **with alpha** — the only way to make a surface genuinely
+ * dissolve rather than merely fade toward the colour behind it.
+ *
+ * A room with no ceiling, or a wall taller than the frame, has to end
+ * somewhere; fading its colour into the backdrop leaves a soft arc, because a
+ * lit surface tinted exactly the backdrop's hue still renders a few percent
+ * off it and a few percent is all an edge needs. Writing alpha into the colour
+ * attribute (itemSize 4, which three reads as `USE_COLOR_ALPHA`) removes the
+ * surface instead of repainting it, so there is nothing left to catch an edge.
+ * The material must be `transparent` — and normally `depthWrite: false`, since
+ * a dissolving shell is always the furthest thing in its own direction.
+ */
+export function tintEachA(
+  geo: THREE.BufferGeometry,
+  colorAt: (x: number, y: number, z: number) => number,
+  alphaAt: (x: number, y: number, z: number) => number,
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const arr = new Float32Array(pos.count * 4);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const hex = colorAt(x, y, z);
+    c.setHex(Number.isFinite(hex) ? hex : 0xffffff).convertSRGBToLinear();
+    const a = alphaAt(x, y, z);
+    arr[i * 4] = c.r;
+    arr[i * 4 + 1] = c.g;
+    arr[i * 4 + 2] = c.b;
+    arr[i * 4 + 3] = clamp01(Number.isFinite(a) ? a : 1);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 4));
+  return geo;
+}
+
+/**
+ * A gable roof: a triangular prism with the ridge running along X, sitting on
+ * y = 0. Eight triangles, which is the whole reason it exists — a distant
+ * suburban roofline needs a dozen of these and cannot afford a lathe.
+ */
+export function prismGeo(width: number, height: number, depth: number): THREE.BufferGeometry {
+  const w = safe(width) / 2;
+  const h = safe(height);
+  const d = safe(depth) / 2;
+  // 6 corners: 4 eaves, 2 ridge ends.
+  const P: ReadonlyArray<readonly [number, number, number]> = [
+    [-w, 0, -d],
+    [w, 0, -d],
+    [w, 0, d],
+    [-w, 0, d],
+    [-w, h, 0],
+    [w, h, 0],
+  ];
+  const faces: ReadonlyArray<readonly [number, number, number]> = [
+    [0, 1, 5],
+    [0, 5, 4], // back pitch
+    [2, 3, 4],
+    [2, 4, 5], // front pitch
+    [1, 0, 3],
+    [1, 3, 2], // underside
+    [0, 4, 3], // left gable end
+    [1, 2, 5], // right gable end
+  ];
+  const pos = new Float32Array(faces.length * 9);
+  const uv = new Float32Array(faces.length * 6);
+  for (let f = 0; f < faces.length; f++) {
+    for (let k = 0; k < 3; k++) {
+      const v = P[faces[f][k]];
+      pos[f * 9 + k * 3] = v[0];
+      pos[f * 9 + k * 3 + 1] = v[1];
+      pos[f * 9 + k * 3 + 2] = v[2];
+      uv[f * 6 + k * 2] = v[0] / (w * 2) + 0.5;
+      uv[f * 6 + k * 2 + 1] = v[2] / (d * 2) + 0.5;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
   return geo;
 }
 

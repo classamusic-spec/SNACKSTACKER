@@ -128,9 +128,27 @@ function lumaOfHex(hex: number, exposure: number, gain: number): number {
   return tmpVec.x * REC709.r + tmpVec.y * REC709.g + tmpVec.z * REC709.b;
 }
 
+/** Same, for a colour that is already a linear display-referred triple. */
+function lumaOfLinear(v: number, exposure: number, gain: number): number {
+  tmpColor.setRGB(v, v, v);
+  acesInverse(tmpColor, exposure, tmpVec).multiplyScalar(gain);
+  return tmpVec.x * REC709.r + tmpVec.y * REC709.g + tmpVec.z * REC709.b;
+}
+
+/** Matches the star mix in backdrop.ts: `mix( col, uStarColor, 0.85 )`. */
+const STAR_PEAK = 0.85;
+
 /**
  * Brightest luminance the cyclorama can reach for this palette, in the linear
  * units the bloom high-pass sees.
+ *
+ * Everything the sky shader draws is a `mix` between authored colours, so the
+ * peak is bounded by the brightest of them — which for an open sky is usually
+ * not bgTop at all. A cream cloud over a dusk gradient, or the moon glow over
+ * a midnight one, both sit well above the sweep, and a threshold derived from
+ * bgTop alone would let the whole cloud deck bloom into a smear. The sun disc
+ * is deliberately NOT in this list: it is the one thing that must bloom, and
+ * `sunLinearScale` sizes it against the threshold this produces.
  *
  * @param glowGain the multiplicative lift the sweep's softbox applies.
  */
@@ -139,11 +157,26 @@ export function backdropPeakLuma(
   exposure = p.exposure,
   glowGain = 1.14,
 ): number {
-  return Math.max(
+  let peak = Math.max(
     lumaOfHex(p.bgTop, exposure, glowGain),
     lumaOfHex(p.bgBottom, exposure, glowGain),
     lumaOfHex(p.ground, exposure, glowGain),
   );
+  const sky = p.sky;
+  if (sky && sky.kind === 'open') {
+    peak = Math.max(
+      peak,
+      lumaOfHex(sky.glowColor, exposure, glowGain),
+      lumaOfHex(sky.horizonColor, exposure, glowGain),
+    );
+    if (sky.cloudCover > 0.001) {
+      peak = Math.max(peak, lumaOfHex(sky.cloudColor, exposure, glowGain));
+    }
+    if (sky.stars > 0.001) {
+      peak = Math.max(peak, lumaOfLinear(STAR_PEAK, exposure, glowGain));
+    }
+  }
+  return peak;
 }
 
 /**
@@ -152,4 +185,32 @@ export function backdropPeakLuma(
  */
 export function bloomThresholdFor(p: ThemePaletteLike): number {
   return Math.max(1.0, backdropPeakLuma(p) * 1.12);
+}
+
+/**
+ * How far above the bloom threshold the sun's core sits. Two and a bit is
+ * enough to saturate the tone curve to white and to clear the high-pass with
+ * margin; much more and the bloom kernel spreads a hard-edged blob instead of
+ * a halo.
+ */
+const SUN_BLOOM_HEADROOM = 2.6;
+
+/**
+ * Multiplier for the sun's linear colour on the composer path.
+ *
+ * The rest of the backdrop is clamped at `TARGET_CLAMP` before the inverse, so
+ * it can never out-run the threshold no matter how bright the palette. The sun
+ * is added afterwards, in scene-linear units, and is the only part of this
+ * shader with real HDR headroom — this is the number that decides it blooms.
+ * On the direct path there is no bloom at all and no composer, so the disc is
+ * just clamped to white there; both paths therefore agree on the core colour
+ * and differ only by the halo, which is a tier feature, not a mismatch.
+ */
+export function sunLinearScale(p: ThemePaletteLike): number {
+  const sky = p.sky;
+  if (!sky || sky.kind !== 'open') return 0;
+  tmpColor.setHex(sky.sunColor, THREE.SRGBColorSpace);
+  const luma = tmpColor.r * REC709.r + tmpColor.g * REC709.g + tmpColor.b * REC709.b;
+  if (luma <= 0.0001) return 0;
+  return (bloomThresholdFor(p) * SUN_BLOOM_HEADROOM) / luma;
 }
