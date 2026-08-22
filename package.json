@@ -13,7 +13,8 @@
     "shots": "node tools/shoot.mjs",
     "icons": "node tools/make-icons.mjs",
     "shots:themes": "node tools/shoot-themes.mjs",
-    "shots:env": "node tools/shoot-env.mjs"
+    "shots:env": "node tools/shoot-env.mjs",
+    "build:single": "tsc --noEmit && SNACKERY_SINGLE=1 vite build"
   },
   "dependencies": {
     "three": "^0.185.1"
@@ -22,6 +23,7 @@
     "@types/three": "^0.185.0",
     "playwright": "^1.62.1",
     "typescript": "^5.9.3",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

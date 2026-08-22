@@ -38,12 +38,20 @@ npm run dev        # http://localhost:5173
 ```
 
 ```bash
-npm run build      # typecheck + production bundle into dist/
-npm run preview    # serve the built bundle on :4173
-npm test           # slice-geometry test suite
-npm run shots      # drive the built game in headless Chromium, write PNGs
-npm run icons      # regenerate app icons from tools/make-icons.mjs
+npm run build         # typecheck + production bundle into dist/
+npm run preview       # serve the built bundle on :4173
+npm run build:single  # one self-contained .html into dist-single/
+npm test              # slice-geometry test suite
+npm run shots         # drive the built game in headless Chromium, write PNGs
+npm run shots:themes  # buy the bundle, then play and shoot every theme
+npm run shots:env     # per-theme environment shots (SN_TIER=high for the full chain)
+npm run icons         # regenerate app icons from tools/make-icons.mjs
 ```
+
+**Want to just play it?** `npm run build:single` writes a single ~930 KB
+`dist-single/index.html` with every script, style and texture inlined. Open it
+straight off disk — no server, no install. It is the same build as `dist/`,
+only unsplit, and it saves progress to `localStorage` like the hosted one.
 
 No asset pipeline, no downloads: every mesh, texture and sound is generated at
 runtime. The whole game is the JS bundle.
