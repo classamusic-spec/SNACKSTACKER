@@ -574,10 +574,12 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
 // which opened roughly a fifth of the frame — and then the middle distance
 // went INTO that band, hazed, so it reads as depth rather than as emptiness:
 //
-//   yard (0-14)   table, grill, cooler, chair, hose reel, bird bath, stones
+//   yard (0-9)    table, grill, cooler, chair, hose reel, bird bath, stones
 //   fence (16.4)  low pickets with real gaps, a gate, a hedge run
-//   near trees    r 20-23, three of them, crowns clamped to the skyline
-//   neighbourhood r 24-31: rooflines, a shed, a power line, a treeline
+//   near trees    r 19-23, three of them, crowns clamped to the skyline
+//   neighbourhood r 19-27: a treeline at two depths, rooflines, a shed, wires
+//   ground rim    r 30, where the lawn runs out of colour before it runs out
+//                 of geometry
 //   sky           everything above, and now there is some
 //
 // The clearance cylinder still holds — nothing within 4.6 units rises above
@@ -589,12 +591,15 @@ const YARD_DROP = 2.3;
 /** The cloth is the top surface; the planks sit this far under it. */
 const CLOTH_LIFT = 0.045;
 /**
- * Everything far away fades into this — and it is the sky preset's OWN
- * `horizonColor`, not a hand-picked near-match. The lawn's outer apron and the
- * sky's haze band meet somewhere around the top of the fence, and if the two
- * are even a few percent apart the meeting shows up as a line drawn across the
- * yard. Taking the value from the same object the shader reads makes the seam
- * impossible rather than merely unlikely.
+ * Everything far away fades toward this — and it is the sky preset's OWN
+ * `horizonColor`, not a hand-picked near-match, so the yard and the sky's haze
+ * band can never drift apart as the preset is tuned.
+ *
+ * Sharing the value is necessary and, on its own, not enough: a LIT ground
+ * plane tinted to exactly this still came out a few percent off the unlit
+ * backdrop, and at the old 36-unit rim that few percent was a ruled peach line
+ * across the top of the yard. The apron therefore overshoots PAST this into
+ * near-white before it ends. See the apron's own note.
  */
 const HAZE = SKY_PRESETS.diner.horizonColor;
 /** The play/home yaw the game opens on; props are placed relative to it. */

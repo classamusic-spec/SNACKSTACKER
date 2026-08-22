@@ -50,7 +50,6 @@ import {
   speckle,
   stripes,
   tableSlab,
-  tintGradientY,
   topSampler,
   weave,
 } from './shared-fresh';
@@ -1449,7 +1448,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     );
     if (body) {
       body.translate(x, top, z);
-      glass.push(body);
+      glass.push(tintGeometry(body, 0x6fae8a));
     }
     const cap = new THREE.CylinderGeometry(0.1, 0.1, 0.07, envSeg(q, 12, 10, 8), 1);
     cap.translate(x, top + h + 0.02, z);
@@ -1463,7 +1462,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
           top + rng.range(0.05, h * 0.5),
           z + Math.cos(ba) * 0.19,
         );
-        glass.push(bead);
+        glass.push(tintGeometry(bead, 0x8fc4a4));
       }
     }
   };
@@ -1540,8 +1539,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       shade.translate(x, top + 0.11, z);
       // low tier has no glass pass; the chimney rides with the wet food, whose
       // clearcoat is the closest thing to a highlight available there
-      if (lo) food.push(tintGeometry(shade, 0xd8e4d4));
-      else glass.push(shade);
+      if (lo) food.push(tintGeometry(shade, 0xdfe8dc));
+      else glass.push(tintGeometry(shade, 0xf6e6cc));
     }
     const collar = new THREE.TorusGeometry(0.205, 0.022, 4, envSeg(q, 12, 10, 7));
     collar.rotateX(Math.PI / 2);
@@ -1554,7 +1553,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       flame.translate(x, top + 0.36, z);
       bulbs.push(flame);
     }
-    glow.push(facingQuad(x, top + 0.42, z, 2.1, 2.1));
+    glow.push(facingQuad(x, top + 0.4, z, 0.62, 0.9));
+    glow.push(facingQuad(x, top + 0.42, z, 2.6, 2.6));
     const pool = new THREE.PlaneGeometry(4.2, 4.2);
     pool.rotateX(-Math.PI / 2);
     pool.translate(x, top + 0.008, z);
@@ -1998,7 +1998,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     if (line) papelOut.push(line);
   }
 
-  const festoonLines = lo ? 4 : 6;
+  const festoonLines = lo ? 6 : 8;
   const festStep = TAU / festoonLines;
   for (let i = 0; i < festoonLines; i++) {
     const a0 = BACK_ARC + 0.5 + i * festStep;
@@ -2010,7 +2010,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const path = catenary(pA, pB, rng.range(0.5, 0.75), lo ? 10 : 16);
     const cord = ribbon(path, 0.02, { tubular: lo ? 10 : 16, radial: 3 });
     if (cord) papelOut.push(tintGeometry(cord, 0x6a4a38));
-    const perLine = lo ? 6 : 8;
+    const perLine = lo ? 5 : 7;
     for (let b = 0; b < perLine; b++) {
       const t = (b + 0.5) / perLine;
       const p = path[Math.min(path.length - 1, Math.round(t * (path.length - 1)))];
@@ -2063,7 +2063,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // The low tier zeroes transmission and falls back to opacity, so the bottle
   // glass has to carry its colour in the base tint.
   const glassMat = ctx.materials.physical('taco.env.glass', {
-    color: 0x6fae8a,
+    color: 0xffffff,
+    vertexColors: true,
     roughness: 0.08,
     metalness: 0,
     transmission: 0.9,

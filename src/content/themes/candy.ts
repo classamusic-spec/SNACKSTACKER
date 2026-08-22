@@ -805,8 +805,12 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 /** Half-extents of the counter. Both must clear the bottom of frame. */
 const COUNTER_HALF_W = 6.4;
 const COUNTER_HALF_D = 5.8;
-/** The shelf wall — well outside the camera radius, so never in front. */
-const SHELF_R = 12.9;
+/**
+ * The shelving, the niche backs and the far wall now sit at three separate
+ * radii inside `buildEnvironment` — that stagger is the whole of the room's
+ * depth, so the numbers live next to the code that stacks them rather than up
+ * here where they would read as one wall.
+ */
 /** Bunting hangs outside the camera radius too, or it crosses the tower. */
 const BUNTING_R = 11.9;
 /** The arc directly behind the tower in the play camera's view. */

@@ -809,10 +809,15 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 
   const lacquer = ctx.materials.physical('sushi.lacquer', {
     color: 0x0b1114,
-    roughness: 0.34,
+    // Softer than it was. A 0.34/0.22 lacquer puts one tight clearcoat streak
+    // along the board's bevel, and at this theme's exposure and bloom that
+    // streak clips to white — a black lacquer board with a chrome rim, at the
+    // one yaw where the key happens to reflect off it. Spreading the highlight
+    // keeps the polish and loses the plating.
+    roughness: 0.42,
     metalness: 0,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.22,
+    clearcoat: 0.5,
+    clearcoatRoughness: 0.32,
   });
   const sheen = ctx.materials.physical('sushi.lacquer.sheen', {
     color: 0x141c21,
@@ -2062,12 +2067,26 @@ function blossomLobe(
  *
  * The old canopy was scattered icosahedra, and beyond about twelve units it
  * read as exactly what it was — pink confetti stuck on a black stick, with
- * daylight between every piece. The fix was not more pieces. A canopy is a
- * MASS: two or three lumpy lobes give it continuous volume and a torn outline,
- * the floret map puts thousands of blossoms on that volume for no triangles at
- * all, and a handful of small forms on the fringe break the edge where the
- * silhouette meets sky. The limbs then reach out PAST the lobes, so the
- * structure shows through the gap between them.
+ * daylight between every piece. Three things fixed it, and none of them is
+ * "more pieces":
+ *
+ *   * **a continuous colour field.** Every puff is graded by one function of
+ *     its position in the WHOLE crown, so neighbours agree where they touch
+ *     and the eye fuses them into a single volume with a lit top and a
+ *     rose-dark underside. Flat-tinting each puff, with exactly the same
+ *     geometry, falls straight back to a bag of pink gems.
+ *   * **twenty faces, not eight.** A smooth-normalled octahedron is six
+ *     vertices and shades as one flat ramp per face; at the sixty pixels a
+ *     puff actually occupies that is a pink diamond. An icosahedron reads
+ *     round for two and a half times the triangles.
+ *   * **the floret map.** A near-white modulating texture of soft puffs and
+ *     the gaps between them puts thousands of blossoms on the mass for no
+ *     triangles at all, and mip-maps back to its own mean when the tree is
+ *     forty pixels wide.
+ *
+ * A displaced core fills the middle so no sky shows through, the fringe puffs
+ * tear the outline against the night, and the limbs stop INSIDE the crown —
+ * reaching past it turned every tree into a black spike-ball.
  */
 function cherryTree(
   wood: EnvBucket,
@@ -2446,7 +2465,15 @@ function buildRidge(
   return g;
 }
 
-/** DEV-ONLY probe: per-environment draw calls and triangles. Removed at the end. */
+/**
+ * Draw calls and triangles for this environment alone, published on
+ * `window.__envStats` for the capture harness to read.
+ *
+ * The budget rule is per ENVIRONMENT, and the renderer's own counters are
+ * whole-scene: they include the tower, the plate, the offcuts and the
+ * backdrop, which move while you are trying to measure. Without this the only
+ * way to check the budget is to subtract two numbers that both drift.
+ */
 function envStats(name: string, root: THREE.Object3D): void {
   if (typeof window === 'undefined') return;
   let draws = 0;

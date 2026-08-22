@@ -1765,14 +1765,17 @@ function breakfastEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       for (const across of [mulls[0] - 2.7, mulls[1] + 2.7]) {
         const land = new THREE.Vector3(LX * 1.2 + PX * across, topY, LZ * 1.2 + PZ * across);
         const from = land.clone().addScaledVector(dir, -len);
-        const shaft = strut(from, land, q === 'high' ? 1.15 : 1.4, true);
+        const shaft = strut(from, land, q === 'high' ? 1.5 : 1.7, true);
         if (!shaft) continue;
+        // Warm, not white. A white shaft at any alpha the eye can see is
+        // invisible in a room this bright — there is nothing for it to be
+        // brighter THAN. A honey tint reads as a tint instead of as a lift.
         tintEachA(
           shaft,
-          () => 0xfff6e2,
+          () => 0xffdf9e,
           (x, y, z) => {
             const t = clamp01(probe.set(x, y, z).sub(from).dot(dir) / len);
-            return clamp01(t / 0.22) * clamp01((1 - t) / 0.3) * 0.13;
+            return clamp01(t / 0.22) * clamp01((1 - t) / 0.3) * 0.24;
           },
         );
         sun.keep(shaft);

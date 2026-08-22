@@ -1032,7 +1032,7 @@ function facade(
   // "tiled" from across a square — modelling the whole slope instead costs ten
   // times the triangles for a surface that is edge-on and two pixels deep.
   if (detail) {
-    const tileW = 0.46;
+    const tileW = 0.62;
     const tiles = Math.max(4, Math.round((w + 0.7) / tileW));
     const light = roof.clone().lerp(new THREE.Color(0xe8b58c), 0.34).getHex();
     const dark = roof.clone().lerp(new THREE.Color(0x5c2a1e), 0.3).getHex();
@@ -1057,7 +1057,7 @@ function facade(
   if (!detail) return;
 
   const cols = Math.max(2, Math.round(w / 2.4));
-  const rows = Math.max(1, Math.floor((h - 1.4) / 1.9));
+  const rows = Math.max(1, Math.floor((h - 1.2) / 1.7));
   const ww = 0.62;
   const wh = 1.05;
   for (let r = 0; r < rows; r++) {
@@ -1180,12 +1180,16 @@ function festoonRing(
   const anchors: Array<[number, number, number]> = [];
   for (let i = 0; i < spans; i++) {
     const b = (i / spans) * TAU + rng.range(-0.14, 0.14);
-    const r = rng.range(11, 13.5);
-    anchors.push([Math.cos(b) * r, floorY + rng.range(4.3, 4.7), Math.sin(b) * r]);
+    const r = rng.range(15.5, 18);
+    anchors.push([Math.cos(b) * r, floorY + rng.range(4.1, 4.5), Math.sin(b) * r]);
   }
   for (const [px, top, pz] of anchors) {
-    wire.add(strut(px, floorY, pz, px, top + 0.1, pz, 0.055, 5), 0x3a2c22);
-    wire.add(at(envBlob(0.11, 0), px, top + 0.16, pz), 0x3a2c22);
+    // Thin, and well back. At r 11-13.5 with a 0.055 mast these read as heavy
+    // black posts standing directly behind the pizza — the same "spike out of
+    // the food" failure as the cypresses, in a different costume. Out at 15-18
+    // they land against the facades where a lamp post belongs.
+    wire.add(strut(px, floorY, pz, px, top + 0.1, pz, 0.038, 5), 0x3a2c22);
+    wire.add(at(envBlob(0.08, 0), px, top + 0.16, pz), 0x3a2c22);
   }
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i];
@@ -1366,7 +1370,12 @@ function tuscanRidge(
   return g;
 }
 
-/** DEV-ONLY probe: per-environment draw calls and triangles. */
+/**
+ * Draw calls and triangles for this environment alone, published on
+ * `window.__envStats` for the capture harness to read. The renderer's own
+ * counters are whole-scene and include the tower, so they cannot be used to
+ * check a per-environment budget.
+ */
 function envStats(name: string, root: THREE.Object3D): void {
   if (typeof window === 'undefined') return;
   let draws = 0;
@@ -1651,14 +1660,14 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // finds that gap every time. A cypress is the single most recognisable thing
   // in the theme, so its bearings are now DEALT, one per sector with jitter
   // inside the sector, and there is a spike at every yaw by construction.
-  const stands = envPick(q, 5, 6, 7);
+  const stands = envPick(q, 6, 8, 9);
   for (let si = 0; si < stands; si++) {
   const inStand = si % 3 === 0 ? 1 : si % 3 === 1 ? 2 : 3;
   for (let i = 0; i < inStand; i++) {
     // one bearing per sector, then a small spread inside the stand: a lone
     // spike reads as a mistake, two or three read as a garden
     const a = (si / stands) * TAU + rng.range(-0.16, 0.16) + (i - (inStand - 1) / 2) * 0.075;
-    const r = rng.range(21, 25);
+    const r = rng.range(18.5, 22);
     const px = Math.cos(a) * r;
     const pz = Math.sin(a) * r;
     const s = rng.range(0.7, 1.2) * (i === 0 ? 1.15 : 0.85);
@@ -1675,7 +1684,7 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     // Dusk green, not black: a true cypress colour turns into a hole in the
     // frame once the sky behind it is this bright. Hazed with distance too,
     // so the far ones sit back instead of all reading at the same depth.
-    const fadeC = clamp((r - 12) / 26, 0.16, 0.38);
+    const fadeC = clamp((r - 12) / 30, 0.1, 0.26);
     green.add(
       at(cone, px, rim - 0.05, pz, rng.range(0, TAU)),
       new THREE.Color(0x4a6f4c).lerp(HAZE_NEAR, fadeC * 0.7).lerp(HAZE_FAR, fadeC).getHex(),
@@ -1721,12 +1730,12 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     facadeRadii.push(r);
     // Heavy wash toward the fog colour: the far wall has to sit BACK, and at
     // this density a saturated terracotta ring would shout over the food.
-    const fade = THREE.MathUtils.clamp((r - 13) / 18, 0.42, 0.7);
+    const fade = THREE.MathUtils.clamp((r - 13) / 22, 0.34, 0.62);
     facade(
       terra, wood, bulbs, green, rng, bearing, r,
       // A wide spread of heights: equal-height blocks merge into one band
       // across the horizon, and a stepped roofline is what reads as a street.
-      rng.range(8, 13), rng.range(2.4, 4.2), floorY, fade,
+      rng.range(7.5, 13), rng.range(2.2, 5.0), floorY, fade,
       q === 'low' ? 1 : 2,
     );
   }
@@ -1865,7 +1874,8 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
 
   // festoon lights, strung between the facades
   // Ringed round the terrace so a run is on screen at every yaw, and close
-  // enough (11-13.5 units) that the bulbs read as lights rather than pixels.
+  // enough (15.5-18 units) that the bulbs still read as lights rather than
+  // pixels while their masts stay behind the tower's shoulder.
   festoonRing(iron, bulbs, rng, envPick(q, 4, 5, 6), floorY, envPick(q, 7, 9, 12));
 
   // ---- assemble ----------------------------------------------------------
