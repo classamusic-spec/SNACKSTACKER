@@ -305,8 +305,35 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 34px;
-  width: min(320px, 78vw);
+  gap: 26px;
+  width: min(430px, 78vw);
+}
+
+/* The logo is drawn to canvas so it can be bitten apart; sized in script. */
+.sn-boot__logo {
+  display: block;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.42));
+}
+
+.sn-boot__tagline {
+  margin: -8px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.44);
+  transition: opacity 220ms var(--ease-out);
+}
+
+/* The tagline steps aside before the wordmark is eaten. */
+.sn-boot.is-eaten .sn-boot__tagline,
+.sn-boot.is-eaten .sn-boot__bar {
+  opacity: 0;
+}
+
+.sn-boot.is-out {
+  opacity: 0;
+  transition: opacity 340ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sn-boot__bar {

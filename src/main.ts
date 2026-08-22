@@ -12,9 +12,11 @@ import { TUNING } from './game/constants';
 import { StackGame } from './game/StackGame';
 import { createMeta } from './meta';
 import { createSceneKit } from './render';
+import type { SceneKit } from './render/api';
 import { createUi } from './ui';
 import type { StoreItemView } from './ui/api';
 import { createVfx } from './vfx';
+import type { VfxSystem } from './vfx/api';
 
 type AppState = 'boot' | 'home' | 'playing' | 'paused' | 'result';
 
@@ -57,6 +59,9 @@ function mark(name: string): void {
   lastMark = now;
 }
 
+const nextFrame = (): Promise<void> =>
+  new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
 async function boot(): Promise<void> {
   lastMark = performance.now();
   const canvas = document.getElementById('gl') as HTMLCanvasElement | null;
@@ -77,35 +82,33 @@ async function boot(): Promise<void> {
   // frame is already in the player's palette rather than flashing the default.
   let theme: ThemeDef = themes.byId(meta.data.selectedTheme);
 
-  const kit = createSceneKit({
-    canvas,
-    quality: resolveQuality(),
-    pixelRatio: Math.min(window.devicePixelRatio || 1, device.maxPixelRatio),
-    palette: theme.palette,
-    reducedMotion: settings().reducedMotion,
-  });
-
-  mark('renderer');
-  const rig = new CameraRig(kit.camera);
-  const vfx = createVfx(kit.scene, kit.camera, kit.materials, kit.quality.tier);
+  /**
+   * Built after the UI, so the splash is on screen and animating before the
+   * expensive work starts. Everything that closes over these is a user-gesture
+   * handler, which cannot fire until long after they are assigned.
+   */
+  let kit!: SceneKit;
+  let rig!: CameraRig;
+  let vfx!: VfxSystem;
+  let game!: StackGame;
   const audio = createAudioEngine();
-  mark('vfx+audio');
 
   let state: AppState = 'boot';
   let lastResult: RunResult | null = null;
   /** Mirrors the run's live HUD numbers so a partial refresh never blanks them. */
   const hud = { score: 0, layers: 0, combo: 0 };
 
-  const game = new StackGame({
-    scene: kit.scene,
-    rig,
-    materials: kit.materials,
-    vfx,
-    audio,
-    quality: kit.quality.tier,
-    shake: (m, d) => kit.shake(m, d),
-    flash: (a) => kit.flash(a),
-  });
+  const makeGame = (): StackGame =>
+    new StackGame({
+      scene: kit.scene,
+      rig,
+      materials: kit.materials,
+      vfx,
+      audio,
+      quality: kit.quality.tier,
+      shake: (m, d) => kit.shake(m, d),
+      flash: (a) => kit.flash(a),
+    });
 
   // ---------------------------------------------------------------------------
   // UI wiring
@@ -316,62 +319,65 @@ async function boot(): Promise<void> {
   // game events
   // ---------------------------------------------------------------------------
 
-  game.events.on('score', ({ score, pop, delta }) => {
-    hud.score = score;
-    ui.setScore(score, { pop, delta });
-  });
-  game.events.on('combo', (combo) => {
-    hud.combo = combo;
-    ui.setCombo(combo);
-  });
-  game.events.on('perfect', ({ label, tier }) => {
-    ui.showPerfect(label, tier);
-    haptic(tier >= 2 ? 'heavy' : 'medium');
-  });
-  game.events.on('milestone', ({ title, sub }) => {
-    ui.showMilestone(title, sub);
-    haptic('success');
-  });
-  game.events.on('layer', ({ layers }) => {
-    hud.layers = layers;
-    ui.setHud({
-      score: hud.score,
-      layers,
-      combo: hud.combo,
-      best: meta.data.best,
-      coins: meta.data.coins,
-    });
-  });
-  game.events.on('intensity', (v) => audio.setIntensity(clamp01(v)));
-  game.events.on('firstDrop', () => {
-    meta.markTutorialSeen();
-    ui.setCoach(false);
-  });
-  game.events.on('gameover', (summary) => {
-    state = 'result';
-    haptic('error');
-    const result = meta.recordRun({
-      score: summary.score,
-      layers: summary.layers,
-      perfects: summary.perfects,
-      bestCombo: summary.bestCombo,
-      heightCm: summary.heightCm,
-      themeId: theme.id,
-    });
-    lastResult = result;
-    if (result.isNewBest && result.score > 0) {
-      audio.play('newbest', { delay: 0.25 });
-      vfx.confetti(new THREE.Vector3(0, rig.topY + 5, 0), [
-        theme.palette.accent,
-        theme.palette.accentSoft,
-        0xffffff,
-      ]);
-    }
-    audio.setIntensity(0.1);
-    ui.setBest(result.best);
-    ui.setCoins(meta.data.coins, { animate: true });
-    ui.goResult(result);
-  });
+  /** Attached once the game exists; the splash is already on screen by then. */
+  function wireGameEvents(): void {
+      game.events.on('score', ({ score, pop, delta }) => {
+        hud.score = score;
+        ui.setScore(score, { pop, delta });
+      });
+      game.events.on('combo', (combo) => {
+        hud.combo = combo;
+        ui.setCombo(combo);
+      });
+      game.events.on('perfect', ({ label, tier }) => {
+        ui.showPerfect(label, tier);
+        haptic(tier >= 2 ? 'heavy' : 'medium');
+      });
+      game.events.on('milestone', ({ title, sub }) => {
+        ui.showMilestone(title, sub);
+        haptic('success');
+      });
+      game.events.on('layer', ({ layers }) => {
+        hud.layers = layers;
+        ui.setHud({
+          score: hud.score,
+          layers,
+          combo: hud.combo,
+          best: meta.data.best,
+          coins: meta.data.coins,
+        });
+      });
+      game.events.on('intensity', (v) => audio.setIntensity(clamp01(v)));
+      game.events.on('firstDrop', () => {
+        meta.markTutorialSeen();
+        ui.setCoach(false);
+      });
+      game.events.on('gameover', (summary) => {
+        state = 'result';
+        haptic('error');
+        const result = meta.recordRun({
+          score: summary.score,
+          layers: summary.layers,
+          perfects: summary.perfects,
+          bestCombo: summary.bestCombo,
+          heightCm: summary.heightCm,
+          themeId: theme.id,
+        });
+        lastResult = result;
+        if (result.isNewBest && result.score > 0) {
+          audio.play('newbest', { delay: 0.25 });
+          vfx.confetti(new THREE.Vector3(0, rig.topY + 5, 0), [
+            theme.palette.accent,
+            theme.palette.accentSoft,
+            0xffffff,
+          ]);
+        }
+        audio.setIntensity(0.1);
+        ui.setBest(result.best);
+        ui.setCoins(meta.data.coins, { animate: true });
+        ui.goResult(result);
+      });
+  }
 
   // ---------------------------------------------------------------------------
   // input
@@ -454,7 +460,32 @@ async function boot(): Promise<void> {
   // ---------------------------------------------------------------------------
 
   mark('ui');
-  ui.setLoadProgress(0.35);
+  ui.setLoadProgress(0.12);
+
+  // Yield twice so the browser lays out and paints the splash before the
+  // renderer's long synchronous build begins. Without this the logo appears
+  // only after the work it is meant to cover has already finished.
+  await nextFrame();
+  await nextFrame();
+
+  kit = createSceneKit({
+    canvas,
+    quality: resolveQuality(),
+    pixelRatio: Math.min(window.devicePixelRatio || 1, device.maxPixelRatio),
+    palette: theme.palette,
+    reducedMotion: settings().reducedMotion,
+  });
+  mark('renderer');
+  ui.setLoadProgress(0.45);
+  await nextFrame();
+
+  rig = new CameraRig(kit.camera);
+  vfx = createVfx(kit.scene, kit.camera, kit.materials, kit.quality.tier);
+  game = makeGame();
+  wireGameEvents();
+  mark('systems');
+
+  ui.setLoadProgress(0.7);
   applyTheme(theme, false);
   mark('theme');
   onResize();
