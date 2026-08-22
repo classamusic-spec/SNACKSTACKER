@@ -662,9 +662,9 @@ function pizzaPlate(ctx: FoodBuildCtx): THREE.Object3D {
  *
  *  1. The marble lands on `ctx.tableTopY` (a hair below, so it can never punch
  *     through the board or z-fight the contact shadow).
- *  2. Nothing rises above that plane inside `SWEEP_HALF` of either axis —
- *     that is the corridor a sliding layer sweeps through — so the bottle,
- *     the cruet and the shaker all live out on the diagonals.
+ *  2. Nothing rises above that plane within PROP_R of the middle, so neither
+ *     the tower nor the layer sliding above it can ever meet a prop — at any
+ *     camera yaw, since the home screen orbits a full turn.
  *  3. The piazza floor is `FLOOR_DROP` down and dissolves into the sweep with
  *     a baked vertex alpha, so there is no hard horizon and the backdrop still
  *     owns the top of frame.
@@ -677,8 +677,34 @@ const ENV_SINK = 0.0025;
 const TABLE_R = 3.35;
 const TABLE_T = 0.19;
 const FLOOR_DROP = 3.0;
-/** Half-width of the axis-aligned corridor a sliding layer sweeps through. */
-const SWEEP_HALF = 1.45;
+
+/**
+ * Tower clearance. The home screen orbits the camera a full turn, so there is
+ * no such thing as "behind the tower" — a prop parked out of the way at 45 deg
+ * is straight through the food half a rotation later. Every prop must satisfy
+ * ONE of these, at every yaw:
+ *
+ *   a. it sits at or below the table plane, or
+ *   b. it is further than PROP_R from the middle and rises no higher than
+ *      PROP_LIFT above the table, or
+ *   c. it is further than FAR_R out, where it may be tall: it is background.
+ *
+ * The bistro top is only 3.35 across, so nothing stands on it at all — the
+ * bottle, cruet and shaker live on a lower side table out at SIDE_R.
+ */
+const PROP_R = 4.6;
+const PROP_LIFT = 1.5;
+const FAR_R = 9.5;
+/** Where the side table stands, and how far its top sits below the bistro top. */
+const SIDE_R = 5.7;
+const SIDE_DROP = 0.95;
+
+/** Shove a prop radially outwards until it clears the tower's cylinder. */
+function clearOf(x: number, z: number, min = PROP_R): [number, number] {
+  const r = Math.hypot(x, z);
+  if (!(r > 1e-4)) return [min, 0];
+  return r >= min ? [x, z] : [(x * min) / r, (z * min) / r];
+}
 
 const envPick = <T>(q: QualityTier, low: T, med: T, high: T): T =>
   q === 'low' ? low : q === 'medium' ? med : high;
@@ -963,11 +989,12 @@ function facade(
   const inz = -Math.sin(bearing);
   const d = 3.2;
 
+  const HAZE = new THREE.Color(0xe9d3b8);
   const wall = new THREE.Color(rng.pick([0xd09a63, 0xc87f52, 0xdcae7c, 0xb87550]));
-  wall.lerp(new THREE.Color(0xd99a72), fade);
+  wall.lerp(HAZE, fade);
   terra.add(at(envBox(w, h, d), cx, y, cz, yaw), wall.getHex());
 
-  const roof = new THREE.Color(0x9c4a33).lerp(new THREE.Color(0xd99a72), fade * 0.8);
+  const roof = new THREE.Color(0x9c4a33).lerp(HAZE, fade * 0.86);
   terra.add(at(envBox(w + 0.7, 0.34, d + 0.7), cx, y + h, cz, yaw), roof.getHex());
   terra.add(at(envBox(w + 0.3, 0.16, d + 0.3), cx, y + h + 0.34, cz, yaw), roof.getHex());
 
@@ -987,10 +1014,7 @@ function facade(
       if (lit) bulbs.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0xffc07a);
       else terra.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0x241a18);
       // shutters, one of them usually swung open
-      const shutter = new THREE.Color(rng.pick([0x41603f, 0x354a57, 0x6c4a35])).lerp(
-        new THREE.Color(0xd99a72),
-        fade * 0.7,
-      );
+      const shutter = new THREE.Color(rng.pick([0x41603f, 0x354a57, 0x6c4a35])).lerp(HAZE, fade * 0.62);
       for (const s of [-1, 1]) {
         const open = rng.bool(0.45);
         wood.add(
@@ -1009,30 +1033,52 @@ function facade(
   }
 }
 
-/** Catenary of warm bulbs on a thin dark wire. */
-function festoon(
+/**
+ * A ring of sagging bulb strings on shared poles.
+ *
+ * Two earlier tries were wrong in opposite ways: strung far out and taut it was
+ * a single sub-pixel scratch across the horizon, and strung per-strand it built
+ * a fresh pair of poles at every join, so adjacent runs stacked two heavy black
+ * masts side by side. One pole per anchor, wires between consecutive anchors.
+ */
+function festoonRing(
   wire: EnvBucket,
   bulbs: EnvBucket,
-  b0: number,
-  b1: number,
-  radius: number,
-  y: number,
-  sag: number,
+  rng: Rng,
+  spans: number,
+  floorY: number,
   steps: number,
 ): void {
-  const pt = (t: number): [number, number, number] => {
-    const b = b0 + (b1 - b0) * t;
-    const r = radius * (0.94 + 0.12 * Math.sin(t * Math.PI));
-    return [Math.cos(b) * r, y - sag * 4 * t * (1 - t), Math.sin(b) * r];
-  };
-  let prev = pt(0);
-  for (let i = 1; i <= steps; i++) {
-    const next = pt(i / steps);
-    wire.add(strut(prev[0], prev[1], prev[2], next[0], next[1], next[2], 0.028, 4), 0x1b1512);
-    if (i % 2 === 0 && i < steps) {
-      bulbs.add(at(envBlob(0.13, 0), next[0], next[1] - 0.14, next[2]), 0xffca86);
+  const anchors: Array<[number, number, number]> = [];
+  for (let i = 0; i < spans; i++) {
+    const b = (i / spans) * TAU + rng.range(-0.14, 0.14);
+    const r = rng.range(11, 13.5);
+    anchors.push([Math.cos(b) * r, floorY + rng.range(4.3, 4.7), Math.sin(b) * r]);
+  }
+  for (const [px, top, pz] of anchors) {
+    wire.add(strut(px, floorY, pz, px, top + 0.1, pz, 0.055, 5), 0x3a2c22);
+    wire.add(at(envBlob(0.11, 0), px, top + 0.16, pz), 0x3a2c22);
+  }
+  for (let i = 0; i < anchors.length; i++) {
+    const a = anchors[i];
+    const b = anchors[(i + 1) % anchors.length];
+    const sag = rng.range(1.5, 2.1);
+    let prev = a;
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps;
+      const next: [number, number, number] = [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t - sag * 4 * t * (1 - t),
+        a[2] + (b[2] - a[2]) * t,
+      ];
+      wire.add(strut(prev[0], prev[1], prev[2], next[0], next[1], next[2], 0.045, 4), 0x3a2c22);
+      if (k < steps) {
+        const bulb = envBlob(0.2, 0);
+        bulb.scale(1, 1.25, 1);
+        bulbs.add(at(bulb, next[0], next[1] - 0.24, next[2]), k % 3 === 0 ? 0xffe0ac : 0xffc47c);
+      }
+      prev = next;
     }
-    prev = next;
   }
 }
 
@@ -1157,53 +1203,69 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     iron.add(at(envBlob(0.16, 0), Math.cos(a) * 1.14, floorY + 0.12, Math.sin(a) * 1.14), 0x2b2523);
   }
 
-  // ---- on the table ------------------------------------------------------
-  // All four props keep min(|x|,|z|) > SWEEP_HALF, jittered so nothing is
-  // evenly spaced.
-  const diag = (i: number, r: number): [number, number] => {
-    const a = Math.PI / 4 + (i * Math.PI) / 2 + rng.range(-0.22, 0.22);
-    return [Math.cos(a) * r, Math.sin(a) * r];
-  };
+  // ---- the side table ----------------------------------------------------
+  // Nothing stands on the bistro top: at 3.35 across, every square inch of it
+  // is inside the tower's clearance cylinder. The bottle, the cruet, the
+  // shaker and the sprig get their own lower table out past PROP_R, which is
+  // also a better composition — the food owns the hero table alone.
+  const sideA = rng.range(0, TAU);
+  const [sideX, sideZ] = clearOf(Math.cos(sideA) * SIDE_R, Math.sin(sideA) * SIDE_R, PROP_R + 0.8);
+  const sideTop = deck - SIDE_DROP;
+  const sideR = 1.15;
+  terra.add(at(envCyl(sideR, sideR * 0.98, 0.12, envPick(q, 12, 18, 26)), sideX, sideTop - 0.12, sideZ), 0xd8cbb4);
+  terra.add(at(envCyl(sideR * 0.94, sideR * 0.9, 0.05, envPick(q, 12, 18, 26)), sideX, sideTop - 0.17, sideZ), 0xb2a68f);
+  iron.add(at(envCyl(0.34, 0.4, 0.1, sides), sideX, sideTop - 0.27, sideZ), 0x2b2523);
+  iron.add(at(envCyl(0.13, 0.18, sideTop - 0.37 - (floorY + 0.1), sides), sideX, floorY + 0.1, sideZ), 0x241f1d);
+  iron.add(at(envCyl(0.4, 0.46, 0.1, sides), sideX, floorY, sideZ), 0x241f1d);
 
-  const [bxx, bzz] = diag(0, 2.5 + rng.range(-0.1, 0.1));
-  chiantiBottle(wood, glass, bxx, deck, bzz, rng.range(0, TAU), sides);
+  /** Local coordinates on the side table, kept inside its rim. */
+  const onSide = (dx: number, dz: number): [number, number] => [sideX + dx, sideZ + dz];
 
-  const [cxx, czz] = diag(1, 2.45 + rng.range(-0.15, 0.15));
-  glass.add(at(envCyl(0.13, 0.2, 0.4, sides), cxx, deck, czz), 0x9d8c33);
-  glass.add(at(envCyl(0.055, 0.12, 0.28, sides), cxx, deck + 0.4, czz), 0xb8a648);
-  iron.add(at(envCyl(0.07, 0.06, 0.07, sides), cxx, deck + 0.67, czz), 0x8d8f92);
+  const [bxx, bzz] = onSide(rng.range(-0.16, 0.16), rng.range(-0.16, 0.16));
+  chiantiBottle(wood, glass, bxx, sideTop, bzz, rng.range(0, TAU), sides);
+
+  const [cxx, czz] = onSide(0.6 + rng.range(-0.08, 0.08), -0.42 + rng.range(-0.1, 0.1));
+  glass.add(at(envCyl(0.13, 0.2, 0.4, sides), cxx, sideTop, czz), 0x9d8c33);
+  glass.add(at(envCyl(0.055, 0.12, 0.28, sides), cxx, sideTop + 0.4, czz), 0xb8a648);
+  iron.add(at(envCyl(0.07, 0.06, 0.07, sides), cxx, sideTop + 0.67, czz), 0x8d8f92);
   const pourer = envCyl(0.028, 0.035, 0.26, 6);
   pourer.rotateZ(0.75);
-  iron.add(at(pourer, cxx + 0.02, deck + 0.68, czz, rng.range(0, TAU)), 0x8d8f92);
+  iron.add(at(pourer, cxx + 0.02, sideTop + 0.68, czz, rng.range(0, TAU)), 0x8d8f92);
 
-  const [sxx, szz] = diag(2, 2.35 + rng.range(-0.12, 0.12));
-  glass.add(at(envCyl(0.19, 0.2, 0.3, sides), sxx, deck, szz), 0xf0e3c4);
-  iron.add(at(envCyl(0.2, 0.205, 0.11, sides), sxx, deck + 0.3, szz), 0x93959a);
-  iron.add(at(envCyl(0.14, 0.19, 0.05, sides), sxx, deck + 0.41, szz), 0x93959a);
+  const [sxx, szz] = onSide(-0.52 + rng.range(-0.08, 0.08), 0.5 + rng.range(-0.1, 0.1));
+  glass.add(at(envCyl(0.19, 0.2, 0.3, sides), sxx, sideTop, szz), 0xf0e3c4);
+  iron.add(at(envCyl(0.2, 0.205, 0.11, sides), sxx, sideTop + 0.3, szz), 0x93959a);
+  iron.add(at(envCyl(0.14, 0.19, 0.05, sides), sxx, sideTop + 0.41, szz), 0x93959a);
 
-  const [vxx, vzz] = diag(3, 2.4 + rng.range(-0.12, 0.12));
-  terra.add(at(envCyl(0.13, 0.17, 0.26, sides), vxx, deck, vzz), 0xc07a4e);
+  const [vxx, vzz] = onSide(0.34 + rng.range(-0.08, 0.08), 0.58 + rng.range(-0.08, 0.08));
+  terra.add(at(envCyl(0.13, 0.17, 0.26, sides), vxx, sideTop, vzz), 0xc07a4e);
   for (let i = 0; i < 4; i++) {
     const stem = envCyl(0.012, 0.016, rng.range(0.22, 0.38), 4);
     stem.rotateZ(rng.signed() * 0.4);
-    green.add(at(stem, vxx + rng.signed() * 0.05, deck + 0.24, vzz + rng.signed() * 0.05, rng.range(0, TAU)), 0x4d7a3a);
+    green.add(at(stem, vxx + rng.signed() * 0.05, sideTop + 0.24, vzz + rng.signed() * 0.05, rng.range(0, TAU)), 0x4d7a3a);
     const leaf = envBlob(rng.range(0.05, 0.09), 0);
     leaf.scale(1.5, 0.4, 1);
-    green.add(at(leaf, vxx + rng.signed() * 0.13, deck + rng.range(0.4, 0.58), vzz + rng.signed() * 0.13, rng.range(0, TAU)), 0x5e9b47);
+    green.add(
+      at(leaf, vxx + rng.signed() * 0.13, sideTop + rng.range(0.4, 0.58), vzz + rng.signed() * 0.13, rng.range(0, TAU)),
+      0x5e9b47,
+    );
   }
 
   // ---- the piazza floor --------------------------------------------------
   const gseg = envPick(q, 28, 44, 60);
   const radii = envPick<readonly number[]>(
     q,
-    [2.6, 7, 13, 19, 25],
-    [2, 4.5, 8, 12.5, 17, 21, 25],
-    [1.8, 3.6, 6.6, 10, 13.5, 17, 20.5, 25],
+    [2.6, 7, 13, 20, 26, 32],
+    [2, 4.5, 8, 12.5, 17, 22, 27, 32],
+    [1.8, 3.6, 6.6, 10, 14, 18, 22, 27, 32],
   );
-  const ground = envGround(radii, gseg, 0.16, (r) => {
-    const fade = 1 - THREE.MathUtils.smoothstep(r, 12.5, 24.5);
-    const warm = 1 - 0.34 * THREE.MathUtils.smoothstep(r, 3, 20);
-    return [warm, warm * 0.95, warm * 0.9, fade];
+  // The fade has to start beyond the facades or the buildings stand on nothing.
+  const ground = envGround(radii, gseg, 0.3, (r) => {
+    const fade = 1 - THREE.MathUtils.smoothstep(r, 21, 31);
+    // Desaturate AND dim with distance: the world is cool, the food is warm.
+    const t = THREE.MathUtils.smoothstep(r, 3, 26);
+    const v = 1 - 0.44 * t;
+    return [v, v * (1 - 0.05 * t), v * (1 - 0.09 * t), fade];
   });
   ground.translate(0, floorY, 0);
   const groundMesh = new THREE.Mesh(ground, paveMat);
@@ -1213,8 +1275,8 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   root.add(groundMesh);
 
   // ---- mid ground: a bentwood chair pushed in at the table ---------------
-  const chairA = rng.range(0, TAU);
-  const chairR = 5.1;
+  const chairA = sideA + rng.range(1.9, 2.6);
+  const chairR = 5.2;
   const ccx = Math.cos(chairA) * chairR;
   const ccz = Math.sin(chairA) * chairR;
   const chairYaw = -chairA + Math.PI / 2;
@@ -1227,9 +1289,13 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       [0.4, 0.4],
     ];
     for (const [lx, lz] of legs) {
-      const rx = ccx + lx * Math.cos(chairYaw) - lz * Math.sin(chairYaw);
-      const rz = ccz - lx * Math.sin(chairYaw) - lz * Math.cos(chairYaw);
-      wood.add(strut(rx * 1.06, floorY, rz * 1.06, rx, seatY, rz, 0.05, 5), 0x5b3a24);
+      const rx = ccx + lx * Math.cos(chairYaw) + lz * Math.sin(chairYaw);
+      const rz = ccz - lx * Math.sin(chairYaw) + lz * Math.cos(chairYaw);
+      // Splay from the CHAIR's centre, not the world origin — scaling the world
+      // position leant every leg the same way and tipped the whole chair over.
+      const fx = ccx + (rx - ccx) * 1.22;
+      const fz = ccz + (rz - ccz) * 1.22;
+      wood.add(strut(fx, floorY, fz, rx, seatY, rz, 0.05, 5), 0x5b3a24);
     }
     wood.add(at(envCyl(0.6, 0.58, 0.09, envPick(q, 10, 14, 18)), ccx, seatY, ccz), 0x6b4527);
     const backX = ccx + Math.cos(chairA) * 0.42;
@@ -1249,16 +1315,21 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // pots of cypress and geraniums, scattered around the terrace edge
-  const pots = envPick(q, 2, 4, 5);
+  const pots = envPick(q, 4, 7, 9);
   for (let i = 0; i < pots; i++) {
-    const a = (i / pots) * TAU + rng.range(-0.5, 0.5);
-    const r = rng.range(6.2, 9.4);
+    const a = (i / pots) * TAU + rng.range(-0.3, 0.3);
+    const r = rng.range(7.4, 10.2);
     const px = Math.cos(a) * r;
     const pz = Math.sin(a) * r;
     const s = rng.range(0.85, 1.2);
     const rim = pot(terra, px, floorY, pz, s, sides);
     if (rng.bool(0.6)) {
-      const cone = envCyl(0.03, 0.44 * s, rng.range(2.6, 3.4) * s, envPick(q, 5, 7, 8));
+      // Height comes from the headroom left under PROP_LIFT, not from a blind
+      // random range: a tall roll of the dice used to poke a cypress up past
+      // the clearance ceiling on some seeds.
+      const ceiling = deck + PROP_LIFT - 0.3;
+      const coneH = Math.max(1.2, Math.min(rng.range(2.6, 3.4) * s, ceiling - (rim - 0.05)));
+      const cone = envCyl(0.03, 0.44 * s, coneH, envPick(q, 5, 7, 8));
       roughen(cone, 0.05, 5, i + 2);
       green.add(at(cone, px, rim - 0.05, pz, rng.range(0, TAU)), 0x2f5137);
     } else {
@@ -1277,42 +1348,51 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // ---- background: the piazza itself -------------------------------------
-  const blocks = envPick(q, 3, 4, 6);
+  // Well back and deliberately low: at 16 units a six-unit facade filled the
+  // top-right quadrant as a flat orange slab cropped by the frame. Out at 19+
+  // with a shorter mass it reads as a street on the far side of the piazza.
+  const blocks = envPick(q, 8, 12, 15);
   const facadeBearings: number[] = [];
+  const facadeRadii: number[] = [];
   for (let i = 0; i < blocks; i++) {
-    const bearing = (i / blocks) * TAU + rng.range(-0.28, 0.28);
+    const bearing = (i / blocks) * TAU + rng.range(-0.1, 0.1);
     facadeBearings.push(bearing);
-    const r = rng.range(15.5, 20);
-    const fade = THREE.MathUtils.clamp((r - 14) / 16, 0, 0.5);
-    facade(terra, wood, bulbs, rng, bearing, r, rng.range(7, 11), rng.range(4.6, 6.2), floorY, fade, q !== 'low');
+    const r = rng.range(19.5, 23);
+    facadeRadii.push(r);
+    // Heavy wash toward the fog colour: the far wall has to sit BACK, and at
+    // this density a saturated terracotta ring would shout over the food.
+    const fade = THREE.MathUtils.clamp((r - 11) / 13, 0.56, 0.86);
+    facade(terra, wood, bulbs, rng, bearing, r, rng.range(9, 13), rng.range(2.8, 4.2), floorY, fade, q !== 'low');
   }
 
   // a bell tower and a dome, well back, purely as silhouette
   if (q !== 'low') {
     const ba = rng.range(0, TAU);
-    const br = 23;
+    const br = 28;
     const bxr = Math.cos(ba) * br;
     const bzr = Math.sin(ba) * br;
-    const towerC = new THREE.Color(0xc08a63).lerp(new THREE.Color(0xd99a72), 0.55).getHex();
-    terra.add(at(envBox(1.9, 6.2, 1.9), bxr, floorY, bzr, -ba), towerC);
-    terra.add(at(envBox(2.3, 0.3, 2.3), bxr, floorY + 6.1, bzr, -ba), 0xa8553c);
-    terra.add(at(envCyl(0.2, 1.25, 1.2, 4), bxr, floorY + 6.4, bzr, -ba + Math.PI / 4), 0xa8553c);
-    bulbs.add(at(envBox(0.55, 0.9, 0.1), bxr + Math.cos(ba + Math.PI) * 0.97, floorY + 4.3, bzr + Math.sin(ba + Math.PI) * 0.97, -ba), 0xffbe7a);
+    const towerC = new THREE.Color(0xc08a63).lerp(new THREE.Color(0xe9d3b8), 0.8).getHex();
+    terra.add(at(envBox(1.7, 5.4, 1.7), bxr, floorY, bzr, -ba), towerC);
+    terra.add(at(envBox(2.1, 0.28, 2.1), bxr, floorY + 5.3, bzr, -ba), 0xcb9a7e);
+    terra.add(at(envCyl(0.18, 1.15, 1.1, 4), bxr, floorY + 5.55, bzr, -ba + Math.PI / 4), 0xcb9a7e);
+    bulbs.add(at(envBox(0.5, 0.8, 0.1), bxr + Math.cos(ba + Math.PI) * 0.87, floorY + 3.8, bzr + Math.sin(ba + Math.PI) * 0.87, -ba), 0xffbe7a);
 
     const da = ba + rng.range(0.35, 0.6);
     const dxr = Math.cos(da) * (br - 1.5);
     const dzr = Math.sin(da) * (br - 1.5);
     terra.add(at(envBox(4.4, 3.4, 4.4), dxr, floorY, dzr, -da), towerC);
-    terra.add(at(envCyl(2.1, 2.4, 0.7, 12), dxr, floorY + 3.4, dzr), 0xa8553c);
+    terra.add(at(envCyl(2.1, 2.4, 0.7, 12), dxr, floorY + 3.4, dzr), 0xcb9a7e);
     const dome = new THREE.SphereGeometry(2.05, envPick(q, 10, 14, 18), envPick(q, 5, 7, 9), 0, TAU, 0, Math.PI / 2);
-    terra.add(at(dome, dxr, floorY + 4.05, dzr), 0x8f6a52);
-    terra.add(at(envCyl(0.16, 0.3, 0.7, 8), dxr, floorY + 6.0, dzr), 0xa8553c);
+    terra.add(at(dome, dxr, floorY + 4.05, dzr), 0xbb9c88);
+    terra.add(at(envCyl(0.16, 0.3, 0.7, 8), dxr, floorY + 6.0, dzr), 0xcb9a7e);
   }
 
   // a striped awning over the nearest shopfront
-  if (q !== 'low' && facadeBearings.length) {
-    const ab = facadeBearings[0] + rng.range(-0.1, 0.1);
-    const ar = 12.6;
+  for (const awningIdx of envPick<readonly number[]>(q, [], [0, 3], [0, 4, 8])) {
+    const idx = awningIdx % facadeBearings.length;
+    const ab = facadeBearings[idx] + rng.range(-0.08, 0.08);
+    // hung off the front of that facade, not floating in the middle of the square
+    const ar = facadeRadii[idx] - 2.3;
     const acx = Math.cos(ab) * ar;
     const acz = Math.sin(ab) * ar;
     const yaw = -ab + Math.PI / 2;
@@ -1327,11 +1407,11 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const slat = envBox(span / strips + 0.02, 0.09, 2.4);
       slat.rotateX(0.34);
       terra.add(
-        at(slat, acx + ax * u + inx * 1.1, floorY + 3.5, acz + az * u + inz * 1.1, yaw),
+        at(slat, acx + ax * u + inx * 1.1, floorY + 2.45, acz + az * u + inz * 1.1, yaw),
         i % 2 === 0 ? 0xefe2c8 : 0xb03a34,
       );
       wood.add(
-        at(envBox(span / strips + 0.02, 0.34, 0.08), acx + ax * u + inx * 2.28, floorY + 3.16, acz + az * u + inz * 2.28, yaw),
+        at(envBox(span / strips + 0.02, 0.34, 0.08), acx + ax * u + inx * 2.28, floorY + 2.11, acz + az * u + inz * 2.28, yaw),
         i % 2 === 0 ? 0xefe2c8 : 0xb03a34,
       );
     }
@@ -1339,10 +1419,10 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       wood.add(
         strut(
           acx + ax * (span / 2) * s + inx * 2.2,
-          floorY + 3.2,
+          floorY + 2.15,
           acz + az * (span / 2) * s + inz * 2.2,
           acx + ax * (span / 2) * s,
-          floorY + 4.1,
+          floorY + 3.05,
           acz + az * (span / 2) * s,
           0.05,
           5,
@@ -1353,12 +1433,9 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // festoon lights, strung between the facades
-  const strands = envPick(q, 1, 2, 3);
-  for (let i = 0; i < strands; i++) {
-    const b0 = rng.range(0, TAU);
-    const b1 = b0 + rng.range(1.0, 1.9);
-    festoon(iron, bulbs, b0, b1, rng.range(13.5, 16.5), floorY + 4.5, rng.range(0.9, 1.5), envPick(q, 6, 9, 12));
-  }
+  // Ringed round the terrace so a run is on screen at every yaw, and close
+  // enough (11-13.5 units) that the bulbs read as lights rather than pixels.
+  festoonRing(iron, bulbs, rng, envPick(q, 4, 5, 6), floorY, envPick(q, 7, 9, 12));
 
   // ---- assemble ----------------------------------------------------------
   const meshes: Array<THREE.Mesh | null> = [

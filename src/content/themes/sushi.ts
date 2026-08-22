@@ -866,9 +866,9 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
  *
  *  1. The counter top lands on `ctx.tableTopY` (a hair below it, so it can
  *     never punch through the plate and never z-fights the contact shadow).
- *  2. Nothing rises above that plane inside `SWEEP_HALF` of either axis —
- *     that is the corridor a sliding layer sweeps through — so the counter
- *     props all live out on the diagonals where a layer can never reach.
+ *  2. Nothing rises above that plane within PROP_R of the middle, so neither
+ *     the tower nor the layer sliding above it can ever meet a prop — at any
+ *     camera yaw, since the home screen orbits a full turn.
  *  3. The garden floor is `FLOOR_DROP` below the counter and dissolves into
  *     the sweep with a baked vertex alpha, so the backdrop still owns the top
  *     of frame and there is no hard horizon line.
@@ -878,12 +878,40 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
  */
 
 const ENV_SINK = 0.0025;
-const COUNTER_W = 9.2;
-const COUNTER_D = 4.7;
+const COUNTER_W = 11.8;
+const COUNTER_D = 4.3;
 const COUNTER_T = 0.52;
 const FLOOR_DROP = 3.1;
-/** Half-width of the axis-aligned corridor a sliding layer sweeps through. */
-const SWEEP_HALF = 1.45;
+
+/**
+ * Tower clearance. The home screen orbits the camera a full turn, so there is
+ * no such thing as "behind the tower" — a prop parked out of the way at 45 deg
+ * is straight through the food half a rotation later. Every prop must satisfy
+ * ONE of these, at every yaw:
+ *
+ *   a. it sits at or below the counter top, or
+ *   b. it is further than PROP_R from the middle and rises no higher than
+ *      PROP_LIFT above the counter, or
+ *   c. it is further than FAR_R out, where it may be tall: it is background.
+ *
+ * Because the rule is written in cylindrical coordinates it is yaw-independent
+ * by construction: satisfying it once satisfies it at every camera angle.
+ *
+ * The one deliberate exception is the drifting petals, which are 10cm
+ * translucent quads with no depth write. They stay outside PROP_R so they never
+ * intersect the tower in space; they cross in FRONT of it on screen, which is
+ * the effect the brief asks for.
+ */
+const PROP_R = 4.6;
+const PROP_LIFT = 1.5;
+const FAR_R = 9.5;
+
+/** Shove a prop radially outwards until it clears the tower's cylinder. */
+function clearOf(x: number, z: number, min = PROP_R): [number, number] {
+  const r = Math.hypot(x, z);
+  if (!(r > 1e-4)) return [min, 0];
+  return r >= min ? [x, z] : [(x * min) / r, (z * min) / r];
+}
 
 const envPick = <T>(q: QualityTier, low: T, med: T, high: T): T =>
   q === 'low' ? low : q === 'medium' ? med : high;
@@ -944,6 +972,19 @@ function envCyl(rTop: number, rBot: number, h: number, sides: number): THREE.Buf
     1,
   );
   g.translate(0, hh / 2, 0);
+  return g;
+}
+
+/** A rod of `len` lying along +X, CENTRED on the origin — chopsticks, rails. */
+function envRodX(rTop: number, rBot: number, len: number, sides: number): THREE.BufferGeometry {
+  const g = new THREE.CylinderGeometry(
+    Math.max(rTop, 1e-4),
+    Math.max(rBot, 1e-4),
+    Math.max(len, 1e-3),
+    Math.max(3, Math.round(sides)),
+    1,
+  );
+  g.rotateZ(-Math.PI / 2);
   return g;
 }
 
@@ -1073,20 +1114,21 @@ function paintGravel(c: CanvasRenderingContext2D, size: number): void {
   c.fillStyle = '#232F3A';
   c.fillRect(0, 0, size, size);
   const rng = new Rng(0x6ea5);
-  for (let i = 0; i < 6; i++) {
-    const y = (i / 6) * size + rng.range(-4, 4);
-    c.strokeStyle = 'rgba(120,152,176,0.13)';
-    c.lineWidth = size * 0.02;
+  const bands = 9;
+  for (let i = 0; i < bands; i++) {
+    const y = (i / bands) * size + rng.range(-3, 3);
+    c.strokeStyle = 'rgba(120,152,176,0.085)';
+    c.lineWidth = size * 0.014;
     c.beginPath();
     for (let x = 0; x <= size; x += size / 16) {
-      c.lineTo(x, y + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.012);
+      c.lineTo(x, y + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.009);
     }
     c.stroke();
-    c.strokeStyle = 'rgba(6,10,14,0.3)';
-    c.lineWidth = size * 0.012;
+    c.strokeStyle = 'rgba(6,10,14,0.19)';
+    c.lineWidth = size * 0.009;
     c.beginPath();
     for (let x = 0; x <= size; x += size / 16) {
-      c.lineTo(x, y + size * 0.028 + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.012);
+      c.lineTo(x, y + size * 0.019 + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.009);
     }
     c.stroke();
   }
@@ -1129,8 +1171,9 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
   const petals: Petal[] = [];
   for (let i = 0; i < count; i++) {
     const a = rng.range(0, TAU);
-    // biased outwards so nothing drifts through the tower itself
-    const r = 3.2 + rng.next() * rng.next() * 6.4;
+    // Biased outwards, and never inside PROP_R, so a petal can drift in FRONT
+    // of the tower on screen but never through it in space.
+    const r = PROP_R + 0.5 + rng.next() * rng.next() * 5.5;
     petals.push({
       x: Math.cos(a) * r,
       z: Math.sin(a) * r,
@@ -1206,8 +1249,17 @@ function stoneLantern(stone: EnvBucket, glow: EnvBucket, s: number, x: number, y
   h += 0.88 * s;
   stone.add(at(envCyl(0.44 * s, 0.5 * s, 0.15 * s, 8), x, y + h, z, yaw), tone);
   h += 0.14 * s;
-  stone.add(at(envCyl(0.4 * s, 0.42 * s, 0.5 * s, 8), x, y + h, z, yaw), tone);
-  glow.add(at(envCyl(0.3 * s, 0.31 * s, 0.36 * s, 8), x, y + h + 0.07 * s, z, yaw), 0xffcf96);
+  // The fire chamber is FOUR CORNER POSTS, not a solid drum: a closed drum
+  // sealed the glow inside where nothing could ever see it, which is the whole
+  // reason the lantern is here.
+  for (let k = 0; k < 4; k++) {
+    const ca = yaw + (k * Math.PI) / 2 + Math.PI / 4;
+    stone.add(
+      at(envBox(0.14 * s, 0.5 * s, 0.14 * s), x + Math.cos(ca) * 0.31 * s, y + h, z + Math.sin(ca) * 0.31 * s, yaw),
+      tone,
+    );
+  }
+  glow.add(at(envCyl(0.29 * s, 0.3 * s, 0.4 * s, 8), x, y + h + 0.05 * s, z, yaw), 0xffcf96);
   h += 0.5 * s;
   stone.add(at(envCyl(0.82 * s, 0.86 * s, 0.07 * s, 8), x, y + h, z, yaw), tone);
   h += 0.06 * s;
@@ -1228,12 +1280,18 @@ function cherryTree(
   z: number,
   scale: number,
   fade: number,
+  blobDetail: number,
 ): void {
-  const trunkH = 2.5 * scale;
+  const trunkH = 2.4 * scale;
   const lean = rng.signed() * 0.09;
-  const trunk = envCyl(0.13 * scale, 0.25 * scale, trunkH, 7);
+  const trunk = envCyl(0.16 * scale, 0.34 * scale, trunkH, 7);
   trunk.rotateZ(lean);
-  wood.add(at(trunk, x, y, z), 0x1b1620);
+  wood.add(at(trunk, x, y, z), 0x33272f);
+  // A root mound, so the trunk is visibly planted instead of stopping in the
+  // dark. Without it the tree reads as a lollipop pasted onto the sky.
+  const mound = envBlob(0.5 * scale, Math.max(0, detail - 1));
+  mound.scale(1.5, 0.42, 1.5);
+  wood.add(at(mound, x, y + 0.06 * scale, z, rng.range(0, TAU)), 0x241d22);
 
   const limbs = detail > 0 ? 3 : 2;
   for (let i = 0; i < limbs; i++) {
@@ -1242,21 +1300,32 @@ function cherryTree(
     const limb = envCyl(0.045 * scale, 0.1 * scale, len, 5);
     limb.rotateZ(rng.range(0.5, 0.95));
     limb.rotateY(a);
-    wood.add(at(limb, x + lean * -trunkH, y + trunkH * rng.range(0.55, 0.85), z), 0x1b1620);
+    wood.add(at(limb, x + lean * -trunkH, y + trunkH * rng.range(0.55, 0.85), z), 0x33272f);
   }
 
-  const blobs = detail > 0 ? 5 : 3;
-  const pinks = [0xf6b6c8, 0xefa2ba, 0xffc9d6, 0xe294ae];
+  // Soft pink against the dark blue is the theme's signature contrast, so the
+  // distance wash is deliberately weak — desaturate, never darken to maroon.
+  //
+  // A cherry canopy is an UMBRELLA: much wider than it is tall, and made of
+  // several overlapping masses. One centred ball on a stick is a lollipop, and
+  // that is exactly what this used to read as.
+  const blobs = detail > 0 ? 7 : 5;
+  const pinks = [0xfcc8d6, 0xf7b4c8, 0xffdbe4, 0xf2a9c0];
   for (let i = 0; i < blobs; i++) {
-    const a = rng.range(0, TAU);
-    const rr = rng.range(0, 1.15) * scale;
-    const size = rng.range(0.72, 1.28) * scale;
-    const blob = envBlob(size, detail);
-    blob.scale(1, rng.range(0.62, 0.86), 1);
+    const a = (i / blobs) * TAU + rng.range(-0.5, 0.5);
+    const rr = (i === 0 ? 0 : rng.range(0.5, 1.7)) * scale;
+    const size = rng.range(0.62, 0.98) * scale;
+    const blob = envBlob(size, blobDetail);
+    blob.scale(1.25, rng.range(0.5, 0.68), 1.25);
     const tint = new THREE.Color(rng.pick(pinks));
-    tint.lerp(new THREE.Color(0x16242f), fade);
+    tint.lerp(new THREE.Color(0x8fa2b4), fade);
     blossom.add(
-      at(blob, x + Math.cos(a) * rr, y + trunkH + rng.range(0.15, 0.85) * scale, z + Math.sin(a) * rr),
+      at(
+        blob,
+        x + Math.cos(a) * rr,
+        y + trunkH + rng.range(0.0, 0.34) * scale - rr * 0.16,
+        z + Math.sin(a) * rr,
+      ),
       tint.getHex(),
     );
   }
@@ -1283,8 +1352,7 @@ function bambooFence(
     wood.add(at(post, cx + Math.cos(yaw) * u, y, cz - Math.sin(yaw) * u), tone);
   }
   for (let r = 0; r < 3; r++) {
-    const rail = envCyl(0.045, 0.045, span, 5);
-    rail.rotateZ(Math.PI / 2);
+    const rail = envRodX(0.045, 0.045, span, 5);
     rail.rotateY(yaw);
     wood.add(at(rail, cx, y + 0.28 + r * 0.44, cz), tone);
   }
@@ -1307,6 +1375,8 @@ function shojiWall(
   const nx = Math.cos(yaw);
   const nz = -Math.sin(yaw);
 
+  // a stone plinth, so the lit paper is not hovering over the gravel
+  wood.add(at(envBox(span + 0.9, 0.52, 1.5), cx, y, cz, yaw), 0x232a30);
   glow.add(at(envBox(span, h, 0.1), cx, y + 0.5, cz, yaw), 0xffb877);
   // lattice: sits a few centimetres proud of the paper on the camera side
   const px = -Math.cos(bearing) * 0.09;
@@ -1340,7 +1410,6 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const q = ctx.quality;
   const rng = ctx.rng;
   const topY = Number.isFinite(ctx.tableTopY) ? ctx.tableTopY : -0.3;
-  const plate = Number.isFinite(ctx.plateWidth) && ctx.plateWidth > 0.4 ? ctx.plateWidth : 3.24;
   const deck = topY - ENV_SINK;
   const floorY = deck - FLOOR_DROP;
   const detail = envPick(q, 0, 1, 1);
@@ -1439,46 +1508,44 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   counter.add(at(envBox(COUNTER_W * 0.82, 0.09, COUNTER_D * 0.56), 0, floorY, 0), 0x4a4238);
 
   // ---- on the counter ----------------------------------------------------
-  // Everything here keeps min(|x|,|z|) > SWEEP_HALF so a sliding layer can
-  // never pass through it.
-  const dishX = 2.35 + rng.range(-0.1, 0.15);
-  const dishZ = SWEEP_HALF + 0.25 + rng.range(0, 0.15);
+  // Everything on the bar is pushed down to the far ends of it: rule (b), out
+  // past PROP_R and never more than PROP_LIFT proud of the counter.
+  // PROP_R is a floor on the CENTRE; each prop is clamped with enough extra
+  // margin that its widest reach — a chopstick tip, a twig — also clears.
+  const [dishX, dishZ] = clearOf(4.85 + rng.range(-0.15, 0.2), 1.35 + rng.range(-0.12, 0.12), 5.2);
   satin.add(at(envCyl(0.42, 0.36, 0.11, 20), dishX, deck, dishZ), 0x0b1013);
   satin.add(at(envCyl(0.34, 0.34, 0.02, 20), dishX, deck + 0.075, dishZ), 0x241a12);
 
-  const restX = -2.5 + rng.range(-0.15, 0.15);
-  const restZ = -(SWEEP_HALF + 0.3 + rng.range(0, 0.2));
+  const [restX, restZ] = clearOf(-(5.05 + rng.range(-0.1, 0.2)), -(1.3 + rng.range(-0.12, 0.12)), 5.3);
   const rest = pillow(0.44, 0.11, 0.17, { round: 0.75, segments: 12, squash: 0.45 });
   satin.add(at(rest, restX, deck, restZ, rng.range(-0.3, 0.3)), 0x22333c);
   for (let i = 0; i < 2; i++) {
-    const stick = envCyl(0.017, 0.026, 1.55, 6);
-    stick.rotateZ(Math.PI / 2);
+    // laid along the bar and offset outboard, so even the inner tip clears
+    const stick = envRodX(0.017, 0.026, 1.15, 6);
     stick.rotateY(-0.42);
-    satin.add(at(stick, restX + 0.12, deck + 0.1 + i * 0.036, restZ + 0.05 + i * 0.055), 0x150f0d);
+    satin.add(at(stick, restX - 0.05, deck + 0.1 + i * 0.036, restZ - 0.14 + i * 0.055), 0x150f0d);
   }
 
   // a folded indigo cloth
-  const clothX = -(plate * 0.62 + 1.5);
-  const clothZ = SWEEP_HALF + 0.4;
+  const [clothX, clothZ] = clearOf(-(4.85 + rng.range(0, 0.3)), 1.4 + rng.range(-0.12, 0.12), 5.4);
   matte.add(at(envBox(0.95, 0.05, 0.62), clothX, deck, clothZ, 0.22), 0x14243f);
-  matte.add(at(envBox(0.86, 0.05, 0.5), clothX + 0.04, deck + 0.05, clothZ - 0.02, 0.18), 0x1b2f4e);
+  matte.add(at(envBox(0.86, 0.05, 0.5), clothX - 0.04, deck + 0.05, clothZ + 0.02, 0.18), 0x1b2f4e);
 
-  // a single branch in a vase — the ikebana
-  const vaseX = 3.0 + rng.range(-0.2, 0.2);
-  const vaseZ = -(SWEEP_HALF + 0.45 + rng.range(0, 0.3));
-  satin.add(at(envCyl(0.17, 0.24, 0.62, 14), vaseX, deck, vaseZ), 0x16323a);
-  satin.add(at(envCyl(0.2, 0.17, 0.08, 14), vaseX, deck + 0.6, vaseZ), 0x1d3f47);
-  const branch = envCyl(0.014, 0.032, 1.15, 5);
-  branch.rotateZ(0.22);
-  wood.add(at(branch, vaseX, deck + 0.55, vaseZ), 0x241a1c);
+  // a single branch in a vase — the ikebana. Capped at PROP_LIFT.
+  const [vaseX, vaseZ] = clearOf(4.9 + rng.range(0, 0.3), -(1.35 + rng.range(-0.12, 0.15)), 5.4);
+  satin.add(at(envCyl(0.17, 0.24, 0.55, 14), vaseX, deck, vaseZ), 0x16323a);
+  satin.add(at(envCyl(0.2, 0.17, 0.08, 14), vaseX, deck + 0.53, vaseZ), 0x1d3f47);
+  const branch = envCyl(0.014, 0.032, 0.82, 5);
+  branch.rotateZ(-0.22);
+  wood.add(at(branch, vaseX, deck + 0.5, vaseZ), 0x3a2b2d);
   for (let i = 0; i < 3; i++) {
-    const twig = envCyl(0.009, 0.018, rng.range(0.28, 0.46), 4);
+    const twig = envCyl(0.009, 0.018, rng.range(0.2, 0.32), 4);
     twig.rotateZ(rng.range(0.6, 1.1) * (i % 2 ? 1 : -1));
     twig.rotateY(rng.range(0, TAU));
-    wood.add(at(twig, vaseX - 0.13 + i * 0.09, deck + 0.9 + i * 0.22, vaseZ), 0x241a1c);
+    wood.add(at(twig, vaseX + 0.11 + i * 0.08, deck + 0.78 + i * 0.14, vaseZ - i * 0.06), 0x3a2b2d);
     blossom.add(
-      at(envBlob(rng.range(0.07, 0.11), detail), vaseX - 0.2 + i * 0.16, deck + 1.05 + i * 0.24, vaseZ + rng.signed() * 0.12),
-      0xf7bcca,
+      at(envBlob(rng.range(0.07, 0.1), detail), vaseX + 0.17 + i * 0.13, deck + 0.9 + i * 0.16, vaseZ - rng.next() * 0.12),
+      0xfcc8d6,
     );
   }
 
@@ -1486,13 +1553,14 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const gseg = envPick(q, 28, 44, 60);
   const radii = envPick<readonly number[]>(
     q,
-    [2.4, 7, 13, 19, 25],
-    [1.8, 4.2, 8, 12.5, 17, 21, 25],
-    [1.6, 3.4, 6.4, 10, 13.5, 17, 20.5, 25],
+    [2.4, 7, 13, 20, 26, 31],
+    [1.8, 4.2, 8, 12.5, 17, 21, 26, 31],
+    [1.6, 3.4, 6.4, 10, 14, 18, 22, 26, 31],
   );
-  const ground = envGround(radii, gseg, 0.13, (r) => {
-    const fade = 1 - THREE.MathUtils.smoothstep(r, 12.5, 24.5);
-    const dark = 1 - 0.42 * THREE.MathUtils.smoothstep(r, 3, 20);
+  // The fade has to start BEYOND the treeline or the trunks stand on nothing.
+  const ground = envGround(radii, gseg, 0.19, (r) => {
+    const fade = 1 - THREE.MathUtils.smoothstep(r, 19, 30);
+    const dark = 1 - 0.4 * THREE.MathUtils.smoothstep(r, 3, 24);
     return [dark, dark * 0.99, dark * 1.02, fade];
   });
   ground.translate(0, floorY, 0);
@@ -1512,16 +1580,18 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   satin.add(at(envCyl(0.62, 0.62, 0.03, 12), bx, floorY + 0.99, bz), 0x0a1116);
   const spoutBase = envCyl(0.075, 0.09, 1.5, 6);
   wood.add(at(spoutBase, bx - 1.0, floorY, bz + 0.5), 0x6f6b47);
-  const spout = envCyl(0.06, 0.07, 1.1, 6);
-  spout.rotateZ(Math.PI / 2 - 0.28);
-  wood.add(at(spout, bx - 0.95, floorY + 1.42, bz + 0.5), 0x7d7850);
-  satin.add(at(envCyl(0.012, 0.012, 0.42, 4), bx - 0.12, floorY + 1.02, bz + 0.42), 0x8fb6c4);
+  // reaches from the post out over the basin, tipped down at the mouth
+  const spout = envRodX(0.06, 0.07, 1.15, 6);
+  spout.rotateZ(-0.26);
+  wood.add(at(spout, bx - 0.42, floorY + 1.46, bz + 0.24), 0x7d7850);
+  // the thread of water, hung from the spout's mouth down to the basin
+  satin.add(at(envCyl(0.013, 0.011, 0.33, 4), bx + 0.13, floorY + 0.99, bz + 0.24), 0x8fb6c4);
 
   // rocks and moss, never evenly spaced
-  const rocks = envPick(q, 3, 6, 8);
+  const rocks = envPick(q, 5, 9, 13);
   for (let i = 0; i < rocks; i++) {
-    const a = rng.range(0, TAU);
-    const r = rng.range(6.5, 13.5);
+    const a = (i / rocks) * TAU + rng.range(-0.35, 0.35);
+    const r = rng.range(7.5, 12.5);
     const s = rng.range(0.3, 0.85);
     const rock = envBlob(s, detail);
     rock.scale(rng.range(0.9, 1.5), rng.range(0.4, 0.7), rng.range(0.9, 1.4));
@@ -1532,33 +1602,51 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // ---- background --------------------------------------------------------
-  if (q !== 'low') {
-    const fences = envPick(q, 2, 3, 4);
-    for (let i = 0; i < fences; i++) {
-      const bearing = (i / fences) * TAU + rng.range(-0.35, 0.35);
-      bambooFence(wood, rng, rng.range(10.5, 12.5), bearing, rng.range(4.5, 7), floorY, 0x565c3f);
-    }
+  const fences = envPick(q, 5, 7, 9);
+  for (let i = 0; i < fences; i++) {
+    const bearing = (i / fences) * TAU + rng.range(-0.16, 0.16);
+    bambooFence(wood, rng, rng.range(9.6, 10.8), bearing, rng.range(5.5, 7.5), floorY, 0x8d8a5c);
   }
 
-  const lanterns = envPick(q, 1, 2, 2);
+  const lanterns = envPick(q, 3, 4, 5);
   for (let i = 0; i < lanterns; i++) {
-    const a = rng.range(0, TAU);
-    const r = rng.range(8.5, 12);
+    const a = (i / lanterns) * TAU + rng.range(-0.5, 0.5);
+    const r = rng.range(FAR_R + 0.3, 12.5);
     stoneLantern(matte, glow, rng.range(0.85, 1.15), Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0, TAU), 0x424a52);
   }
 
-  const walls = envPick(q, 1, 2, 3);
+  // A near-continuous lit wall: the warm paper behind the dark garden is the
+  // only warm light in the theme and it has to be on screen at every yaw.
+  const walls = envPick(q, 4, 6, 7);
   for (let i = 0; i < walls; i++) {
-    const bearing = (i / walls) * TAU + rng.range(-0.4, 0.4) + 0.6;
-    shojiWall(wood, glow, rng.range(14.5, 16.5), bearing, rng.range(6, 8.5), floorY, envPick(q, 3, 4, 5));
+    const bearing = (i / walls) * TAU + rng.range(-0.12, 0.12) + 0.6;
+    shojiWall(wood, glow, rng.range(13.5, 15.5), bearing, rng.range(6.5, 8.5), floorY, envPick(q, 3, 4, 5));
   }
 
-  const trees = envPick(q, 3, 5, 7);
+  // A treeline, not a lollipop: more trees, each smaller, all of them planted
+  // well inside the solid part of the ground so a trunk always has earth under
+  // it. Canopy tops land around the counter plane, so the blossom reads as a
+  // band of pink beside the tower rather than a mass behind its top.
+  const trees = envPick(q, 10, 16, 20);
   for (let i = 0; i < trees; i++) {
-    const a = (i / trees) * TAU + rng.range(-0.4, 0.4);
-    const r = rng.range(13, 21);
-    const fade = THREE.MathUtils.clamp((r - 12) / 14, 0, 0.55);
-    cherryTree(wood, blossom, rng, detail, Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0.85, 1.35), fade);
+    const a = (i / trees) * TAU + rng.range(-0.18, 0.18);
+    const r = rng.range(10.6, 15.5);
+    // a floor on the wash so even the nearest canopy is blossom-pink, not magenta
+    const fade = THREE.MathUtils.clamp((r - 10) / 20, 0.14, 0.36);
+    // LOD by DISTANCE, not by size: beyond 12.5 units a canopy is a
+    // 20-triangle facet ball and nobody counts facets out there.
+    cherryTree(
+      wood,
+      blossom,
+      rng,
+      detail,
+      Math.cos(a) * r,
+      floorY,
+      Math.sin(a) * r,
+      rng.range(0.82, 1.15),
+      fade,
+      r > 12.5 ? 0 : detail,
+    );
   }
 
   // ---- assemble ----------------------------------------------------------

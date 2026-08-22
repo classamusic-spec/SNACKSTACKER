@@ -557,9 +557,10 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
 // Framing notes (camera: FOV 46, yaw 45, pitch 0.5 rad, ~11.5 units back):
 //   • the picnic table's near corner falls off the bottom of the frame, so the
 //     table fills the foreground rather than floating in it;
-//   • the fence at 15.5 units lands about a quarter of the way down the
-//     screen — a horizon line ABOVE the tower's crown, so it never crowds it;
-//   • the grass disc stops at 26 units, by which point its vertex colours have
+//   • the picket fence at 17.2 units lands about a quarter of the way down
+//     the screen — a horizon line ABOVE the tower's crown, so it never
+//     crowds it, and it hides the far edge of the grass;
+//   • the grass disc stops at 24 units, by which point its vertex colours have
 //     already faded into the palette's haze, so there is no rim to see.
 //
 // Nothing within 5 units of the origin rises above `tableTopY`; the fence,
@@ -636,7 +637,7 @@ const smokeMat = (m: MaterialLibrary): THREE.Material =>
     color: 0xf6ece0,
     roughness: 1,
     transparent: true,
-    opacity: 0.15,
+    opacity: 0.11,
     depthWrite: false,
   });
 
@@ -691,32 +692,49 @@ function picnicTable(batch: PropBatch, topY: number, yardY: number, rng: Rng): v
 
 /** Kettle grill: a dome on three legs. That is the whole silhouette. */
 function kettleGrill(batch: PropBatch, x: number, z: number, yardY: number, ry: number): void {
-  const ENAMEL = 0x2a2d33;
-  const STEEL = 0xb9c0c8;
-  const hub = yardY + 1.02;
+  const ENAMEL = 0x2c3037;
+  const STEEL = 0xc3cad2;
+  const hub = yardY + 1.12;
 
+  // Three legs, splayed: at 120px this reads "grill" only if the gap between
+  // the ground and the bowl is real, so the legs are long and thin.
   for (let i = 0; i < 3; i++) {
     const a = ry + (i / 3) * TAU;
     batch.strut(
-      new THREE.Vector3(x + Math.sin(a) * 0.3, hub - 0.1, z + Math.cos(a) * 0.3),
-      new THREE.Vector3(x + Math.sin(a) * 0.72, yardY + 0.02, z + Math.cos(a) * 0.72),
-      0.11,
+      new THREE.Vector3(x + Math.sin(a) * 0.34, hub - 0.12, z + Math.cos(a) * 0.34),
+      new THREE.Vector3(x + Math.sin(a) * 0.88, yardY + 0.02, z + Math.cos(a) * 0.88),
+      0.12,
       STEEL,
     );
   }
   // bowl (a dome, inverted) and lid
-  batch.dome(0.84, 0.6, ENAMEL, { x, y: hub, z, rx: Math.PI }, 14);
-  batch.cyl(0.85, 0.85, 0.07, STEEL, { x, y: hub + 0.03, z }, 16);
-  batch.dome(0.85, 0.6, ENAMEL, { x, y: hub + 0.06, z }, 14);
-  batch.cyl(0.17, 0.2, 0.09, STEEL, { x, y: hub + 0.68, z }, 8);
-  // lid handle
-  batch.box(0.5, 0.07, 0.09, 0x33363c, { x, y: hub + 0.78, z, ry });
-  // a shelf, so it is not perfectly symmetrical from every yaw
-  batch.box(0.72, 0.06, 0.34, 0xa9662e, {
-    x: x + Math.sin(ry + 1.6) * 1.0,
+  batch.dome(0.88, 0.64, ENAMEL, { x, y: hub, z, rx: Math.PI }, 14);
+  batch.cyl(0.89, 0.89, 0.08, STEEL, { x, y: hub + 0.035, z }, 16);
+  batch.dome(0.89, 0.66, ENAMEL, { x, y: hub + 0.07, z }, 14);
+  batch.cyl(0.17, 0.21, 0.1, STEEL, { x, y: hub + 0.74, z }, 8);
+  // lid handle, held clear of the dome on two little posts
+  batch.box(0.56, 0.08, 0.1, 0x3a3e45, { x, y: hub + 0.88, z, ry });
+  for (const s of [-1, 1]) {
+    batch.box(0.07, 0.12, 0.07, 0x3a3e45, {
+      x: x + Math.sin(ry) * s * 0.24,
+      y: hub + 0.8,
+      z: z + Math.cos(ry) * s * 0.24,
+    });
+  }
+  // side shelf + a slumped sack of charcoal: breaks the symmetry at every yaw
+  batch.box(0.8, 0.07, 0.38, 0xb06c2f, {
+    x: x + Math.sin(ry + 1.6) * 1.12,
     y: hub + 0.02,
-    z: z + Math.cos(ry + 1.6) * 1.0,
+    z: z + Math.cos(ry + 1.6) * 1.12,
     ry: ry + 1.6,
+  });
+  batch.slab(0.66, 0.48, 0.42, 0x8a7c68, {
+    x: x + Math.sin(ry - 1.9) * 0.95,
+    y: yardY,
+    z: z + Math.cos(ry - 1.9) * 0.95,
+    ry: ry - 1.9,
+    rz: 0.14,
+    ground: true,
   });
 }
 
@@ -779,15 +797,21 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     { y: yardY },
   );
 
-  const tufts = pickE(q, 22, 46, 76);
+  const tufts = pickE(q, 28, 54, 84);
   for (let i = 0; i < tufts; i++) {
     const a = rng.range(0, TAU);
-    const r = 3.4 + Math.sqrt(rng.next()) * 10.5;
-    const h = rng.range(0.26, 0.52);
-    turf.add(
-      new THREE.ConeGeometry(rng.range(0.15, 0.24), h, 4, 1),
-      mix(0x8fae56, 0x789a45, rng.next()),
-      { x: Math.sin(a) * r, z: Math.cos(a) * r, y: yardY, ground: true, ry: rng.range(0, TAU) },
+    const r = 3.4 + Math.sqrt(rng.next()) * 11.5;
+    const w = rng.range(0.3, 0.62);
+    // Flattened domes, not spikes: a mown lawn is lumpy, not bristly, and a
+    // 4-sided cone at this size just reads as a stray dark triangle.
+    turf.dome(
+      w,
+      w * rng.range(0.2, 0.34),
+      // Kept within a shade of the lawn: darker tufts read as holes punched in
+      // the grass rather than as clumps of it.
+      mix(0x93b457, 0xaec86c, rng.next()),
+      { x: Math.sin(a) * r, z: Math.cos(a) * r, y: yardY, ry: rng.range(0, TAU) },
+      q === 'low' ? 7 : 9,
     );
   }
   const turfGeo = turf.build();
@@ -813,27 +837,36 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   g.add(mesh(cloth, clothMat(m), { cast: false, receive: true }));
 
   // --- mid-ground props: grill, cooler, chair ------------------------------
-  const props = new PropBatch();
-  const grillA = -2.38 + rng.range(-0.25, 0.25);
-  const grillD = 6.9 + rng.range(-0.35, 0.35);
-  const grillX = Math.sin(grillA) * grillD;
-  const grillZ = Math.cos(grillA) * grillD;
-  kettleGrill(props, grillX, grillZ, yardY, rng.range(0, TAU));
+  // Placement is done in the camera's own frame, not in world azimuth.
+  //
+  // The lens is brutal in portrait: 46 degree vertical FOV at 0.46 aspect is
+  // only ~22 degrees across, so at the tower's distance the visible slot is
+  // 4 units wide and the food alone fills 57% of it. That leaves a usable band
+  // on each side between 0.6 and 1.0 of the half-frame, and a prop only lands
+  // in it if it is nearly BEHIND the tower and a long way back:
+  //
+  //   lateral = d * sin(theta),  depth = 11.5*cos(0.5) - d * cos(theta)
+  //
+  // with theta measured from the camera's own bearing. theta ~ 164 degrees at
+  // 12 units puts the grill just outside the bun and just inside the frame;
+  // any closer and it hides behind the food, any further round and it falls
+  // off the edge. `CAM_BEARING` is the play/home yaw the game opens on.
+  const CAM_BEARING = Math.PI / 4;
+  const atBearing = (theta: number, d: number): [number, number] => {
+    const a = CAM_BEARING + theta;
+    return [Math.sin(a) * d, Math.cos(a) * d];
+  };
 
-  const coolA = -0.9 + rng.range(-0.2, 0.2);
-  const coolD = 6.2 + rng.range(-0.35, 0.35);
-  coolerBox(props, Math.sin(coolA) * coolD, Math.cos(coolA) * coolD, yardY, coolA + 1.3);
+  const props = new PropBatch();
+  const [grillX, grillZ] = atBearing(2.862 + rng.range(-0.03, 0.03), 12.0);
+  kettleGrill(props, grillX, grillZ, yardY, Math.atan2(grillX, grillZ) + Math.PI + 0.5);
+
+  const [coolX, coolZ] = atBearing(-2.79 + rng.range(-0.03, 0.03), 9.4);
+  coolerBox(props, coolX, coolZ, yardY, Math.atan2(coolX, coolZ) + 1.25);
 
   if (q !== 'low') {
-    const chairA = 1.92 + rng.range(-0.2, 0.2);
-    const chairD = 6.6 + rng.range(-0.35, 0.35);
-    foldingChair(
-      props,
-      Math.sin(chairA) * chairD,
-      Math.cos(chairA) * chairD,
-      yardY,
-      chairA + Math.PI + rng.range(-0.4, 0.4),
-    );
+    const [chairX, chairZ] = atBearing(1.25 + rng.range(-0.12, 0.12), 7.2);
+    foldingChair(props, chairX, chairZ, yardY, Math.atan2(chairX, chairZ) + Math.PI + 0.4);
   }
   const propGeo = props.build();
   if (propGeo) g.add(mesh(propGeo, yardPaintMat(m), { cast: true, receive: true }));
@@ -841,19 +874,19 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // --- background: fence line, trees, festoon posts ------------------------
   const far = new PropBatch();
   const FENCE_R = 17.2;
-  const boards = pickE(q, 60, 96, 130);
-  // Board width follows the count, so the line stays a fence at every tier
-  // instead of collapsing into a paddock rail on LOW. The 0.82 leaves a hair
-  // gap that keeps a little sky in it and stops it reading as a stockade wall.
-  const boardW = ((TAU * FENCE_R) / boards) * 0.82;
+  // Boards are a FIXED width at every tier — deriving the width from the count
+  // turned LOW into a ring of 1.5-unit panels that read as a stockade wall.
+  // Only the pitch changes, so the fence is always a fence, just airier.
+  const boards = pickE(q, 104, 124, 144);
+  const boardW = Math.min(0.62, ((TAU * FENCE_R) / boards) * 0.7);
   const fenceTone = (t: number): number => mix(mix(0xdcbb8c, 0xb99b6c, t), HAZE, 0.34);
   for (let i = 0; i < boards; i++) {
     const a = (i / boards) * TAU;
     const r = FENCE_R * (1 + rng.signed() * 0.008);
     // every eighth board is a post: taller, thicker, and it breaks the ruler line
-    const post = i % 8 === 0;
+    const post = i % 10 === 0;
     far.box(
-      post ? boardW * 1.5 : boardW,
+      post ? boardW * 1.7 : boardW,
       (post ? 2.42 : 2.12) + rng.range(-0.06, 0.12),
       post ? 0.2 : 0.09,
       fenceTone(post ? 0.85 : rng.next()),
@@ -876,10 +909,11 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // shrubs along the fence foot: they break the dead line where boards meet grass
-  const shrubs = pickE(q, 9, 15, 22);
+  const shrubs = pickE(q, 12, 19, 26);
   for (let i = 0; i < shrubs; i++) {
     const a = (i / shrubs) * TAU + rng.range(-0.22, 0.22);
-    const d = FENCE_R - rng.range(0.5, 1.9);
+    // every fourth one wanders out onto the lawn, so no yaw is a bare green band
+    const d = i % 4 === 3 ? rng.range(9.5, 14.0) : FENCE_R - rng.range(0.5, 1.9);
     const w = rng.range(0.75, 1.5);
     far.dome(
       w,
@@ -899,15 +933,19 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const trunkH = 1.75 + rng.range(-0.25, 0.5);
     const spread = 1.8 + rng.range(-0.3, 0.7);
     far.cyl(0.16, 0.26, trunkH, mix(0x8a6540, HAZE, 0.42), { x, z, y: yardY, ground: true }, 6);
-    const lobes = q === 'low' ? 1 : 3;
+    // Two or three overlapping balls at 10 segments: a round canopy at 120px.
+    // Six segments read as a literal hexagon at this distance.
+    const lobes = pickE(q, 2, 3, 3);
+    const canopyTone = mix(0x7ba24c, HAZE, 0.4);
     for (let k = 0; k < lobes; k++) {
-      const ox = k === 0 ? 0 : rng.range(-0.7, 0.7);
-      const oz = k === 0 ? 0 : rng.range(-0.7, 0.7);
-      far.ball(spread * (k === 0 ? 1 : rng.range(0.6, 0.82)), mix(0x7ba24c, HAZE, 0.42), {
-        x: x + ox,
-        z: z + oz,
-        y: yardY + trunkH + spread * 0.72 + rng.range(-0.25, 0.3),
-      }, q === 'low' ? 6 : 8);
+      const ox = k === 0 ? 0 : rng.range(-0.8, 0.8);
+      const oz = k === 0 ? 0 : rng.range(-0.8, 0.8);
+      const r = spread * (k === 0 ? 1 : rng.range(0.62, 0.84));
+      far.add(
+        new THREE.SphereGeometry(r, 10, 6).scale(1, 0.86, 1),
+        mix(canopyTone, 0xffffff, k * 0.06),
+        { x: x + ox, z: z + oz, y: yardY + trunkH + spread * 0.7 + rng.range(-0.2, 0.35) },
+      );
     }
   }
 
@@ -943,15 +981,24 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
 
   // --- a wisp of charcoal smoke -------------------------------------------
   if (q !== 'low') {
+    // A wisp, not a column: few puffs, leaning downwind, each one wider and
+    // fainter than the last. Evenly stacked spheres read as a string of beads.
     const puffs = new PropBatch();
-    const n = q === 'high' ? 6 : 4;
+    const n = q === 'high' ? 5 : 3;
+    const lean = rng.range(0, TAU);
     for (let i = 0; i < n; i++) {
-      const t = i / n;
-      puffs.ball(0.3 + t * 0.55, 0xffffff, {
-        x: grillX + Math.sin(t * 4.1 + 1.2) * (0.25 + t * 0.75),
-        y: yardY + 1.95 + t * 1.7,
-        z: grillZ + Math.cos(t * 3.3) * (0.2 + t * 0.6),
-      }, 7);
+      const t = i / Math.max(n - 1, 1);
+      const r = 0.34 + t * t * 0.95;
+      const drift = t * t * 1.5;
+      puffs.add(
+        new THREE.SphereGeometry(r, 8, 5).scale(1, 0.72 - t * 0.2, 1),
+        0xffffff,
+        {
+          x: grillX + Math.sin(lean) * drift + Math.sin(t * 5.3) * 0.22,
+          y: yardY + 2.05 + t * 1.85,
+          z: grillZ + Math.cos(lean) * drift + Math.cos(t * 4.1) * 0.18,
+        },
+      );
     }
     const smokeGeo = puffs.build();
     if (smokeGeo) g.add(mesh(smokeGeo, smokeMat(m), { cast: false, receive: false }));

@@ -12,15 +12,17 @@
  * slab carrying a raised grid. Every one of them is a different black shape.
  */
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import type { MaterialLibrary } from '../../render/api';
-import { clamp } from '../../core/math';
-import { mesh, pour, puck, roughen, scatter } from '../kit';
+import type { Rng } from '../../core/rng';
+import { TAU, clamp, clamp01 } from '../../core/math';
+import { fbm2, mesh, pour, puck, roughen, scatter } from '../kit';
 import {
   areaCount,
   baconPainter,
   blobGeo,
   boxAt,
+  clothSheet,
   coverCount,
   crumbBumpTex,
   cutSquare,
@@ -31,15 +33,25 @@ import {
   fitGeoY,
   geoHeight,
   glazePainter,
+  groundDisc,
   groundGeo,
+  leafGeo,
+  linenPainter,
   mergeSafe,
+  mix,
+  num,
+  pickE,
   pickQ,
+  place,
+  plankPainter,
+  PropBatch,
   propSize,
   rasherRun,
   ringTorus,
   roughAmt,
   safe,
   specklePainter,
+  tintEach,
   toastPainter,
 } from './shared-savory';
 
@@ -553,61 +565,465 @@ function breakfastPlate(ctx: FoodBuildCtx): THREE.Object3D {
   return g;
 }
 
-function breakfastScenery(ctx: FoodBuildCtx): THREE.Object3D {
-  const g = new THREE.Group();
-  const m = ctx.materials;
-  const w = safe(ctx.width, 0.4);
-  const floorY = -plateThickness(ctx) - 0.004;
+// ---------------------------------------------------------------------------
+// environment — a sunlit breakfast table
+// ---------------------------------------------------------------------------
+//
+// Early, quiet and a little overexposed: a round scrubbed-pine table under the
+// plate with a linen runner, the breakfast things pushed out to the rim, and a
+// suggestion of a kitchen behind — a wainscot line, a soft wall, tall windows
+// full of morning light, curtains, a pot plant on a sill and two pendants.
+//
+// Two constraints shape every number here.
+//
+// **The tower's cylinder.** The food occupies a cylinder of radius ~1.7 rising
+// from `tableTopY`, and a sliding layer sweeps it. So anything standing ON the
+// table has to live past 4.5 units from the origin and stay under
+// `tableTopY + 1.5`; anything taller than that is pushed past 9 units, where it
+// reads as background. That is why the table is ROUND: on a rectangle the
+// r > 4.5 ring only exists at the two ends, so the jam jar and the coffee pot
+// would have had to queue up in the same two spots.
+//
+// **The lens.** 46 degree FOV at 0.46 aspect is ~22 degrees across, and the
+// food alone fills 57% of that. A prop is only both visible AND clear of the
+// tower in a narrow band roughly behind it, so props are placed by bearing
+// relative to the camera (`CAM_BEARING`), not by world azimuth.
 
-  // folded napkin — two slabs, low contrast, deliberately almost invisible
-  const nw = w * 0.4;
-  const nd = w * 0.28;
-  const lower = new THREE.BoxGeometry(nw, w * 0.006, nd);
-  const upper = new THREE.BoxGeometry(nw * 0.98, w * 0.005, nd * 0.54);
-  upper.translate(0, w * 0.0055, -nd * 0.2);
-  const napkin = mergeSafe([lower, upper]);
-  if (napkin) {
-    napkin.rotateY(0.28);
-    groundGeo(napkin, floorY);
-    napkin.translate(-w * 0.74, 0, w * 0.46);
-    g.add(
-      mesh(napkin, m.standard('breakfast.napkin', { color: 0xf2ecde, roughness: 0.93 }), {
-        cast: false,
-      }),
-    );
-  }
+/** Table top down to the kitchen floor. */
+const ROOM_DROP = 2.5;
+/** The runner is the top surface; the tabletop sits this far under it. */
+const RUNNER_LIFT = 0.04;
+const WALL_R = 13.5;
+const WALL_H = 5.4;
+/** The yaw the game opens on; props are placed relative to it. */
+const CAM_BEARING = Math.PI / 4;
 
-  // fork — a handle, a neck and four tines, all boxes
-  const fl = w * 0.3;
-  const parts: THREE.BufferGeometry[] = [];
-  const handle = new THREE.BoxGeometry(fl * 0.62, w * 0.008, w * 0.028);
-  handle.translate(-fl * 0.19, 0, 0);
-  parts.push(handle);
-  const neck = new THREE.BoxGeometry(fl * 0.16, w * 0.007, w * 0.05);
-  neck.translate(fl * 0.2, 0, 0);
-  parts.push(neck);
+const paleWoodMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('breakfast.env.wood', {
+    color: 0xffffff,
+    roughness: 0.6,
+    vertexColors: true,
+    // near-white grain: the hue is in the vertex colours, the map only modulates
+    map: m.texture(
+      'breakfast.env.plank',
+      plankPainter(0xf4ece0, 0xa89073, 0xfffdf8, { seed: 21, lines: 52, knots: 2, wear: 0.35 }),
+      { size: 256, repeat: [0.42, 0.42] },
+    ),
+  });
+
+/**
+ * Everything soft and matte in the room on one material: the floor, the wall,
+ * the dado, the curtains, the plant and the linen runner. Double-sided,
+ * because the wall cylinder and the curtain planes are single sheets. The
+ * linen weave rides on it as a very fine near-white map, so the runner still
+ * has a texture without earning its own draw.
+ */
+const roomMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('breakfast.env.room', {
+    color: 0xffffff,
+    roughness: 0.96,
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    map: m.texture('breakfast.env.linen', linenPainter(0xf4f4f4, 0xdad5c9, 4), {
+      size: 256,
+      repeat: [2.4, 2.4],
+    }),
+  });
+
+/**
+ * Painted joinery AND glazed china on one material. They want almost the same
+ * surface, and the merge is what keeps the whole kitchen inside its draw-call
+ * budget: window frames, sills, pendant shades, the coffee pot, the mug and
+ * the butter dish are a single mesh.
+ */
+const joineryMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('breakfast.env.joinery', {
+    color: 0xffffff,
+    roughness: 0.4,
+    metalness: 0.06,
+    vertexColors: true,
+  });
+
+/**
+ * Glassware, faked opaque. A genuinely transparent pane costs two draws and a
+ * sort, and at 20 units what actually sells "glass" is the hard clearcoat
+ * highlight plus the two-tone body — juice below, empty glass above — not the
+ * refraction. So the tumbler and the jam jar are solid, glossy, and tinted per
+ * vertex.
+ */
+const tableGlassMat = (m: MaterialLibrary): THREE.Material =>
+  m.physical('breakfast.env.glass', {
+    color: 0xffffff,
+    roughness: 0.05,
+    metalness: 0,
+    clearcoat: 1,
+    clearcoatRoughness: 0.04,
+    vertexColors: true,
+  });
+
+/** The pane itself: blown out, so the window reads as light rather than glass. */
+const daylightMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('breakfast.env.daylight', {
+    color: 0xfff8e8,
+    roughness: 1,
+    emissive: 0xfff1d2,
+    emissiveIntensity: 1.7,
+    toneMapped: true,
+  });
+
+/** A round scrubbed table: soft-edged top, apron ring, four turned legs. */
+function kitchenTable(batch: PropBatch, topY: number, floorY: number, rng: Rng, q: string): void {
+  const R = 5.9;
+  const deck = topY - RUNNER_LIFT;
+  const top = puck(R * 2, 0.22, R * 2, {
+    wobble: 0.002,
+    domed: 0,
+    radial: q === 'low' ? 28 : 44,
+    rings: 2,
+    seed: 2.2,
+    square: 0,
+  });
+  batch.add(top, mix(0xead6b3, 0xe0c9a2, rng.next() * 0.5), { y: deck, ceil: true });
+
+  // apron ring just under the top
+  batch.cyl(R - 0.42, R - 0.42, 0.3, 0xdcc49f, { y: deck - 0.36 }, q === 'low' ? 20 : 32, true);
+
   for (let i = 0; i < 4; i++) {
-    const tine = new THREE.BoxGeometry(fl * 0.26, w * 0.006, w * 0.009);
-    tine.translate(fl * 0.4, 0, (i - 1.5) * w * 0.014);
-    parts.push(tine);
+    const a = CAM_BEARING + Math.PI / 4 + (i / 4) * TAU;
+    const x = Math.sin(a) * (R - 0.85);
+    const z = Math.cos(a) * (R - 0.85);
+    // a turned leg: a squat block, a tapered shaft, a foot
+    batch.box(0.34, 0.36, 0.34, 0xdcc49f, { x, z, y: deck - 0.28, ceil: true });
+    batch.cyl(0.15, 0.21, ROOM_DROP - 0.78, 0xe2caa5, { x, z, y: floorY + 0.1, ground: true }, 8);
+    batch.cyl(0.24, 0.2, 0.12, 0xd6bd97, { x, z, y: floorY, ground: true }, 8);
   }
-  const fork = mergeSafe(parts);
-  if (fork) {
-    fork.rotateY(0.24);
-    groundGeo(fork, floorY + w * 0.012);
-    fork.translate(-w * 0.74, 0, w * 0.5);
-    g.add(
-      mesh(
-        fork,
-        m.standard('breakfast.cutlery', {
-          color: 0xc9cfd6,
-          metalness: 0.7,
-          roughness: 0.34,
-        }),
-        { cast: false },
-      ),
-    );
+}
+
+/** The coffee pot: tapered body, banded shoulder, lid, knob, spout, handle. */
+function coffeePot(batch: PropBatch, x: number, z: number, y: number, ry: number): void {
+  const CREAM = 0xfbf5ea;
+  const NAVY = 0x3f5f86;
+  const cs = Math.sin(ry);
+  const cz = Math.cos(ry);
+  const at = (dx: number, dz: number): [number, number] => [x + dx * cz + dz * cs, z - dx * cs + dz * cz];
+
+  // pot: tapered body, banded shoulder, lid, knob, spout, handle
+  batch.cyl(0.3, 0.37, 0.66, CREAM, { x, z, y, ground: true }, 14);
+  batch.cyl(0.31, 0.31, 0.05, NAVY, { x, z, y: y + 0.66 }, 14);
+  batch.cyl(0.3, 0.31, 0.09, CREAM, { x, z, y: y + 0.7, ground: true }, 14);
+  batch.ball(0.07, NAVY, { x, z, y: y + 0.83 }, 7);
+  const [sx, sz] = at(0.34, 0);
+  batch.add(
+    new THREE.CylinderGeometry(0.05, 0.11, 0.3, 8).rotateZ(-0.6),
+    CREAM,
+    { x: sx, z: sz, y: y + 0.56 },
+  );
+  const [hx, hz] = at(-0.36, 0);
+  batch.add(
+    new THREE.TorusGeometry(0.16, 0.04, 5, 10, Math.PI * 1.25).rotateY(Math.PI / 2 - ry),
+    NAVY,
+    { x: hx, z: hz, y: y + 0.4 },
+  );
+}
+
+/**
+ * Mug on a saucer — the one cool note in a room made entirely of cream. Placed
+ * on its own bearing rather than as an offset from the pot: an offset moves a
+ * prop radially, and 0.7 units inward is enough to break the clearance rule.
+ */
+function mugOnSaucer(batch: PropBatch, x: number, z: number, y: number, ry: number): void {
+  const BLUE = 0xa8cbee;
+  batch.cyl(0.3, 0.28, 0.035, 0xfbf5ea, { x, z, y, ground: true }, 14);
+  batch.cyl(0.2, 0.17, 0.32, BLUE, { x, z, y: y + 0.035, ground: true }, 12);
+  batch.cyl(0.175, 0.175, 0.012, 0x53321c, { x, z, y: y + 0.33 }, 12);
+  batch.add(
+    new THREE.TorusGeometry(0.11, 0.032, 5, 9, Math.PI * 1.3).rotateY(Math.PI / 2 - ry),
+    BLUE,
+    { x: x - 0.22 * Math.cos(ry), z: z + 0.22 * Math.sin(ry), y: y + 0.2 },
+  );
+}
+
+function butterDish(batch: PropBatch, x: number, z: number, y: number, ry: number): void {
+  batch.slab(0.62, 0.07, 0.4, 0xfaf5ec, { x, z, ry, y, ground: true });
+  batch.add(
+    new THREE.SphereGeometry(0.3, 12, 6, 0, TAU, 0, Math.PI / 2).scale(1, 0.62, 0.62),
+    0xfdf9f2,
+    { x, z, ry, y: y + 0.07 },
+  );
+  batch.ball(0.05, 0xf3ead9, { x, z, ry, y: y + 0.26 }, 6);
+}
+
+/** A folded broadsheet: two leaves, a masthead bar, nothing else at this size. */
+function newspaper(batch: PropBatch, x: number, z: number, y: number, ry: number): void {
+  batch.box(0.98, 0.035, 0.62, 0xf2efe6, { x, z, ry, y: y + 0.005 });
+  batch.box(0.92, 0.03, 0.57, 0xe9e5d9, { x, z, ry: ry + 0.09, y: y + 0.035 });
+  batch.box(0.6, 0.008, 0.09, 0x6d6a62, { x, z, ry: ry + 0.09, y: y + 0.055 });
+  for (let i = 0; i < 4; i++) {
+    batch.box(0.72, 0.006, 0.02, 0xb3afa4, { x, z, ry: ry + 0.09, y: y + 0.053 + i * 0.0005 });
   }
+}
+
+function pendantLamp(
+  batch: PropBatch,
+  x: number,
+  z: number,
+  shadeY: number,
+  segs: number,
+): void {
+  batch.cyl(0.05, 0.05, 3.4, 0x5c5349, { x, z, y: shadeY + 0.42, ground: true }, 6);
+  batch.cyl(0.1, 0.5, 0.46, 0xfff7e8, { x, z, y: shadeY }, segs);
+  batch.cyl(0.5, 0.48, 0.05, 0xd8b070, { x, z, y: shadeY - 0.02 }, segs);
+  batch.ball(0.12, 0xfff2d8, { x, z, y: shadeY + 0.02 }, 6);
+}
+
+/**
+ * A sash window seen from inside: reveal, sill, frame, one mullion cross. The
+ * pane is handed back so it can go in the emissive daylight batch.
+ */
+function kitchenWindow(
+  joinery: PropBatch,
+  panes: PropBatch,
+  room: PropBatch,
+  a: number,
+  floorY: number,
+  q: string,
+): void {
+  const R = WALL_R - 0.1;
+  const x = Math.sin(a) * R;
+  const z = Math.cos(a) * R;
+  const W = 4.5;
+  const sill = floorY + 1.95;
+  const head = sill + 2.75;
+  // Warm greige, not white: a white frame on a blown-out pane is invisible.
+  const FRAME = 0xece0cb;
+
+  // sill and its apron
+  joinery.box(W + 0.7, 0.16, 0.5, FRAME, { x, z, ry: a, y: sill, ceil: true });
+  joinery.box(W + 0.34, 0.26, 0.16, mix(FRAME, 0xe6dcc8, 0.4), {
+    x, z, ry: a, y: sill - 0.16, ceil: true,
+  });
+  // jambs + head
+  for (const s of [-1, 1]) {
+    joinery.box(0.24, head - sill + 0.3, 0.26, FRAME, {
+      x: x + Math.sin(a + Math.PI / 2) * (s * (W / 2 + 0.12)),
+      z: z + Math.cos(a + Math.PI / 2) * (s * (W / 2 + 0.12)),
+      ry: a,
+      y: sill,
+      ground: true,
+    });
+  }
+  joinery.box(W + 0.48, 0.28, 0.26, FRAME, { x, z, ry: a, y: head, ground: true });
+  // mullion cross
+  joinery.box(0.2, head - sill, 0.17, FRAME, { x, z, ry: a, y: sill, ground: true });
+  joinery.box(W, 0.18, 0.17, FRAME, { x, z, ry: a, y: sill + (head - sill) * 0.56 });
+
+  // The pane sits at a LARGER radius than the joinery — further from the room's
+  // centre, and so further from the camera. Setting it inboard put the glass in
+  // front of its own mullions and the cross vanished.
+  panes.box(W, head - sill, 0.05, 0xffffff, {
+    x: x + Math.sin(a) * 0.14,
+    z: z + Math.cos(a) * 0.14,
+    ry: a,
+    y: sill,
+    ground: true,
+  });
+
+  // curtains: two soft panels, rippled, hung just inside the reveal
+  for (const s of [-1, 1]) {
+    const cw = 1.05;
+    const ch = head - sill + 0.5;
+    const panel = new THREE.PlaneGeometry(cw, ch, q === 'low' ? 4 : 7, 3);
+    const pos = panel.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const u = pos.getX(i) / cw;
+      const v = clamp01(pos.getY(i) / ch + 0.5);
+      pos.setZ(i, Math.sin(u * 9.5 + s) * 0.075 * (0.35 + v * 0.9));
+      pos.setX(i, pos.getX(i) * (1 - (1 - v) * 0.12));
+    }
+    panel.computeVertexNormals();
+    const off = s * (W / 2 + 0.1);
+    room.add(panel, 0xfdf6ea, {
+      ry: a,
+      x: x + Math.sin(a + Math.PI / 2) * off - Math.sin(a) * 0.34,
+      z: z + Math.cos(a + Math.PI / 2) * off - Math.cos(a) * 0.34,
+      y: head + 0.28,
+      ceil: true,
+    });
+  }
+}
+
+function breakfastEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
+  const g = new THREE.Group();
+  g.name = 'breakfast.kitchen';
+  const m = ctx.materials;
+  const q = ctx.quality;
+  const rng = ctx.rng.fork(9203);
+  const topY = num(ctx.tableTopY, -0.35);
+  const floorY = topY - ROOM_DROP;
+  const HAZE = 0xffe3ba;
+
+  const atBearing = (theta: number, d: number): [number, number] => {
+    const a = CAM_BEARING + theta;
+    return [Math.sin(a) * d, Math.cos(a) * d];
+  };
+
+  // --- the room shell: floor, wall, wainscot, skirting, curtains, plant ----
+  const room = new PropBatch();
+  room.keep(
+    groundDisc(
+      20,
+      (t, x, z) => {
+        const board = 0.5 + fbm2(x * 0.05 + 1.7, z * 0.6 - 3.3, 2) * 0.6;
+        const near = mix(0xc79a63, 0xdcb87f, clamp01(board));
+        return t < 0.35 ? near : mix(near, HAZE, clamp01((t - 0.35) / 0.5));
+      },
+      { segments: pickE(q, 26, 36, 46), rings: pickE(q, 5, 7, 8), seed: 8 },
+    ),
+    { y: floorY },
+  );
+  const wall = new THREE.CylinderGeometry(
+    WALL_R,
+    WALL_R,
+    WALL_H,
+    pickE(q, 20, 28, 36),
+    5,
+    true,
+  );
+  // Mirror it so the faces (and their normals) point into the room.
+  wall.scale(-1, 1, 1);
+  wall.computeVertexNormals();
+  place(wall, { y: floorY, ground: true });
+  tintEach(wall, (_x, y) => {
+    const t = clamp01((y - floorY) / WALL_H);
+    return mix(0xe7d8bd, 0xf8f0e1, t * t * (3 - 2 * t));
+  });
+  room.keep(wall);
+
+  // wainscot: a proud band with stiles, and the rail that caps it
+  // The dado has to be clearly PALER than the wall above it, or the stiles are
+  // the only thing that reads and the whole band turns into a balcony railing.
+  const WAINS = 1.45;
+  room.cyl(WALL_R - 0.1, WALL_R - 0.1, WAINS, 0xfffcf5, { y: floorY, ground: true }, pickE(q, 20, 28, 36), true);
+  const stiles = pickE(q, 16, 24, 32);
+  for (let i = 0; i < stiles; i++) {
+    const a = (i / stiles) * TAU;
+    room.box(0.24, WAINS - 0.22, 0.09, 0xf3e9d6, {
+      x: Math.sin(a) * (WALL_R - 0.17),
+      z: Math.cos(a) * (WALL_R - 0.17),
+      ry: a,
+      y: floorY + 0.08,
+      ground: true,
+    });
+  }
+  room.cyl(WALL_R - 0.02, WALL_R - 0.02, 0.14, 0xfffdf6, { y: floorY + WAINS }, pickE(q, 20, 28, 36), true);
+  room.cyl(WALL_R - 0.04, WALL_R - 0.04, 0.3, 0xfffdf6, { y: floorY, ground: true }, pickE(q, 20, 28, 36), true);
+
+  // --- windows -------------------------------------------------------------
+  const joinery = new PropBatch();
+  const panes = new PropBatch();
+  const windowBase = CAM_BEARING + 2.967; // ~170 deg off the opening yaw
+  const windows = pickE(q, 3, 4, 4);
+  for (let i = 0; i < windows; i++) {
+    kitchenWindow(joinery, panes, room, windowBase + (i / windows) * TAU, floorY, q);
+  }
+
+  // pot plants on two of the sills: the only strong green in the room, and the
+  // thing that stops a blank stretch of wall reading as a blank stretch of wall
+  const sillY = floorY + 1.95;
+  const plants = pickE(q, 1, 2, 2);
+  for (let k = 0; k < plants; k++) {
+    const pa = windowBase + (k / Math.max(windows, 1)) * TAU * (k === 0 ? 0 : 1);
+    const px = Math.sin(pa) * (WALL_R - 0.3) + Math.sin(pa + Math.PI / 2) * (k ? -1.5 : 1.5);
+    const pz = Math.cos(pa) * (WALL_R - 0.3) + Math.cos(pa + Math.PI / 2) * (k ? -1.5 : 1.5);
+    room.add(new THREE.CylinderGeometry(0.32, 0.24, 0.46, 10), 0xc97b3c, {
+      x: px,
+      z: pz,
+      y: sillY,
+      ground: true,
+    });
+    const leaves = pickE(q, 5, 8, 11);
+    for (let i = 0; i < leaves; i++) {
+      const a = (i / leaves) * TAU + rng.range(-0.3, 0.3);
+      const leaf = leafGeo(rng.range(0.55, 0.95), rng.range(0.26, 0.44), {
+        fold: 0.35,
+        arch: 0.5,
+        seed: 2 + i + k * 5,
+        segU: 5,
+        segV: 2,
+      });
+      room.add(leaf, mix(0x63b878, 0xa6d894, rng.next()), {
+        x: px,
+        z: pz,
+        y: sillY + 0.4,
+        ry: a,
+        rz: -rng.range(0.35, 0.95),
+      });
+    }
+  }
+
+  // --- pendants ------------------------------------------------------------
+  const [pax, paz] = atBearing(-2.793, 9.8);
+  pendantLamp(joinery, pax, paz, topY + 2.0, pickE(q, 8, 12, 14));
+  const [pbx, pbz] = atBearing(0.7, 10.4);
+  pendantLamp(joinery, pbx, pbz, topY + 2.25, pickE(q, 8, 12, 14));
+
+  // --- the table -----------------------------------------------------------
+  const table = new PropBatch();
+  kitchenTable(table, topY, floorY, rng, q);
+  const tableGeo = table.build();
+  if (tableGeo) g.add(mesh(tableGeo, paleWoodMat(m), { cast: false, receive: true }));
+
+  // --- the linen runner: its top face IS ctx.tableTopY ---------------------
+  const runner = clothSheet(10.4, 4.1, {
+    segments: pickE(q, 7, 11, 14),
+    thickness: 0.04,
+    rumple: 0.012,
+    edgeDrop: 0.022,
+    wander: 0.022,
+    seed: 9,
+  });
+  runner.rotateY(rng.range(-0.045, 0.045));
+  runner.translate(rng.range(-0.1, 0.1), topY, rng.range(-0.08, 0.08));
+  room.add(runner, 0xfaf4e8);
+
+  // --- the breakfast things -----------------------------------------------
+  //
+  // Every one of these stands ON the table, i.e. above `tableTopY`, so every
+  // one has to clear the tower: centre past 4.5 units, nothing taller than
+  // tableTopY + 1.5. The table's 5.9 radius is what buys the room for that.
+  const glass = new PropBatch();
+
+  const [cpx, cpz] = atBearing(2.72, 5.0);
+  coffeePot(joinery, cpx, cpz, topY, Math.atan2(cpx, cpz) + Math.PI + 0.35);
+  const [mgx, mgz] = atBearing(2.49, 4.95);
+  mugOnSaucer(joinery, mgx, mgz, topY, Math.atan2(mgx, mgz) + 0.6);
+
+  // juice glass: orange to the fill line, clear above it
+  const [jgx, jgz] = atBearing(-2.66, 4.85);
+  glass.cyl(0.152, 0.135, 0.33, 0xffab33, { x: jgx, z: jgz, y: topY, ground: true }, 12);
+  glass.cyl(0.16, 0.152, 0.14, 0xe8f1fa, { x: jgx, z: jgz, y: topY + 0.33, ground: true }, 12);
+
+  if (q !== 'low') {
+    const [jjx, jjz] = atBearing(-2.44, 4.95);
+    glass.cyl(0.185, 0.185, 0.24, 0xa8332c, { x: jjx, z: jjz, y: topY, ground: true }, 12);
+    glass.cyl(0.19, 0.185, 0.09, 0xeaf2fa, { x: jjx, z: jjz, y: topY + 0.24, ground: true }, 12);
+    joinery.cyl(0.2, 0.2, 0.07, 0xd8534a, { x: jjx, z: jjz, y: topY + 0.32, ground: true }, 12);
+
+    const [npx, npz] = atBearing(0.42, 5.12);
+    newspaper(joinery, npx, npz, topY, Math.atan2(npx, npz) + 1.1);
+    const [bdx, bdz] = atBearing(1.08, 4.95);
+    butterDish(joinery, bdx, bdz, topY, Math.atan2(bdx, bdz) + 0.5);
+  }
+
+  const roomGeo = room.build();
+  if (roomGeo) g.add(mesh(roomGeo, roomMat(m), { cast: false, receive: true }));
+  const joineryGeo = joinery.build();
+  if (joineryGeo) g.add(mesh(joineryGeo, joineryMat(m), { cast: true, receive: true }));
+  const paneGeo = panes.build();
+  if (paneGeo) g.add(mesh(paneGeo, daylightMat(m), { cast: false, receive: false }));
+  const glassGeo = glass.build();
+  if (glassGeo) g.add(mesh(glassGeo, tableGlassMat(m), { cast: false, receive: false }));
+
   return g;
 }
 
@@ -651,7 +1067,6 @@ export const breakfastTheme: ThemeDef = {
   ],
   hero: [7, 0, 3, 4, 2, 1],
   plate: breakfastPlate,
-  // TODO(environment): replaced by the per-theme environment builder.
-  // scenery: breakfastScenery,
+  environment: breakfastEnvironment,
   ambience: 'breakfast',
 };

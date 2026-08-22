@@ -804,9 +804,9 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
 const COUNTER_HALF_W = 6.4;
 const COUNTER_HALF_D = 5.8;
 /** The shelf wall — well outside the camera radius, so never in front. */
-const SHELF_R = 14.6;
+const SHELF_R = 12.9;
 /** Bunting hangs outside the camera radius too, or it crosses the tower. */
-const BUNTING_R = 13.0;
+const BUNTING_R = 11.9;
 /** The arc directly behind the tower in the play camera's view. */
 const BACK_ARC = Math.PI * 1.25;
 
@@ -817,28 +817,28 @@ const JAR_CANDY = [0xff7fb2, 0x8fe3e3, 0xffdf8f, 0xcbbaff, 0xffe9f2] as const;
 /** Soft pink-and-lilac marble: a milky base with lazy, low-contrast veins. */
 function paintMarble(c: CanvasRenderingContext2D, size: number): void {
   fillGradient(c, size, [
-    [0, '#FFF8FC'],
-    [0.55, '#FDEDF7'],
-    [1, '#F4E6FB'],
+    [0, '#DEACCB'],
+    [0.5, '#D6A0C2'],
+    [1, '#BF94CE'],
   ]);
   const rng = new Rng(0x3a17);
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 18; i++) {
     const pts: Array<[number, number]> = [];
     let yy = rng.next() * size;
-    for (let x = -0.05; x <= 1.06; x += 0.1) {
-      yy += rng.signed() * size * 0.055;
+    for (let x = -0.05; x <= 1.06; x += 0.09) {
+      yy += rng.signed() * size * 0.06;
       pts.push([x * size, yy]);
     }
     softStroke(
       c,
       pts,
-      size * rng.range(0.004, 0.012),
-      rng.bool(0.6) ? '#DCCBF3' : '#F8CDE4',
-      0.45,
+      size * rng.range(0.005, 0.016),
+      rng.bool(0.55) ? '#A487C9' : '#FBE6F2',
+      0.8,
       5,
     );
   }
-  noiseWash(c, size, 6, 0.07, 21, '#D8C6EA', '#FFFFFF');
+  noiseWash(c, size, 6, 0.14, 21, '#B49CCE', '#FFFFFF');
 }
 
 /** Confectioner's stripes — the paper bag and the window valance. */
@@ -966,7 +966,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         segments: envSeg(q, 3, 2, 2),
         top: lipTop - 0.19,
       }),
-      0xc6b2f0,
+      0xb49be0,
     ),
   );
 
@@ -986,84 +986,121 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     if (hem) lacquer.push(tintGeometry(hem, 0xf7ecff));
   }
 
-  // --- jars on the counter -----------------------------------------------
-  // Everything here stays outside r = 3.3 so a sliding layer never clips it,
-  // and under 1.2 tall so it never climbs in front of the tower.
+  // --- props on the counter ----------------------------------------------
+  // Placement is deliberate, not random. The frame is only ~22 degrees wide,
+  // so at 4 units out only the arc within ~35 degrees of BACK_ARC is on
+  // screen at all, and the tower itself hides the middle ~15 of that. The two
+  // slots either side of the tower therefore get the best props; everything
+  // else is spread around for the home screen's turntable.
   const jarSeg = envSeg(q, 16, 13, 10);
-  const jarCount = lo ? 3 : q === 'medium' ? 4 : 5;
-  const jarSlots = ringSlots(rng, jarCount, 3.5, 4.7, {
-    startAngle: BACK_ARC - TAU / jarCount / 2 + 0.55,
-    jitter: 0.5,
-  });
-  for (let i = 0; i < jarSlots.length; i++) {
-    const slot = jarSlots[i];
-    const h = rng.range(0.78, 1.14);
-    const r = h * rng.range(0.32, 0.4);
-    const body = jarBody(h, r, jarSeg);
+  const propRng = rng;
+
+  /** A glass sweet jar with a knobbed lid and a heap of sweets inside. */
+  const sweetJar = (arc: number, r: number, h: number, tint: number, seed: number): void => {
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const rr = h * propRng.range(0.33, 0.4);
+    const body = jarBody(h, rr, jarSeg);
     if (body) {
-      body.translate(slot.x, top, slot.z);
+      body.translate(x, top, z);
       glass.push(body);
     }
-    const fill = jarFill(r * 0.86, h * rng.range(0.5, 0.78), jarSeg, i * 7 + 3, q === 'high');
+    const fill = jarFill(rr * 0.86, h * propRng.range(0.5, 0.78), jarSeg, seed, q === 'high');
     if (fill) {
-      fill.translate(slot.x, top + h * 0.05, slot.z);
-      sweets.push(tintGeometry(fill, JAR_CANDY[i % JAR_CANDY.length]));
+      fill.translate(x, top + h * 0.05, z);
+      sweets.push(tintGeometry(fill, tint));
     }
-    const lid = jarLid(r * 0.98, r * 1.2, jarSeg);
+    const lid = jarLid(rr * 0.98, rr * 1.2, jarSeg);
     if (lid) {
-      lid.translate(slot.x, top + h * 0.965, slot.z);
-      lacquer.push(tintGeometry(lid, i % 2 === 0 ? 0xffd3e8 : 0xdccfff));
+      lid.translate(x, top + h * 0.965, z);
+      lacquer.push(tintGeometry(lid, seed % 2 === 0 ? 0xffd3e8 : 0xdccfff));
     }
+  };
+
+  // squat jars, then the tall apothecary columns at the back of the counter
+  // The last entries sit in the NEAR arc, between the camera and the tower:
+  // they land low in the frame and stop the foreground reading as bare floor.
+  const jarPlan: Array<[number, number, number]> = lo
+    ? [
+        [-1.35, 4.4, 1.05],
+        [2.95, 3.8, 0.92],
+      ]
+    : q === 'medium'
+      ? [
+          [1.3, 4.1, 0.95],
+          [-1.35, 4.4, 1.05],
+          [2.95, 3.8, 0.92],
+        ]
+      : [
+          [1.3, 4.1, 0.95],
+          [-1.35, 4.4, 1.05],
+          [2.72, 4.4, 0.88],
+          [3.02, 3.7, 1.06],
+          [-2.86, 3.9, 0.82],
+        ];
+  for (let i = 0; i < jarPlan.length; i++) {
+    const [arc, r, h] = jarPlan[i];
+    sweetJar(arc, r, h, JAR_CANDY[i % JAR_CANDY.length], i * 7 + 3);
   }
 
-  // Tall apothecary jars stand at the back and act as columns — the tasteful
-  // version of the oversized lollipop.
-  const tallCount = lo ? 2 : 3;
-  const tallSlots = ringSlots(rng, tallCount, 5.0, 5.5, {
-    startAngle: BACK_ARC - TAU / tallCount / 2 - 0.62,
-    jitter: 0.35,
-  });
-  for (let i = 0; i < tallSlots.length; i++) {
-    const slot = tallSlots[i];
-    const h = rng.range(1.7, 2.2);
-    const r = rng.range(0.4, 0.5);
-    const body = jarBody(h, r, jarSeg);
+  const tallPlan: Array<[number, number]> = lo
+    ? [[0.47, 4.7]]
+    : q === 'medium'
+      ? [
+          [0.47, 4.7],
+          [-2.1, 5.2],
+        ]
+      : [
+          [0.47, 4.7],
+          [-2.1, 5.2],
+          [-1.75, 5.35],
+        ];
+  for (let i = 0; i < tallPlan.length; i++) {
+    const [arc, r] = tallPlan[i];
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const h = rng.range(1.75, 2.2);
+    const rr = rng.range(0.42, 0.52);
+    const body = jarBody(h, rr, jarSeg);
     if (body) {
-      body.translate(slot.x, top, slot.z);
+      body.translate(x, top, z);
       glass.push(body);
     }
-    const fill = jarFill(r * 0.87, h * rng.range(0.4, 0.62), jarSeg, i * 13 + 5, q === 'high');
+    const fill = jarFill(rr * 0.87, h * rng.range(0.4, 0.62), jarSeg, i * 13 + 5, q === 'high');
     if (fill) {
-      fill.translate(slot.x, top + h * 0.04, slot.z);
+      fill.translate(x, top + h * 0.04, z);
       sweets.push(tintGeometry(fill, JAR_CANDY[(i + 2) % JAR_CANDY.length]));
     }
-    const lid = jarLid(r * 0.99, r * 1.05, jarSeg);
+    const lid = jarLid(rr * 0.99, rr * 1.05, jarSeg);
     if (lid) {
-      lid.translate(slot.x, top + h * 0.965, slot.z);
+      lid.translate(x, top + h * 0.965, z);
       lacquer.push(tintGeometry(lid, 0xe7d8ff));
     }
   }
 
   // --- cake stand under a cloche -----------------------------------------
+  // The best prop gets the best slot: just left of the tower in the play view.
   {
-    const a = BACK_ARC + rng.range(-0.5, -0.2);
-    const r = rng.range(3.7, 4.4);
+    const a = BACK_ARC - 0.5;
+    const r = 4.2;
     const x = Math.sin(a) * r;
     const z = Math.cos(a) * r;
     const seg = envSeg(q, 18, 14, 10);
     const stand = lathe(
       [
         [0, 0],
-        [0.4, 0],
-        [0.42, 0.035],
-        [0.28, 0.08],
-        [0.09, 0.12],
-        [0.09, 0.34],
-        [0.3, 0.4],
-        [0.6, 0.44],
-        [0.62, 0.48],
-        [0.56, 0.5],
-        [0, 0.5],
+        [0.46, 0],
+        [0.48, 0.04],
+        [0.32, 0.09],
+        [0.1, 0.13],
+        [0.1, 0.38],
+        [0.34, 0.45],
+        [0.68, 0.5],
+        [0.7, 0.55],
+        [0.64, 0.57],
+        [0, 0.57],
       ],
       seg,
     );
@@ -1073,8 +1110,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
     const tiers = lo ? 2 : 4;
     for (let i = 0; i < tiers; i++) {
-      const mr = 0.3 - i * 0.045;
-      const m = puck(mr * 2, 0.11, mr * 2, {
+      const mr = 0.34 - i * 0.05;
+      const m = puck(mr * 2, 0.12, mr * 2, {
         domed: 0.3,
         wobble: 0.05,
         radial: envSeg(q, 14, 11, 8),
@@ -1082,27 +1119,27 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         seed: i + 3,
         square: 0,
       });
-      m.translate(x + rng.signed() * 0.04, top + 0.5 + i * 0.12, z + rng.signed() * 0.04);
+      m.translate(x + rng.signed() * 0.04, top + 0.57 + i * 0.13, z + rng.signed() * 0.04);
       sweets.push(tintGeometry(m, PASTEL_SWEETS[i % PASTEL_SWEETS.length]));
     }
     if (rich) {
       const dome = lathe(
         [
           [0, 0],
-          [0.56, 0],
-          [0.58, 0.05],
-          [0.56, 0.4],
-          [0.44, 0.6],
-          [0.24, 0.7],
-          [0.07, 0.74],
-          [0.09, 0.82],
-          [0.05, 0.88],
-          [0, 0.88],
+          [0.62, 0],
+          [0.64, 0.055],
+          [0.62, 0.45],
+          [0.49, 0.67],
+          [0.27, 0.78],
+          [0.08, 0.82],
+          [0.1, 0.91],
+          [0.055, 0.98],
+          [0, 0.98],
         ],
         seg,
       );
       if (dome) {
-        dome.translate(x, top + 0.47, z);
+        dome.translate(x, top + 0.54, z);
         glass.push(dome);
       }
     }
@@ -1110,48 +1147,48 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
 
   // --- candy-striped paper bag, tipped over and spilling ------------------
   if (rich) {
-    const a = BACK_ARC + rng.range(0.25, 0.6);
-    const r = rng.range(3.4, 4.1);
+    const a = BACK_ARC + 2.05;
+    const r = 3.9;
     const x = Math.sin(a) * r;
     const z = Math.cos(a) * r;
-    const bag = roundedBox(0.42, 0.58, 0.3, 0.05, 2);
+    const bag = roundedBox(0.44, 0.62, 0.32, 0.05, 2);
     bag.rotateZ(0.14);
     bag.rotateY(-a);
     bag.translate(x, top, z);
     paper.push(bag);
-    const cuff = roundedBox(0.46, 0.11, 0.33, 0.04, 2);
+    const cuff = roundedBox(0.48, 0.12, 0.35, 0.04, 2);
     cuff.rotateZ(0.14);
     cuff.rotateY(-a);
-    cuff.translate(x + 0.08, top + 0.53, z);
+    cuff.translate(x + 0.09, top + 0.57, z);
     paper.push(cuff);
 
     const spill = envCount(q, 9, 3);
     for (let i = 0; i < spill; i++) {
       const sa = a + rng.signed() * 0.42;
-      const sr = r - rng.range(0.3, 0.85);
-      const bead = new THREE.SphereGeometry(rng.range(0.045, 0.075), 7, 5);
+      const sr = Math.max(3.45, r - rng.range(0.3, 0.85));
+      const bead = new THREE.SphereGeometry(rng.range(0.05, 0.08), 7, 5);
       bead.scale(1, 0.7, 1);
-      bead.translate(Math.sin(sa) * sr, top + 0.03, Math.cos(sa) * sr);
+      bead.translate(Math.sin(sa) * sr, top + 0.032, Math.cos(sa) * sr);
       sweets.push(tintGeometry(bead, PASTEL_SWEETS[i % PASTEL_SWEETS.length]));
     }
   }
 
   // --- ribbon spool -------------------------------------------------------
   if (q === 'high') {
-    const a = BACK_ARC + rng.range(-1.1, -0.75);
-    const r = rng.range(3.5, 4.4);
+    const a = BACK_ARC + 2.45;
+    const r = 3.55;
     const x = Math.sin(a) * r;
     const z = Math.cos(a) * r;
     const spool = lathe(
       [
         [0, 0],
-        [0.19, 0],
-        [0.19, 0.035],
-        [0.11, 0.05],
-        [0.11, 0.2],
-        [0.19, 0.215],
-        [0.19, 0.25],
-        [0, 0.25],
+        [0.21, 0],
+        [0.21, 0.04],
+        [0.12, 0.055],
+        [0.12, 0.22],
+        [0.21, 0.235],
+        [0.21, 0.275],
+        [0, 0.275],
       ],
       12,
     );
@@ -1159,9 +1196,22 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       spool.translate(x, top, z);
       lacquer.push(tintGeometry(spool, 0xfff0f7));
     }
-    const wound = new THREE.CylinderGeometry(0.158, 0.158, 0.15, 14, 1);
-    wound.translate(x, top + 0.125, z);
+    const wound = new THREE.CylinderGeometry(0.172, 0.172, 0.165, 14, 1);
+    wound.translate(x, top + 0.138, z);
     paper.push(wound);
+  }
+  // A few sweets loose on the counter in the near arc — the counter is huge
+  // and the bottom of the frame is otherwise bare marble.
+  {
+    const loose = envCount(q, 14, 6);
+    for (let i = 0; i < loose; i++) {
+      const sa = BACK_ARC + Math.PI + rng.signed() * 0.55;
+      const sr = rng.range(3.45, 4.7);
+      const bead = new THREE.SphereGeometry(rng.range(0.05, 0.085), 7, 5);
+      bead.scale(1, 0.68, 1);
+      bead.translate(Math.sin(sa) * sr, top + 0.03, Math.cos(sa) * sr);
+      sweets.push(tintGeometry(bead, PASTEL_SWEETS[(i * 3) % PASTEL_SWEETS.length]));
+    }
   }
 
   // --- the shelf wall -----------------------------------------------------
@@ -1169,17 +1219,15 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // to exist for the room to feel like it has one.
   const wallSeg = envSeg(q, 40, 30, 22);
   const wallLow = top - 6.5;
-  const wallHigh = top + 2.2;
+  const wallHigh = top + 2.45;
   const wall = new THREE.CylinderGeometry(SHELF_R, SHELF_R, wallHigh - wallLow, wallSeg, 1, true);
   wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
-  far.push(tintGradientY(wall, 0xcbb8e8, 0xfdeaf6, top - 3.6, wallHigh));
+  far.push(tintGradientY(wall, 0xb9a4dc, 0xfbe6f4, top - 3.4, wallHigh));
 
   const shelfInner = SHELF_R - 0.9;
   const shelfHeights = lo
-    ? [top - 1.9, top + 0.6]
-    : q === 'medium'
-      ? [top - 3.1, top - 1.6, top - 0.1, top + 1.4]
-      : [top - 3.2, top - 1.95, top - 0.7, top + 0.55, top + 1.75];
+    ? [top - 1.6, top + 0.5]
+    : [top - 2.2, top - 0.65, top + 0.9];
   for (let s = 0; s < shelfHeights.length; s++) {
     const y = shelfHeights[s];
     const board = new THREE.RingGeometry(shelfInner, SHELF_R, wallSeg, 1);
@@ -1190,18 +1238,18 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     edge.translate(0, y, 0);
     far.push(tintGeometry(edge, 0xecd9ee));
 
-    const perShelf = lo ? 5 : q === 'medium' ? 8 : 12;
-    const slots = ringSlots(rng, perShelf, SHELF_R - 0.55, SHELF_R - 0.32, { jitter: 0.8 });
+    const perShelf = lo ? 22 : q === 'medium' ? 30 : 40;
+    const slots = ringSlots(rng, perShelf, SHELF_R - 0.58, SHELF_R - 0.34, { jitter: 0.8 });
     for (let i = 0; i < slots.length; i++) {
       const slot = slots[i];
-      const jh = rng.range(0.42, 0.8);
-      const jr = rng.range(0.15, 0.24);
-      const jar = new THREE.CylinderGeometry(jr, jr * 0.92, jh, 8, 1, false);
+      const jh = rng.range(0.5, 1.05);
+      const jr = rng.range(0.19, 0.34);
+      const jar = new THREE.CylinderGeometry(jr, jr * 0.92, jh, 6, 1, false);
       jar.translate(slot.x, y + 0.06 + jh * 0.5, slot.z);
       far.push(
         tintGeometry(jar, rng.bool(0.42) ? 0xffeaf4 : JAR_CANDY[(i + s) % JAR_CANDY.length]),
       );
-      const knob = new THREE.SphereGeometry(jr * 0.58, 5, 3);
+      const knob = new THREE.SphereGeometry(jr * 0.62, 5, 3);
       knob.translate(slot.x, y + 0.06 + jh, slot.z);
       far.push(tintGeometry(knob, 0xfff3fa));
     }
@@ -1261,7 +1309,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     color: 0xffffff,
     map: ctx.materials.texture('candy.env.marble.albedo', paintMarble, {
       size: 256,
-      repeat: [0.13, 0.13],
+      repeat: [0.22, 0.22],
     }),
     roughness: 0.1,
     metalness: 0,
@@ -1447,7 +1495,7 @@ export const candyTheme: ThemeDef = {
     fog: 0xe7d6ff,
     fogDensity: 0.013,
     key: 0xfff6fb,
-    keyIntensity: 2.6,
+    keyIntensity: 2.15,
     fill: 0x9ad8ff,
     fillIntensity: 0.6,
     rim: 0xffc2e4,
@@ -1455,8 +1503,12 @@ export const candyTheme: ThemeDef = {
     ground: 0x8e7ce0,
     accent: 0xff5fa2,
     accentSoft: 0x7be0e0,
-    bloomStrength: 0.62,
-    exposure: 1.12,
+    // Candy Stack is the only high-key palette in the game: near-white pastels
+    // lit by a 2.6 key. Grading it like a mid-key scene blew the counter out to
+    // white, so it takes the lowest exposure and bloom of the six, not the
+    // highest.
+    bloomStrength: 0.38,
+    exposure: 0.98,
     vignette: 0.32,
   },
   foods,

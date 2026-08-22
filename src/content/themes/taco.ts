@@ -7,16 +7,31 @@
  * read as the same layer in a different colour.
  */
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import { Rng } from '../../core/rng';
-import { TAU, clamp } from '../../core/math';
-import { foldedShell, mergeAll, mesh, pour, puck, roughen, tintGeometry } from '../kit';
+import { TAU, clamp, clamp01 } from '../../core/math';
+import {
+  fbm2,
+  foldedShell,
+  mergeAll,
+  mesh,
+  pour,
+  puck,
+  roughen,
+  roundedBox,
+  tintGeometry,
+} from '../kit';
 import {
   areaRatio,
+  catenary,
+  envSeg,
   fillFlat,
   fillGradient,
   finalize,
+  flagLine,
+  lathe,
   longAxis,
+  mergeEnv,
   noiseWash,
   propCount,
   propScale,
@@ -30,6 +45,8 @@ import {
   softStroke,
   speckle,
   stripes,
+  tableSlab,
+  tintGradientY,
   topSampler,
   weave,
 } from './shared-fresh';
@@ -122,18 +139,41 @@ function paintBasket(c: CanvasRenderingContext2D, size: number): void {
   noiseWash(c, size, 4, 0.18, 71, '#5E3C18', '#F0C88A');
 }
 
+/**
+ * Woven serape bands. Vertical in texture space on purpose: the runner's U
+ * axis is its length, so bands that vary along U end up running ACROSS the
+ * cloth the way a real serape's do.
+ */
 function paintSerape(c: CanvasRenderingContext2D, size: number): void {
-  stripes(c, size, [
-    { span: 6, color: '#F2542D' },
-    { span: 2, color: '#FFE3B0' },
-    { span: 4, color: '#4CB944' },
-    { span: 2, color: '#FFFFFF' },
-    { span: 5, color: '#5E2751' },
-    { span: 2, color: '#FFB03A' },
-    { span: 3, color: '#F2542D' },
-    { span: 2, color: '#FFE3B0' },
-  ]);
-  noiseWash(c, size, 3, 0.16, 83, '#3A1428', '#FFF0D2');
+  stripes(
+    c,
+    size,
+    [
+      { span: 6, color: '#F2542D' },
+      { span: 2, color: '#FFE3B0' },
+      { span: 4, color: '#4CB944' },
+      { span: 2, color: '#FFFFFF' },
+      { span: 5, color: '#5E2751' },
+      { span: 2, color: '#FFB03A' },
+      { span: 3, color: '#F2542D' },
+      { span: 2, color: '#FFE3B0' },
+    ],
+    true,
+  );
+  noiseWash(c, size, 3, 0.18, 83, '#3A1428', '#FFF0D2');
+  // a suggestion of weft threads so the cloth is not a printed ribbon
+  c.save();
+  c.globalAlpha = 0.16;
+  c.strokeStyle = '#2A1220';
+  c.lineWidth = Math.max(1, size * 0.004);
+  for (let i = 0; i < 44; i++) {
+    const y = (i / 44) * size;
+    c.beginPath();
+    c.moveTo(0, y);
+    c.lineTo(size, y);
+    c.stroke();
+  }
+  c.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -772,55 +812,689 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
   return g;
 }
 
-function buildScenery(ctx: FoodBuildCtx): THREE.Object3D {
-  const g = new THREE.Group();
-  const w = Math.max(ctx.width, 1);
-  const groundY = -PLATE_T;
+// ---------------------------------------------------------------------------
+// environment — a string-lit patio at dusk
+// ---------------------------------------------------------------------------
+//
+// Warm dusk turning to night: worn turquoise paint on a wooden table, a serape
+// runner under the plate, terracotta in the near field, and papel picado and
+// festoon bulbs strung against the last of the light.
+//
+// The camera dictates the layout. It sits ~10 units out from the tower axis at
+// a fixed 0.5 rad pitch, which means:
+//
+//   * the horizon is off the top of frame, so the table has to reach past ~5.4
+//     units in every direction or the bottom of the screen falls off its edge;
+//   * the table's far edge hides the foot of anything standing further out and
+//     lower down, which is how the pots and the wall stand on a patio floor
+//     that is never modelled;
+//   * anything hanging BELOW eye level has to be strung outside the camera's
+//     own radius, or its near half swings straight across the tower. Every
+//     string here is a chord of a ring at 11.9-12.6 units for that reason —
+//     and because a chord of a ring is always broadside to a camera orbiting
+//     the middle, which is what makes the flags read from every angle.
 
-  const serape = ctx.materials.standard('taco.serape', {
+/** Half-extents of the table. Both must clear the bottom of frame. */
+const TABLE_HALF_W = 6.4;
+const TABLE_HALF_D = 5.8;
+/** The serape is what the plate actually rests on, so the wood sits under it. */
+const RUNNER_T = 0.04;
+/** Patio floor. Far enough below the table top that its edge hides the join. */
+const PATIO_DROP = 2.7;
+const WALL_R = 12.9;
+const PAPEL_R = 12.4;
+const FESTOON_R = 11.9;
+/** The arc directly behind the tower in the play camera's view. */
+const BACK_ARC = Math.PI * 1.25;
+
+const PAPEL_COLORS = [0xf2542d, 0xffb03a, 0x4cb944, 0xff7bb0, 0x7ad7f0, 0xfff0c9] as const;
+const CLAY_TINTS = [0xb0573a, 0xc06b45, 0x9c4a33, 0xc98055] as const;
+
+/**
+ * Turquoise patio paint worn back to the grain. Painting the wood FIRST and
+ * then letting the paint fail over it is what sells "worn" — a turquoise base
+ * with brown speckles on top just reads as dirt.
+ */
+function paintPatioWood(c: CanvasRenderingContext2D, size: number): void {
+  fillFlat(c, size, '#5E3A26');
+  const rng = new Rng(0x7a11);
+  for (let i = 0; i < 30; i++) {
+    const y = rng.next() * size;
+    const pts: Array<[number, number]> = [];
+    let yy = y;
+    for (let x = -0.05; x <= 1.06; x += 0.12) {
+      yy += rng.signed() * size * 0.012;
+      pts.push([x * size, yy]);
+    }
+    softStroke(c, pts, size * rng.range(0.002, 0.007), rng.bool(0.5) ? '#40241A' : '#7E5233', 0.7, 4);
+  }
+  // The paint goes on as overlapping soft blobs rather than a flat fill with
+  // holes punched in it: coverage lands around 90% and the gaps have feathered
+  // edges, which is what worn paint actually looks like. A hard cell grid was
+  // tried first and read as camouflage.
+  const blobs = 96;
+  for (let i = 0; i < blobs; i++) {
+    const cx = rng.next() * size;
+    const cy = rng.next() * size;
+    const r = size * rng.range(0.07, 0.2);
+    const grad = c.createRadialGradient(cx, cy, 0, cx, cy, r);
+    const teal = rng.bool(0.5) ? '42,110,104' : '36,96,92';
+    grad.addColorStop(0, `rgba(${teal},0.95)`);
+    grad.addColorStop(0.6, `rgba(${teal},0.8)`);
+    grad.addColorStop(1, `rgba(${teal},0)`);
+    c.fillStyle = grad;
+    c.beginPath();
+    c.arc(cx, cy, r, 0, TAU);
+    c.fill();
+  }
+  // brush drag marks in a lighter mix
+  c.save();
+  c.globalAlpha = 0.35;
+  for (let i = 0; i < 24; i++) {
+    const y = rng.next() * size;
+    softStroke(
+      c,
+      [
+        [rng.next() * size * 0.4, y],
+        [size * rng.range(0.5, 1.05), y + rng.signed() * size * 0.02],
+      ],
+      size * rng.range(0.004, 0.012),
+      '#78BEB2',
+      0.5,
+      3,
+    );
+  }
+  c.restore();
+
+  // plank seams, cut through the paint
+  c.save();
+  c.strokeStyle = 'rgba(30,16,10,0.7)';
+  c.lineWidth = Math.max(1.5, size * 0.012);
+  for (let i = 0; i < 4; i++) {
+    c.beginPath();
+    c.moveTo(0, (i / 4) * size);
+    c.lineTo(size, (i / 4) * size);
+    c.stroke();
+  }
+  c.strokeStyle = 'rgba(160,205,196,0.35)';
+  c.lineWidth = Math.max(1, size * 0.005);
+  for (let i = 0; i < 4; i++) {
+    c.beginPath();
+    c.moveTo(0, (i / 4) * size + size * 0.011);
+    c.lineTo(size, (i / 4) * size + size * 0.011);
+    c.stroke();
+  }
+  c.restore();
+  noiseWash(c, size, 6, 0.1, 19, '#1E4A46', '#7FC0B5');
+}
+
+/** Sun-bleached stucco: warm rose plaster, mottled and chalky. */
+function paintStucco(c: CanvasRenderingContext2D, size: number): void {
+  fillFlat(c, size, '#FFFFFF');
+  noiseWash(c, size, 4, 0.26, 63, '#C6A090', '#FFFFFF');
+  speckle(c, size, 300, ['#EFDACE', '#CBA795'], 0.002, 0.012, 64, 0.35);
+}
+
+function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
+  const g = new THREE.Group();
+  g.name = 'taco.patio';
+
+  const top = Number.isFinite(ctx.tableTopY) ? ctx.tableTopY : -0.18;
+  const floor = top - PATIO_DROP;
+  const q = ctx.quality;
+  const rng = ctx.rng;
+  const rich = q !== 'low';
+  const lo = q === 'low';
+
+  const wood: Array<THREE.BufferGeometry | null> = [];
+  const cloth: Array<THREE.BufferGeometry | null> = [];
+  const clay: Array<THREE.BufferGeometry | null> = [];
+  const food: Array<THREE.BufferGeometry | null> = [];
+  const glass: Array<THREE.BufferGeometry | null> = [];
+  const plant: Array<THREE.BufferGeometry | null> = [];
+  const stucco: Array<THREE.BufferGeometry | null> = [];
+  const papel: Array<THREE.BufferGeometry | null> = [];
+  const bulbs: Array<THREE.BufferGeometry | null> = [];
+  // The low tier has a draw-call budget of about six, so the glossy salsa and
+  // the flat-shaded plants ride along in the matte clay pass there. Both keep
+  // their colour — only the finish is lost, and at that tier it never reads.
+  const foodOut = lo ? clay : food;
+  const plantOut = lo ? clay : plant;
+
+  // --- the table ----------------------------------------------------------
+  // The serape is what the plate actually sits on, so the wood is dropped by
+  // exactly the cloth's thickness and the CLOTH's top face lands on tableTopY.
+  const woodTop = top - RUNNER_T;
+  wood.push(
+    tableSlab(TABLE_HALF_W * 2, TABLE_HALF_D * 2, 0.42, {
+      radius: 0.6,
+      segments: envSeg(q, 3, 2, 2),
+      top: woodTop,
+    }),
+  );
+  wood.push(
+    tableSlab(TABLE_HALF_W * 2 - 0.9, TABLE_HALF_D * 2 - 0.9, 0.42, {
+      radius: 0.45,
+      segments: envSeg(q, 3, 2, 2),
+      top: woodTop - 0.4,
+    }),
+  );
+  for (let i = 0; i < 4; i++) {
+    const sx = i % 2 === 0 ? 1 : -1;
+    const sz = i < 2 ? 1 : -1;
+    const legH = woodTop - 0.8 - floor;
+    if (legH > 0.1) {
+      const leg = roundedBox(0.44, legH, 0.44, 0.09, 2);
+      leg.translate((TABLE_HALF_W - 0.75) * sx, floor + legH / 2, (TABLE_HALF_D - 0.75) * sz);
+      wood.push(leg);
+    }
+  }
+
+  // --- serape runner ------------------------------------------------------
+  {
+    const len = 15.4;
+    const wide = 2.45;
+    const segX = envSeg(q, 40, 28, 18);
+    const runner = new THREE.BoxGeometry(len, RUNNER_T, wide, segX, 1, envSeg(q, 6, 4, 3));
+    const pos = runner.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      let y = pos.getY(i);
+      const over = Math.abs(x) - (TABLE_HALF_W - 0.15);
+      // the ends fall off the table and hang
+      if (over > 0) y -= Math.pow(over / 1.5, 1.6) * 1.5;
+      // a slack ripple, but only outside the plate's footprint
+      const away = clamp01((Math.hypot(x, z) - 2.4) / 1.6);
+      y -= Math.abs(fbm2(x * 0.9 + 3, z * 0.9, 2)) * 0.05 * away;
+      pos.setXYZ(i, x, y, z);
+    }
+    pos.needsUpdate = true;
+    runner.computeVertexNormals();
+    runner.rotateY(0.38);
+    runner.computeBoundingBox();
+    const bb = runner.boundingBox;
+    // Guarantee the cloth's highest point is exactly the plane the plate is on.
+    if (bb) runner.translate(0, top - bb.max.y, 0);
+    cloth.push(runner);
+  }
+
+  // --- props on the table -------------------------------------------------
+  // The frame is only ~22 degrees wide, so the two slots either side of the
+  // tower are the only ones on screen while playing; the rest are placed for
+  // the home screen's turntable.
+  const seg = envSeg(q, 16, 13, 9);
+
+  /** Terracotta salsa bowl with a pool of pico in it. */
+  const salsaBowl = (arc: number, r: number): void => {
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const bowl = lathe(
+      [
+        [0, 0],
+        [0.17, 0],
+        [0.3, 0.06],
+        [0.4, 0.2],
+        [0.44, 0.34],
+        [0.45, 0.38],
+        [0.4, 0.38],
+        [0.39, 0.34],
+        [0.35, 0.2],
+        [0.26, 0.08],
+        [0, 0.06],
+      ],
+      seg,
+    );
+    if (bowl) {
+      bowl.translate(x, top, z);
+      clay.push(tintGeometry(bowl, CLAY_TINTS[0]));
+    }
+    const salsa = lathe(
+      [
+        [0, 0],
+        [0.34, 0],
+        [0.36, 0.025],
+        [0.3, 0.035],
+        [0, 0.045],
+      ],
+      seg,
+    );
+    if (salsa) {
+      salsa.translate(x, top + 0.25, z);
+      foodOut.push(tintGeometry(salsa, 0xb3271b));
+    }
+    if (rich) {
+      for (let i = 0; i < 7; i++) {
+        const d = new THREE.BoxGeometry(0.05, 0.04, 0.05);
+        d.rotateY(rng.range(0, TAU));
+        d.translate(
+          x + rng.signed() * 0.26,
+          top + 0.28,
+          z + rng.signed() * 0.26,
+        );
+        foodOut.push(tintGeometry(d, i % 3 === 0 ? 0x4cb944 : i % 3 === 1 ? 0xf2f0d8 : 0xd8382a));
+      }
+    }
+  };
+
+  /** A shallow dish with lime wedges, cut faces up. */
+  const limeDish = (arc: number, r: number): void => {
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const dish = lathe(
+      [
+        [0, 0],
+        [0.2, 0],
+        [0.32, 0.04],
+        [0.4, 0.12],
+        [0.42, 0.15],
+        [0.37, 0.15],
+        [0.35, 0.12],
+        [0.28, 0.06],
+        [0, 0.04],
+      ],
+      seg,
+    );
+    if (dish) {
+      dish.translate(x, top, z);
+      clay.push(tintGeometry(dish, 0xd7c3a5));
+    }
+    const wedges = lo ? 1 : 2;
+    for (let w = 0; w < wedges; w++) {
+      const lr = 0.16;
+      const lt = 0.09;
+      const parts: Array<THREE.BufferGeometry | null> = [];
+      const rind = new THREE.CylinderGeometry(lr, lr, lt, envSeg(q, 14, 11, 8), 1, true, 0, Math.PI);
+      parts.push(tintGeometry(rind, 0x4f8f2a));
+      const flesh = new THREE.CylinderGeometry(
+        lr * 0.86,
+        lr * 0.86,
+        lt * 0.99,
+        envSeg(q, 14, 11, 8),
+        1,
+        false,
+        0,
+        Math.PI,
+      );
+      parts.push(tintGeometry(flesh, 0xd8e88a));
+      for (let sIdx = 0; sIdx < 4; sIdx++) {
+        const ang = ((sIdx + 0.5) / 4) * Math.PI;
+        const pith = new THREE.BoxGeometry(lr * 0.82, lt * 1.01, lr * 0.05);
+        pith.translate(lr * 0.41, 0, 0);
+        pith.rotateY(-ang);
+        parts.push(tintGeometry(pith, 0xf4f6dd));
+      }
+      const wedge = mergeEnv(parts);
+      if (wedge) {
+        wedge.rotateZ(0.1);
+        wedge.rotateY(a + w * 2.1 + 0.6);
+        wedge.translate(x + rng.signed() * 0.12, top + 0.13, z + rng.signed() * 0.12);
+        foodOut.push(wedge);
+      }
+    }
+  };
+
+  /** A cold bottle, beaded with condensation. */
+  const coldBottle = (arc: number, r: number): void => {
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const h = 1.05;
+    const body = lathe(
+      [
+        [0, 0],
+        [0.17, 0],
+        [0.185, h * 0.03],
+        [0.185, h * 0.48],
+        [0.175, h * 0.56],
+        [0.11, h * 0.68],
+        [0.08, h * 0.78],
+        [0.08, h * 0.95],
+        [0.095, h * 0.97],
+        [0.095, h],
+        [0, h],
+      ],
+      seg,
+    );
+    if (body) {
+      body.translate(x, top, z);
+      glass.push(body);
+    }
+    const cap = new THREE.CylinderGeometry(0.1, 0.1, 0.07, envSeg(q, 12, 10, 8), 1);
+    cap.translate(x, top + h + 0.02, z);
+    clay.push(tintGeometry(cap, 0xe0b23a));
+    if (q === 'high') {
+      for (let i = 0; i < 14; i++) {
+        const ba = rng.range(0, TAU);
+        const bead = new THREE.SphereGeometry(rng.range(0.012, 0.024), 5, 4);
+        bead.translate(
+          x + Math.sin(ba) * 0.19,
+          top + rng.range(0.05, h * 0.5),
+          z + Math.cos(ba) * 0.19,
+        );
+        glass.push(bead);
+      }
+    }
+  };
+
+  /** A fat clay jug with a strap handle. */
+  const clayJug = (arc: number, r: number): void => {
+    const a = BACK_ARC + arc;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const body = lathe(
+      [
+        [0, 0],
+        [0.2, 0],
+        [0.31, 0.09],
+        [0.38, 0.28],
+        [0.36, 0.48],
+        [0.25, 0.6],
+        [0.2, 0.68],
+        [0.23, 0.76],
+        [0.19, 0.79],
+        [0, 0.79],
+      ],
+      seg,
+    );
+    if (body) {
+      body.translate(x, top, z);
+      clay.push(tintGeometry(body, CLAY_TINTS[1]));
+    }
+    const handle = new THREE.TorusGeometry(0.17, 0.035, 4, envSeg(q, 12, 9, 6), Math.PI * 1.15);
+    handle.rotateZ(Math.PI * 0.5);
+    handle.rotateY(-a);
+    handle.translate(x + Math.sin(a + Math.PI / 2) * 0.3, top + 0.56, z + Math.cos(a + Math.PI / 2) * 0.3);
+    clay.push(tintGeometry(handle, CLAY_TINTS[1]));
+  };
+
+  salsaBowl(-0.52, 4.0);
+  coldBottle(0.5, 4.5);
+  if (rich) limeDish(-1.25, 3.9);
+  if (rich) clayJug(2.1, 4.3);
+  if (!lo) salsaBowl(2.95, 3.7);
+  if (q === 'high') limeDish(3.05, 4.5);
+  if (q === 'high') clayJug(-2.35, 4.6);
+
+  // Limes and a chilli rolled across the near edge of the table. The near arc
+  // lands low in the frame, which is otherwise bare cloth and paint.
+  {
+    const loose = lo ? 3 : q === 'medium' ? 5 : 7;
+    for (let i = 0; i < loose; i++) {
+      const a = BACK_ARC + Math.PI + rng.signed() * 0.6;
+      const r = rng.range(3.4, 4.8);
+      const x = Math.sin(a) * r;
+      const z = Math.cos(a) * r;
+      if (i % 3 === 2) {
+        const chilli = new THREE.CylinderGeometry(0.028, 0.075, 0.46, 6, 1);
+        chilli.rotateZ(Math.PI / 2);
+        chilli.rotateY(rng.range(0, TAU));
+        chilli.translate(x, top + 0.06, z);
+        foodOut.push(tintGeometry(chilli, rng.bool(0.5) ? 0xd8382a : 0x3f8f2f));
+      } else {
+        const lime = new THREE.SphereGeometry(0.15, envSeg(q, 10, 8, 6), envSeg(q, 8, 6, 5));
+        lime.scale(1, 0.86, 1.18);
+        lime.rotateY(rng.range(0, TAU));
+        lime.translate(x, top + 0.12, z);
+        foodOut.push(tintGeometry(lime, rng.bool(0.5) ? 0x62a52c : 0x7bb534));
+      }
+    }
+  }
+
+  // --- terracotta pots on the patio floor ---------------------------------
+  // The first two land either side of the tower in the play view; at 10 units
+  // out the frame is only about 20 degrees wide, so they have to be aimed.
+  const potArcs = lo
+    ? [-0.33, 0.34, 2.4]
+    : q === 'medium'
+      ? [-0.33, 0.34, 1.5, -1.6, 2.9]
+      : [-0.33, 0.34, 0.95, -1.0, 1.9, -2.0, 3.0];
+  const potSlots = potArcs.map((arc) => {
+    const yaw = BACK_ARC + arc + rng.signed() * 0.08;
+    const radius = rng.range(9.4, 11.4);
+    return { x: Math.sin(yaw) * radius, z: Math.cos(yaw) * radius, radius, yaw };
+  });
+  for (let i = 0; i < potSlots.length; i++) {
+    const slot = potSlots[i];
+    const scale = rng.range(1.5, 2.1);
+    const pot = lathe(
+      [
+        [0, 0],
+        [0.2, 0],
+        [0.26, 0.06],
+        [0.3, 0.42],
+        [0.34, 0.5],
+        [0.35, 0.56],
+        [0.3, 0.56],
+        [0.29, 0.5],
+        [0.25, 0.42],
+        [0.21, 0.06],
+        [0, 0.05],
+      ],
+      envSeg(q, 12, 10, 7),
+    );
+    if (pot) {
+      pot.scale(scale, scale, scale);
+      pot.translate(slot.x, floor, slot.z);
+      clay.push(tintGeometry(pot, CLAY_TINTS[i % CLAY_TINTS.length]));
+    }
+    const potTop = floor + 0.5 * scale;
+
+    if (i % 3 === 2) {
+      // prickly pear: a stack of flat paddles, unmistakable in silhouette
+      const pads = lo ? 2 : 4;
+      let px = slot.x;
+      let py = potTop + 0.35;
+      for (let p = 0; p < pads; p++) {
+        const pr = 0.62 - p * 0.09;
+        const pad = new THREE.SphereGeometry(pr, envSeg(q, 9, 7, 6), envSeg(q, 7, 6, 4));
+        pad.scale(1, 1.25, 0.3);
+        pad.rotateY(slot.yaw + 0.4);
+        pad.rotateX(rng.signed() * 0.2);
+        pad.rotateZ(rng.signed() * 0.55);
+        pad.translate(px, py, slot.z);
+        plantOut.push(tintGeometry(pad, p % 2 === 0 ? 0x4f8f3a : 0x5da046));
+        px += rng.signed() * 0.35;
+        py += pr * 1.5;
+      }
+    } else {
+      // agave: a rosette of stiff spears
+      const spears = lo ? 6 : q === 'medium' ? 8 : 11;
+      for (let sIdx = 0; sIdx < spears; sIdx++) {
+        const len = rng.range(1.2, 2.0);
+        const spear = new THREE.CylinderGeometry(0.012, 0.11, len, 4, 1);
+        spear.translate(0, len / 2, 0);
+        spear.rotateZ(rng.range(0.25, 0.95));
+        spear.rotateY((sIdx / spears) * TAU + rng.signed() * 0.2);
+        spear.translate(slot.x, potTop - 0.1, slot.z);
+        plantOut.push(tintGeometry(spear, sIdx % 3 === 0 ? 0x6fae5c : 0x53924a));
+      }
+    }
+  }
+
+  // --- stucco wall --------------------------------------------------------
+  const wallSeg = envSeg(q, 40, 30, 22);
+  const wallLow = floor - 3.5;
+  const wallHigh = top + 1.55;
+  const wall = new THREE.CylinderGeometry(WALL_R, WALL_R, wallHigh - wallLow, wallSeg, 3, true);
+  wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
+  // The map is a colourless plaster mottle; the hue and the dusk falloff come
+  // from vertex colour, so the wall darkens into the patio instead of tiling.
+  stucco.push(tintGradientY(wall, 0xc4826a, 0xf2c79f, floor + 0.2, wallHigh));
+  // a pale coping course along the top, so the wall ends on a line of light
+  const coping = new THREE.CylinderGeometry(WALL_R + 0.16, WALL_R + 0.16, 0.22, wallSeg, 1, true);
+  coping.translate(0, wallHigh - 0.11, 0);
+  stucco.push(tintGradientY(coping, 0xeab694, 0xfbd6b2, wallHigh - 0.22, wallHigh));
+  const capRing = new THREE.RingGeometry(WALL_R - 0.05, WALL_R + 0.17, wallSeg, 1);
+  capRing.rotateX(-Math.PI / 2);
+  capRing.translate(0, wallHigh, 0);
+  stucco.push(tintGeometry(capRing, 0xfbdcbb));
+
+  // --- papel picado and festoon lights ------------------------------------
+  // Two rings at different radii and heights, with the chords offset, so from
+  // any camera angle at least one line crosses the frame diagonally.
+  const postAt = (a: number, r: number, h: number): THREE.Vector3 => {
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const post = new THREE.CylinderGeometry(0.055, 0.075, h, 5, 1);
+    post.translate(x, wallHigh + h / 2, z);
+    papel.push(tintGeometry(post, 0x5a3a2c));
+    return new THREE.Vector3(x, wallHigh + h, z);
+  };
+
+  const papelLines = lo ? 3 : q === 'medium' ? 4 : 5;
+  const papelStep = TAU / papelLines;
+  for (let i = 0; i < papelLines; i++) {
+    const a0 = BACK_ARC - papelStep * 0.5 + i * papelStep;
+    const a1 = a0 + papelStep;
+    const pA = postAt(a0, PAPEL_R, rng.range(1.5, 1.85));
+    const pB = new THREE.Vector3(
+      Math.sin(a1) * PAPEL_R,
+      wallHigh + rng.range(1.5, 1.85),
+      Math.cos(a1) * PAPEL_R,
+    );
+    const line = flagLine(pA, pB, rng, {
+      colors: PAPEL_COLORS,
+      cordColor: 0x6a4a38,
+      sag: rng.range(0.75, 1.05),
+      cordRadius: 0.022,
+      flags: lo ? 13 : 22,
+      flagWidth: 0.62,
+      flagDrop: 0.72,
+      shape: 'papel',
+      twist: 0.22,
+      segments: lo ? 10 : 16,
+    });
+    if (line) papel.push(line);
+  }
+
+  const festoonLines = lo ? 4 : 6;
+  const festStep = TAU / festoonLines;
+  for (let i = 0; i < festoonLines; i++) {
+    const a0 = BACK_ARC + 0.5 + i * festStep;
+    const a1 = a0 + festStep * 0.9;
+    const yA = top + rng.range(3.0, 3.4);
+    const yB = top + rng.range(3.0, 3.4);
+    const pA = new THREE.Vector3(Math.sin(a0) * FESTOON_R, yA, Math.cos(a0) * FESTOON_R);
+    const pB = new THREE.Vector3(Math.sin(a1) * FESTOON_R, yB, Math.cos(a1) * FESTOON_R);
+    const path = catenary(pA, pB, rng.range(0.5, 0.75), lo ? 10 : 16);
+    const cord = ribbon(path, 0.02, { tubular: lo ? 10 : 16, radial: 3 });
+    if (cord) papel.push(tintGeometry(cord, 0x6a4a38));
+    const perLine = lo ? 6 : 8;
+    for (let b = 0; b < perLine; b++) {
+      const t = (b + 0.5) / perLine;
+      const p = path[Math.min(path.length - 1, Math.round(t * (path.length - 1)))];
+      const bulb = new THREE.SphereGeometry(0.135, envSeg(q, 7, 6, 5), envSeg(q, 5, 5, 4));
+      bulb.scale(1, 1.25, 1);
+      bulb.translate(p.x, p.y - 0.16, p.z);
+      bulbs.push(bulb);
+      const collar = new THREE.CylinderGeometry(0.04, 0.055, 0.06, 5, 1);
+      collar.translate(p.x, p.y - 0.05, p.z);
+      papel.push(tintGeometry(collar, 0x3d2a20));
+    }
+  }
+
+  // --- assemble: one mesh per material ------------------------------------
+  const woodMat = ctx.materials.standard('taco.env.wood', {
     color: 0xffffff,
-    map: ctx.materials.texture('taco.serape.albedo', paintSerape, { size: 256 }),
+    map: ctx.materials.texture('taco.env.wood.albedo', paintPatioWood, {
+      size: 256,
+      repeat: [0.3, 0.3],
+    }),
+    roughness: 0.66,
+    metalness: 0,
+  });
+  const clothMat = ctx.materials.standard('taco.env.serape', {
+    color: 0xffffff,
+    map: ctx.materials.texture('taco.env.serape.albedo', paintSerape, {
+      size: 256,
+      repeat: [7, 1],
+    }),
+    roughness: 0.94,
+    metalness: 0,
+  });
+  const clayMat = ctx.materials.standard('taco.env.clay', {
+    color: 0xffffff,
+    vertexColors: true,
     roughness: 0.92,
     metalness: 0,
   });
-  const limeMat = ctx.materials.physical('taco.lime', {
+  const foodMat = ctx.materials.physical('taco.env.food', {
     color: 0xffffff,
     vertexColors: true,
     roughness: 0.3,
     metalness: 0,
-    clearcoat: 0.5,
-    clearcoatRoughness: 0.2,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.18,
+  });
+  // The low tier zeroes transmission and falls back to opacity, so the bottle
+  // glass has to carry its colour in the base tint.
+  const glassMat = ctx.materials.physical('taco.env.glass', {
+    color: 0x6fae8a,
+    roughness: 0.08,
+    metalness: 0,
+    transmission: 0.9,
+    thickness: 0.28,
+    ior: 1.48,
+    clearcoat: 1,
+    clearcoatRoughness: 0.05,
+  });
+  const plantMat = ctx.materials.standard('taco.env.plant', {
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.74,
+    metalness: 0,
+    flatShading: true,
+  });
+  const stuccoMat = ctx.materials.standard('taco.env.stucco', {
+    color: 0xffffff,
+    vertexColors: true,
+    map: ctx.materials.texture('taco.env.stucco.albedo', paintStucco, {
+      size: 256,
+      repeat: [11, 3],
+    }),
+    emissive: 0x6b3223,
+    emissiveIntensity: 0.5,
+    roughness: 0.96,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const papelMat = ctx.materials.standard('taco.env.papel', {
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.85,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const bulbMat = ctx.materials.standard('taco.env.bulb', {
+    color: 0x6b4a20,
+    emissive: 0xffc472,
+    emissiveIntensity: 2.4,
+    roughness: 0.35,
+    metalness: 0,
   });
 
-  // striped cloth under the tray, turned so its stripes read at an angle
-  const cloth = sheet(w * 3.1, 0.022, w * 2.2, { wave: 0.012, waveFreq: 2.2, seed: 5, segments: 12, square: 1 });
-  const cm = mesh(cloth, serape, { cast: false, receive: true });
-  cm.position.y = groundY - 0.024;
-  cm.rotation.y = 0.22;
-  g.add(cm);
+  const add = (
+    parts: Array<THREE.BufferGeometry | null>,
+    mat: THREE.Material,
+    cast: boolean,
+    receive: boolean,
+  ): void => {
+    const geo = mergeEnv(parts);
+    if (geo) g.add(mesh(geo, mat, { cast, receive }));
+  };
 
-  // a lime wedge lying flat on the cloth, cut face up
-  const lr = w * 0.13;
-  const lt = w * 0.034;
-  const parts: THREE.BufferGeometry[] = [];
-  const rind = new THREE.CylinderGeometry(lr, lr, lt, seg(ctx, 18, 14, 9), 1, true, 0, Math.PI);
-  parts.push(tintGeometry(rind, 0x4f8f2a));
-  const flesh = new THREE.CylinderGeometry(lr * 0.86, lr * 0.86, lt * 0.99, seg(ctx, 18, 14, 9), 1, false, 0, Math.PI);
-  parts.push(tintGeometry(flesh, 0xd8e88a));
-  for (let s = 0; s < 4; s++) {
-    const a = ((s + 0.5) / 4) * Math.PI;
-    const pith = new THREE.BoxGeometry(lr * 0.82, lt * 1.01, lr * 0.045);
-    pith.translate(lr * 0.41, 0, 0);
-    pith.rotateY(-a);
-    parts.push(tintGeometry(pith, 0xf4f6dd));
-  }
-  const wedge = mergeAll(parts);
-  if (wedge) {
-    const wm = mesh(wedge, limeMat);
-    wm.rotation.set(0.07, -0.7, 0);
-    wm.position.set(-w * 1.02, groundY + lt * 0.5, w * 0.62);
-    g.add(wm);
-  }
+  add(wood, woodMat, false, true);
+  add(cloth, clothMat, false, true);
+  add(clay, clayMat, true, true);
+  add(food, foodMat, true, false);
+  add(glass, glassMat, false, false);
+  add(plant, plantMat, false, false);
+  add(stucco, stuccoMat, false, false);
+  add(papel, papelMat, false, false);
+  add(bulbs, bulbMat, false, false);
 
   return g;
 }
@@ -934,7 +1608,6 @@ export const tacoTheme: ThemeDef = {
   foods,
   hero: [0, 1, 5, 2, 3, 4],
   plate: buildPlate,
-  // TODO(environment): replaced by the per-theme environment builder.
-  // scenery: buildScenery,
+  environment: buildEnvironment,
   ambience: 'taco',
 };
