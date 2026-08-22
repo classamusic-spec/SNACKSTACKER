@@ -1972,7 +1972,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     return new THREE.Vector3(x, wallHigh + h, z);
   };
 
-  const papelLines = lo ? 3 : q === 'medium' ? 4 : 5;
+  const papelLines = 6;
   const papelStep = TAU / papelLines;
   for (let i = 0; i < papelLines; i++) {
     const a0 = BACK_ARC - papelStep * 0.5 + i * papelStep;
@@ -1988,7 +1988,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       cordColor: 0x6a4a38,
       sag: rng.range(0.75, 1.05),
       cordRadius: 0.022,
-      flags: lo ? 13 : 22,
+      flags: lo ? 10 : 18,
       flagWidth: 0.62,
       flagDrop: 0.72,
       shape: 'papel',
