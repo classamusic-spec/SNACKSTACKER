@@ -983,20 +983,24 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   if (q !== 'low') {
     // A wisp, not a column: few puffs, leaning downwind, each one wider and
     // fainter than the last. Evenly stacked spheres read as a string of beads.
+    //
+    // Size is the whole game here. The last puff used to reach 1.3 units and
+    // the stack read as a thumbprint smeared over the fence rather than as
+    // smoke; under a unit it stays a wisp and the grill keeps its silhouette.
     const puffs = new PropBatch();
-    const n = q === 'high' ? 5 : 3;
+    const n = q === 'high' ? 4 : 3;
     const lean = rng.range(0, TAU);
     for (let i = 0; i < n; i++) {
       const t = i / Math.max(n - 1, 1);
-      const r = 0.34 + t * t * 0.95;
-      const drift = t * t * 1.5;
+      const r = 0.26 + t * t * 0.52;
+      const drift = t * t * 1.15;
       puffs.add(
         new THREE.SphereGeometry(r, 8, 5).scale(1, 0.72 - t * 0.2, 1),
         0xffffff,
         {
-          x: grillX + Math.sin(lean) * drift + Math.sin(t * 5.3) * 0.22,
-          y: yardY + 2.05 + t * 1.85,
-          z: grillZ + Math.cos(lean) * drift + Math.cos(t * 4.1) * 0.18,
+          x: grillX + Math.sin(lean) * drift + Math.sin(t * 5.3) * 0.18,
+          y: yardY + 1.98 + t * 1.35,
+          z: grillZ + Math.cos(lean) * drift + Math.cos(t * 4.1) * 0.15,
         },
       );
     }
