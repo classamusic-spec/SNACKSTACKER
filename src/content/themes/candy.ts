@@ -8,7 +8,7 @@
  * moulding grid, the lollipop its stick.
  */
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import { Rng } from '../../core/rng';
 import { TAU, clamp } from '../../core/math';
 import {
@@ -25,13 +25,20 @@ import {
 } from '../kit';
 import {
   discXZ,
+  envCount,
+  envSeg,
   fillFlat,
   fillGradient,
   finalize,
+  flagLine,
+  lathe,
   longAxis,
+  mergeEnv,
   noiseWash,
   propCount,
   propScale,
+  rectPerimeter,
+  ringSlots,
   safeD,
   safeH,
   safeRadius,
@@ -40,7 +47,11 @@ import {
   seg,
   sheet,
   softRound,
+  softStroke,
   speckle,
+  stripes,
+  tableSlab,
+  tintGradientY,
   topSampler,
 } from './shared-fresh';
 
@@ -55,7 +66,6 @@ const GUMMY_TINTS = [
   { body: 0xffa02e, atten: 0xff7000 },
 ] as const;
 const SPRINKLE_COLORS = [0xff5fa2, 0x7be0e0, 0xffe7a3, 0xffffff, 0x9ad8ff, 0xb6ebd8] as const;
-const CONFETTI_COLORS = [0xff5fa2, 0x7be0e0, 0xffe7a3, 0xffffff, 0xd8c6ff] as const;
 
 // ---------------------------------------------------------------------------
 // painted textures
@@ -767,36 +777,579 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
   return g;
 }
 
-function buildScenery(ctx: FoodBuildCtx): THREE.Object3D {
-  const g = new THREE.Group();
-  const w = Math.max(ctx.width, 1);
-  const groundY = -PLATE_T;
-  const inner = w * 0.75;
-  const spread = w * 3.4;
+// ---------------------------------------------------------------------------
+// environment — a pastel confectionery counter
+// ---------------------------------------------------------------------------
+//
+// A Ladurée window, not a fairground. The whole theme lives in one hue family,
+// so the place is built out of FINISH rather than colour: mirror-bright
+// lacquered marble under the plate, glass under the jar lids, matte paper on
+// the bag, flat chalky pastel on everything past ten units.
+//
+// The layout is dictated by the camera, which sits ~10 units out from the
+// tower axis at a fixed 0.5 rad pitch. Three consequences drive every number
+// here:
+//
+//   * the horizon is off the top of the frame, so the counter has to reach
+//     past ~5.4 units in every direction or the bottom of the screen falls off
+//     its front edge into the sweep;
+//   * distant things ride HIGH in the frame, and the counter's far edge hides
+//     the foot of anything standing further out and lower down — which is how
+//     the shelf wall stands on a floor that is never drawn;
+//   * anything hanging below eye level must sit OUTSIDE the camera's own
+//     radius, or the near side of it swings across the tower. That is why the
+//     bunting is strung at 13 units and not at 4.
 
-  const confettiMat = ctx.materials.standard('candy.confetti', {
+/** Half-extents of the counter. Both must clear the bottom of frame. */
+const COUNTER_HALF_W = 6.4;
+const COUNTER_HALF_D = 5.8;
+/** The shelf wall — well outside the camera radius, so never in front. */
+const SHELF_R = 14.6;
+/** Bunting hangs outside the camera radius too, or it crosses the tower. */
+const BUNTING_R = 13.0;
+/** The arc directly behind the tower in the play camera's view. */
+const BACK_ARC = Math.PI * 1.25;
+
+const PASTEL_SWEETS = [0xff8fbe, 0x7be0e0, 0xffe08a, 0xc9b6ff, 0xfff4fa, 0x9fe8c8] as const;
+const BUNTING_COLORS = [0xffb3d1, 0xfff2c2, 0xb6ebd8, 0xd8c6ff, 0xffffff] as const;
+const JAR_CANDY = [0xff7fb2, 0x8fe3e3, 0xffdf8f, 0xcbbaff, 0xffe9f2] as const;
+
+/** Soft pink-and-lilac marble: a milky base with lazy, low-contrast veins. */
+function paintMarble(c: CanvasRenderingContext2D, size: number): void {
+  fillGradient(c, size, [
+    [0, '#FFF8FC'],
+    [0.55, '#FDEDF7'],
+    [1, '#F4E6FB'],
+  ]);
+  const rng = new Rng(0x3a17);
+  for (let i = 0; i < 16; i++) {
+    const pts: Array<[number, number]> = [];
+    let yy = rng.next() * size;
+    for (let x = -0.05; x <= 1.06; x += 0.1) {
+      yy += rng.signed() * size * 0.055;
+      pts.push([x * size, yy]);
+    }
+    softStroke(
+      c,
+      pts,
+      size * rng.range(0.004, 0.012),
+      rng.bool(0.6) ? '#DCCBF3' : '#F8CDE4',
+      0.45,
+      5,
+    );
+  }
+  noiseWash(c, size, 6, 0.07, 21, '#D8C6EA', '#FFFFFF');
+}
+
+/** Confectioner's stripes — the paper bag and the window valance. */
+function paintCandyStripe(c: CanvasRenderingContext2D, size: number): void {
+  stripes(
+    c,
+    size,
+    [
+      { span: 3, color: '#FFFCFE' },
+      { span: 2, color: '#FF9EC8' },
+      { span: 3, color: '#FFFCFE' },
+      { span: 2, color: '#C9B6FF' },
+    ],
+    true,
+  );
+  noiseWash(c, size, 5, 0.09, 34, '#C9A3BC', '#FFFFFF');
+}
+
+// ---------------------------------------------------------------------------
+// turned shapes — the sweet jar is the signature prop of the whole room
+// ---------------------------------------------------------------------------
+
+type Profile = Array<[number, number]>;
+
+function jarBody(h: number, r: number, segments: number): THREE.BufferGeometry | null {
+  const p: Profile = [
+    [0, 0],
+    [r * 0.74, 0],
+    [r * 0.9, h * 0.04],
+    [r, h * 0.16],
+    [r * 0.99, h * 0.56],
+    [r * 0.88, h * 0.75],
+    [r * 0.66, h * 0.87],
+    [r * 0.64, h * 0.93],
+    [r * 0.72, h * 0.97],
+    [r * 0.66, h],
+    [0, h],
+  ];
+  return lathe(p, segments);
+}
+
+function jarLid(r: number, h: number, segments: number): THREE.BufferGeometry | null {
+  const p: Profile = [
+    [0, 0],
+    [r * 0.78, 0],
+    [r * 0.8, h * 0.14],
+    [r * 0.6, h * 0.4],
+    [r * 0.3, h * 0.54],
+    [r * 0.11, h * 0.6],
+    [r * 0.17, h * 0.72],
+    [r * 0.2, h * 0.86],
+    [r * 0.1, h],
+    [0, h],
+  ];
+  return lathe(p, segments);
+}
+
+/** The heap of sweets inside a jar: a lumpy column with a domed shoulder. */
+function jarFill(
+  r: number,
+  h: number,
+  segments: number,
+  seed: number,
+  lumpy: boolean,
+): THREE.BufferGeometry | null {
+  const p: Profile = [
+    [0, 0],
+    [r, 0],
+    [r, h * 0.86],
+    [r * 0.86, h * 0.95],
+    [r * 0.5, h],
+    [0, h * 1.02],
+  ];
+  const geo = lathe(p, segments);
+  if (geo && lumpy) roughen(geo, r * 0.1, 11, seed);
+  return geo;
+}
+
+function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
+  const g = new THREE.Group();
+  g.name = 'candy.counter';
+
+  const top = Number.isFinite(ctx.tableTopY) ? ctx.tableTopY : -0.45;
+  const q = ctx.quality;
+  const rng = ctx.rng;
+  const rich = q !== 'low';
+  const lo = q === 'low';
+
+  // One bucket per material; each bucket is merged into exactly one draw call.
+  const marble: Array<THREE.BufferGeometry | null> = [];
+  const lacquer: Array<THREE.BufferGeometry | null> = [];
+  const glass: Array<THREE.BufferGeometry | null> = [];
+  const sweets: Array<THREE.BufferGeometry | null> = [];
+  const paper: Array<THREE.BufferGeometry | null> = [];
+  const far: Array<THREE.BufferGeometry | null> = [];
+  const flags: Array<THREE.BufferGeometry | null> = [];
+
+  // --- the counter -------------------------------------------------------
+  // The slab's top face lands exactly on tableTopY: the plate is already there.
+  marble.push(
+    tableSlab(COUNTER_HALF_W * 2, COUNTER_HALF_D * 2, 0.46, {
+      radius: 2.2,
+      segments: envSeg(q, 4, 3, 2),
+      top,
+    }),
+  );
+
+  // A bullnose lip proud of the slab, then an inset apron. Two steps is what
+  // separates a counter from a floor when only its far edge is on screen.
+  const lipTop = top - 0.38;
+  lacquer.push(
+    tintGeometry(
+      tableSlab(COUNTER_HALF_W * 2 + 0.5, COUNTER_HALF_D * 2 + 0.5, 0.2, {
+        radius: 2.4,
+        segments: envSeg(q, 3, 2, 2),
+        top: lipTop,
+      }),
+      0xf3e6ff,
+    ),
+  );
+  lacquer.push(
+    tintGeometry(
+      tableSlab(COUNTER_HALF_W * 2 - 1.1, COUNTER_HALF_D * 2 - 1.1, 0.9, {
+        radius: 1.9,
+        segments: envSeg(q, 3, 2, 2),
+        top: lipTop - 0.19,
+      }),
+      0xc6b2f0,
+    ),
+  );
+
+  // Scalloped valance under the lip — a hard square edge would be a desk.
+  if (rich) {
+    const count = q === 'high' ? 52 : 34;
+    const scallops: Array<THREE.BufferGeometry | null> = [];
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * TAU;
+      const p = rectPerimeter(COUNTER_HALF_W + 0.2, COUNTER_HALF_D + 0.2, a, 0.5);
+      const s = new THREE.SphereGeometry(0.33, envSeg(q, 8, 6, 5), envSeg(q, 4, 3, 3));
+      s.scale(1, 0.78, 1);
+      s.translate(p.x, lipTop - 0.12, p.y);
+      scallops.push(s);
+    }
+    const hem = mergeEnv(scallops);
+    if (hem) lacquer.push(tintGeometry(hem, 0xf7ecff));
+  }
+
+  // --- jars on the counter -----------------------------------------------
+  // Everything here stays outside r = 3.3 so a sliding layer never clips it,
+  // and under 1.2 tall so it never climbs in front of the tower.
+  const jarSeg = envSeg(q, 16, 13, 10);
+  const jarCount = lo ? 3 : q === 'medium' ? 4 : 5;
+  const jarSlots = ringSlots(rng, jarCount, 3.5, 4.7, {
+    startAngle: BACK_ARC - TAU / jarCount / 2 + 0.55,
+    jitter: 0.5,
+  });
+  for (let i = 0; i < jarSlots.length; i++) {
+    const slot = jarSlots[i];
+    const h = rng.range(0.78, 1.14);
+    const r = h * rng.range(0.32, 0.4);
+    const body = jarBody(h, r, jarSeg);
+    if (body) {
+      body.translate(slot.x, top, slot.z);
+      glass.push(body);
+    }
+    const fill = jarFill(r * 0.86, h * rng.range(0.5, 0.78), jarSeg, i * 7 + 3, q === 'high');
+    if (fill) {
+      fill.translate(slot.x, top + h * 0.05, slot.z);
+      sweets.push(tintGeometry(fill, JAR_CANDY[i % JAR_CANDY.length]));
+    }
+    const lid = jarLid(r * 0.98, r * 1.2, jarSeg);
+    if (lid) {
+      lid.translate(slot.x, top + h * 0.965, slot.z);
+      lacquer.push(tintGeometry(lid, i % 2 === 0 ? 0xffd3e8 : 0xdccfff));
+    }
+  }
+
+  // Tall apothecary jars stand at the back and act as columns — the tasteful
+  // version of the oversized lollipop.
+  const tallCount = lo ? 2 : 3;
+  const tallSlots = ringSlots(rng, tallCount, 5.0, 5.5, {
+    startAngle: BACK_ARC - TAU / tallCount / 2 - 0.62,
+    jitter: 0.35,
+  });
+  for (let i = 0; i < tallSlots.length; i++) {
+    const slot = tallSlots[i];
+    const h = rng.range(1.7, 2.2);
+    const r = rng.range(0.4, 0.5);
+    const body = jarBody(h, r, jarSeg);
+    if (body) {
+      body.translate(slot.x, top, slot.z);
+      glass.push(body);
+    }
+    const fill = jarFill(r * 0.87, h * rng.range(0.4, 0.62), jarSeg, i * 13 + 5, q === 'high');
+    if (fill) {
+      fill.translate(slot.x, top + h * 0.04, slot.z);
+      sweets.push(tintGeometry(fill, JAR_CANDY[(i + 2) % JAR_CANDY.length]));
+    }
+    const lid = jarLid(r * 0.99, r * 1.05, jarSeg);
+    if (lid) {
+      lid.translate(slot.x, top + h * 0.965, slot.z);
+      lacquer.push(tintGeometry(lid, 0xe7d8ff));
+    }
+  }
+
+  // --- cake stand under a cloche -----------------------------------------
+  {
+    const a = BACK_ARC + rng.range(-0.5, -0.2);
+    const r = rng.range(3.7, 4.4);
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const seg = envSeg(q, 18, 14, 10);
+    const stand = lathe(
+      [
+        [0, 0],
+        [0.4, 0],
+        [0.42, 0.035],
+        [0.28, 0.08],
+        [0.09, 0.12],
+        [0.09, 0.34],
+        [0.3, 0.4],
+        [0.6, 0.44],
+        [0.62, 0.48],
+        [0.56, 0.5],
+        [0, 0.5],
+      ],
+      seg,
+    );
+    if (stand) {
+      stand.translate(x, top, z);
+      lacquer.push(tintGeometry(stand, 0xfff3fa));
+    }
+    const tiers = lo ? 2 : 4;
+    for (let i = 0; i < tiers; i++) {
+      const mr = 0.3 - i * 0.045;
+      const m = puck(mr * 2, 0.11, mr * 2, {
+        domed: 0.3,
+        wobble: 0.05,
+        radial: envSeg(q, 14, 11, 8),
+        rings: 2,
+        seed: i + 3,
+        square: 0,
+      });
+      m.translate(x + rng.signed() * 0.04, top + 0.5 + i * 0.12, z + rng.signed() * 0.04);
+      sweets.push(tintGeometry(m, PASTEL_SWEETS[i % PASTEL_SWEETS.length]));
+    }
+    if (rich) {
+      const dome = lathe(
+        [
+          [0, 0],
+          [0.56, 0],
+          [0.58, 0.05],
+          [0.56, 0.4],
+          [0.44, 0.6],
+          [0.24, 0.7],
+          [0.07, 0.74],
+          [0.09, 0.82],
+          [0.05, 0.88],
+          [0, 0.88],
+        ],
+        seg,
+      );
+      if (dome) {
+        dome.translate(x, top + 0.47, z);
+        glass.push(dome);
+      }
+    }
+  }
+
+  // --- candy-striped paper bag, tipped over and spilling ------------------
+  if (rich) {
+    const a = BACK_ARC + rng.range(0.25, 0.6);
+    const r = rng.range(3.4, 4.1);
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const bag = roundedBox(0.42, 0.58, 0.3, 0.05, 2);
+    bag.rotateZ(0.14);
+    bag.rotateY(-a);
+    bag.translate(x, top, z);
+    paper.push(bag);
+    const cuff = roundedBox(0.46, 0.11, 0.33, 0.04, 2);
+    cuff.rotateZ(0.14);
+    cuff.rotateY(-a);
+    cuff.translate(x + 0.08, top + 0.53, z);
+    paper.push(cuff);
+
+    const spill = envCount(q, 9, 3);
+    for (let i = 0; i < spill; i++) {
+      const sa = a + rng.signed() * 0.42;
+      const sr = r - rng.range(0.3, 0.85);
+      const bead = new THREE.SphereGeometry(rng.range(0.045, 0.075), 7, 5);
+      bead.scale(1, 0.7, 1);
+      bead.translate(Math.sin(sa) * sr, top + 0.03, Math.cos(sa) * sr);
+      sweets.push(tintGeometry(bead, PASTEL_SWEETS[i % PASTEL_SWEETS.length]));
+    }
+  }
+
+  // --- ribbon spool -------------------------------------------------------
+  if (q === 'high') {
+    const a = BACK_ARC + rng.range(-1.1, -0.75);
+    const r = rng.range(3.5, 4.4);
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const spool = lathe(
+      [
+        [0, 0],
+        [0.19, 0],
+        [0.19, 0.035],
+        [0.11, 0.05],
+        [0.11, 0.2],
+        [0.19, 0.215],
+        [0.19, 0.25],
+        [0, 0.25],
+      ],
+      12,
+    );
+    if (spool) {
+      spool.translate(x, top, z);
+      lacquer.push(tintGeometry(spool, 0xfff0f7));
+    }
+    const wound = new THREE.CylinderGeometry(0.158, 0.158, 0.15, 14, 1);
+    wound.translate(x, top + 0.125, z);
+    paper.push(wound);
+  }
+
+  // --- the shelf wall -----------------------------------------------------
+  // Its foot is far below the counter's far edge, which hides it: no floor has
+  // to exist for the room to feel like it has one.
+  const wallSeg = envSeg(q, 40, 30, 22);
+  const wallLow = top - 6.5;
+  const wallHigh = top + 2.2;
+  const wall = new THREE.CylinderGeometry(SHELF_R, SHELF_R, wallHigh - wallLow, wallSeg, 1, true);
+  wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
+  far.push(tintGradientY(wall, 0xcbb8e8, 0xfdeaf6, top - 3.6, wallHigh));
+
+  const shelfInner = SHELF_R - 0.9;
+  const shelfHeights = lo
+    ? [top - 1.9, top + 0.6]
+    : q === 'medium'
+      ? [top - 3.1, top - 1.6, top - 0.1, top + 1.4]
+      : [top - 3.2, top - 1.95, top - 0.7, top + 0.55, top + 1.75];
+  for (let s = 0; s < shelfHeights.length; s++) {
+    const y = shelfHeights[s];
+    const board = new THREE.RingGeometry(shelfInner, SHELF_R, wallSeg, 1);
+    board.rotateX(-Math.PI / 2);
+    board.translate(0, y + 0.06, 0);
+    far.push(tintGeometry(board, 0xfff6fb));
+    const edge = new THREE.CylinderGeometry(shelfInner, shelfInner, 0.12, wallSeg, 1, true);
+    edge.translate(0, y, 0);
+    far.push(tintGeometry(edge, 0xecd9ee));
+
+    const perShelf = lo ? 5 : q === 'medium' ? 8 : 12;
+    const slots = ringSlots(rng, perShelf, SHELF_R - 0.55, SHELF_R - 0.32, { jitter: 0.8 });
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const jh = rng.range(0.42, 0.8);
+      const jr = rng.range(0.15, 0.24);
+      const jar = new THREE.CylinderGeometry(jr, jr * 0.92, jh, 8, 1, false);
+      jar.translate(slot.x, y + 0.06 + jh * 0.5, slot.z);
+      far.push(
+        tintGeometry(jar, rng.bool(0.42) ? 0xffeaf4 : JAR_CANDY[(i + s) % JAR_CANDY.length]),
+      );
+      const knob = new THREE.SphereGeometry(jr * 0.58, 5, 3);
+      knob.translate(slot.x, y + 0.06 + jh, slot.z);
+      far.push(tintGeometry(knob, 0xfff3fa));
+    }
+  }
+
+  // --- striped valance, scalloped at the hem ------------------------------
+  const valance: THREE.BufferGeometry[] = [];
+  if (rich) {
+    const vh = 0.66;
+    const vSeg = envSeg(q, 96, 64, 40);
+    const band = new THREE.CylinderGeometry(SHELF_R - 0.08, SHELF_R - 0.08, vh, vSeg, 1, true);
+    const pos = band.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      if (y > 0) continue;
+      const a = Math.atan2(pos.getZ(i), pos.getX(i));
+      pos.setY(i, y + 0.22 * (1 - Math.abs(Math.sin(a * 30))));
+    }
+    pos.needsUpdate = true;
+    band.computeVertexNormals();
+    band.translate(0, wallHigh - vh * 0.5, 0);
+    valance.push(band);
+  }
+
+  // --- bunting ------------------------------------------------------------
+  const lines = lo ? 2 : q === 'medium' ? 3 : 4;
+  for (let i = 0; i < lines; i++) {
+    const a0 = BACK_ARC + (i / lines) * TAU + rng.signed() * 0.18;
+    const span = rng.range(1.45, 1.95);
+    const rA = BUNTING_R + rng.range(-0.4, 0.4);
+    const rB = BUNTING_R + rng.range(-0.4, 0.4);
+    const line = flagLine(
+      new THREE.Vector3(Math.sin(a0) * rA, top + rng.range(3.5, 3.9), Math.cos(a0) * rA),
+      new THREE.Vector3(
+        Math.sin(a0 + span) * rB,
+        top + rng.range(3.5, 3.9),
+        Math.cos(a0 + span) * rB,
+      ),
+      rng,
+      {
+        colors: BUNTING_COLORS,
+        cordColor: 0xe4cfec,
+        sag: rng.range(1.0, 1.5),
+        cordRadius: 0.03,
+        flags: lo ? 7 : 12,
+        flagWidth: 0.52,
+        flagDrop: 0.66,
+        twist: 0.3,
+        segments: lo ? 10 : 18,
+      },
+    );
+    if (line) flags.push(line);
+  }
+
+  // --- assemble: one mesh per material ------------------------------------
+  const marbleMat = ctx.materials.physical('candy.env.marble', {
+    color: 0xffffff,
+    map: ctx.materials.texture('candy.env.marble.albedo', paintMarble, {
+      size: 256,
+      repeat: [0.13, 0.13],
+    }),
+    roughness: 0.1,
+    metalness: 0,
+    clearcoat: 1,
+    clearcoatRoughness: 0.045,
+    sheen: 0.2,
+    sheenColor: 0xffe3f5,
+  });
+  const lacquerMat = ctx.materials.physical('candy.env.lacquer', {
     color: 0xffffff,
     vertexColors: true,
-    roughness: 0.45,
+    roughness: 0.14,
+    metalness: 0,
+    clearcoat: 0.9,
+    clearcoatRoughness: 0.08,
+  });
+  // The low tier zeroes transmission and falls back to opacity, so the base
+  // colour has to carry the glass on its own.
+  const glassMat = ctx.materials.physical('candy.env.glass', {
+    color: 0xe6f1fb,
+    roughness: 0.05,
+    metalness: 0,
+    transmission: 0.92,
+    thickness: 0.3,
+    ior: 1.46,
+    clearcoat: 1,
+    clearcoatRoughness: 0.03,
+  });
+  const sweetsMat = ctx.materials.physical('candy.env.sweets', {
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.26,
+    metalness: 0,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.15,
+  });
+  const paperMat = ctx.materials.standard('candy.env.paper', {
+    color: 0xffffff,
+    map: ctx.materials.texture('candy.env.stripe', paintCandyStripe, {
+      size: 128,
+      repeat: [3, 3],
+    }),
+    roughness: 0.88,
     metalness: 0,
   });
+  const farMat = ctx.materials.standard('candy.env.far', {
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.82,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const valanceMat = ctx.materials.standard('candy.env.valance', {
+    color: 0xffffff,
+    map: ctx.materials.texture('candy.env.valance.albedo', paintCandyStripe, {
+      size: 128,
+      repeat: [24, 1],
+    }),
+    roughness: 0.85,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  const flagMat = ctx.materials.standard('candy.env.bunting', {
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.8,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
 
-  const count = ctx.quality === 'low' ? 60 : ctx.quality === 'medium' ? 110 : 170;
-  const dots = scatterOnSurface(
-    count,
-    spread,
-    spread,
-    () => groundY + 0.004,
-    (_i, rng, x, z) => {
-      // annulus only — the plate would hide anything under it
-      if (Math.hypot(x, z) < inner) return null;
-      const r = rng.range(0.035, 0.075);
-      const dot = new THREE.CylinderGeometry(r, r, 0.012, 10, 1);
-      return tintGeometry(dot, CONFETTI_COLORS[rng.int(0, CONFETTI_COLORS.length)]);
-    },
-    { seed: 91, margin: 0.1, randomTilt: 0.06 },
-  );
-  if (dots) g.add(mesh(dots, confettiMat, { cast: false, receive: true }));
+  const add = (
+    parts: Array<THREE.BufferGeometry | null>,
+    mat: THREE.Material,
+    cast: boolean,
+    receive: boolean,
+  ): void => {
+    const geo = mergeEnv(parts);
+    if (geo) g.add(mesh(geo, mat, { cast, receive }));
+  };
+
+  add(marble, marbleMat, false, true);
+  add(lacquer, lacquerMat, true, true);
+  add(glass, glassMat, false, false);
+  add(sweets, sweetsMat, true, false);
+  add(paper, paperMat, true, false);
+  add(far, farMat, false, false);
+  add(valance, valanceMat, false, false);
+  add(flags, flagMat, false, false);
 
   return g;
 }
@@ -909,7 +1462,6 @@ export const candyTheme: ThemeDef = {
   foods,
   hero: [7, 4, 3, 2, 1, 0],
   plate: buildPlate,
-  // TODO(environment): replaced by the per-theme environment builder.
-  // scenery: buildScenery,
+  environment: buildEnvironment,
   ambience: 'candy',
 };

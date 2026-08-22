@@ -18,8 +18,18 @@ import * as THREE from 'three';
 import type { FoodBuildCtx } from '../api';
 import type { CanvasPainter, MaterialLibrary as MaterialLibraryRef } from '../../render/api';
 import { Rng } from '../../core/rng';
+import type { QualityTier } from '../../core/types';
 import { TAU, clamp, clamp01, lerp } from '../../core/math';
-import { fbm2, fitHeight, mergeAll, roughen, roundedBox, squareness, superRadius } from '../kit';
+import {
+  fbm2,
+  fitHeight,
+  mergeAll,
+  roughen,
+  roundedBox,
+  squareness,
+  superRadius,
+  tintGeometry,
+} from '../kit';
 
 // ===========================================================================
 // quality tiers
@@ -932,4 +942,458 @@ export function crumbBumpTex(m: MaterialLibraryRef): THREE.Texture {
 /** Vein bump shared by lettuce and basil. */
 export function leafVeinTex(m: MaterialLibraryRef): THREE.Texture {
   return m.dataTexture('savory.leafVeins', paintLeafVeins, { size: 128 });
+}
+
+
+// ===========================================================================
+// environment toolkit
+// ===========================================================================
+//
+// The `environment` builder runs ONCE per run rather than once per layer, so
+// it can afford real geometry — but it has to spend that budget on a scene
+// that reads from every angle while the home screen turns the camera all the
+// way around the tower. Everything here therefore aims at two things:
+//
+//   1. **One draw call per material.** `PropBatch` bakes a flat colour into
+//      vertex colours (`tintGeometry`) and merges, so a grill, a cooler and a
+//      folding chair in three colours are still a single mesh.
+//   2. **Radial symmetry.** Fence rings, ground discs and wall rings are built
+//      around the origin, so there is no "front" to the set.
+//
+// Distances are authored against the real camera: FOV 46, yaw 45 degrees,
+// pitch 0.5 rad, ~11.5 units back. The top of the frame looks 4.5 degrees
+// BELOW the horizon, so a horizontal plane always covers the lower frame and
+// its rim lands high — a ground disc of radius ~24 puts the far edge about a
+// quarter of the way down the screen, which is where the fence line goes.
+
+/** Per-tier pick for environment builders, which get a tier, not a FoodBuildCtx. */
+export function pickE<T>(quality: QualityTier, low: T, med: T, high: T): T {
+  return quality === 'low' ? low : quality === 'medium' ? med : high;
+}
+
+/** Finite-or-fallback. Environment maths is full of divisions and camera-derived numbers. */
+export const num = (v: number | undefined, fallback = 0): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+
+export interface PlaceOpts {
+  x?: number;
+  y?: number;
+  z?: number;
+  rx?: number;
+  ry?: number;
+  rz?: number;
+  /** Sit the piece's lowest point on `y` instead of centring it there. */
+  ground?: boolean;
+  /** Hang the piece's highest point from `y`. */
+  ceil?: boolean;
+}
+
+/** Rotate (X, then Z, then Y), optionally ground/hang, then translate. */
+export function place(geo: THREE.BufferGeometry, at: PlaceOpts = {}): THREE.BufferGeometry {
+  const rx = num(at.rx);
+  const ry = num(at.ry);
+  const rz = num(at.rz);
+  if (rx) geo.rotateX(rx);
+  if (rz) geo.rotateZ(rz);
+  if (ry) geo.rotateY(ry);
+  if (at.ground || at.ceil) {
+    const bb = bounds(geo);
+    geo.translate(0, at.ground ? -bb.min.y : -bb.max.y, 0);
+  }
+  geo.translate(num(at.x), num(at.y), num(at.z));
+  return geo;
+}
+
+/**
+ * A capsule-free strut between two points: the workhorse for fence rails,
+ * chair legs, lamp flexes and the swag of a festoon light. Returns null for a
+ * zero-length span rather than a degenerate matrix.
+ */
+export function strut(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  thickness: number,
+  square = false,
+): THREE.BufferGeometry | null {
+  const len = a.distanceTo(b);
+  if (!Number.isFinite(len) || len < 1e-4) return null;
+  const t = safe(thickness, 1e-3);
+  const geo = square
+    ? new THREE.BoxGeometry(t, len, t)
+    : new THREE.CylinderGeometry(t * 0.5, t * 0.5, len, 5, 1);
+  const dir = new THREE.Vector3().subVectors(b, a).divideScalar(len);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  geo.applyQuaternion(q);
+  geo.translate((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+  return geo;
+}
+
+/**
+ * Accumulates tinted geometry and merges it into one mesh.
+ *
+ * Every piece is baked to vertex colours, so a whole prop kit shares a single
+ * `vertexColors: true` material — which is the only way a backyard with a
+ * grill, a cooler, a chair, a fence and five trees fits in a handful of draws.
+ */
+export class PropBatch {
+  private readonly parts: THREE.BufferGeometry[] = [];
+
+  get size(): number {
+    return this.parts.length;
+  }
+
+  /** Tint and stash a geometry. Nulls are ignored so callers can stay terse. */
+  add(geo: THREE.BufferGeometry | null, color: number, at: PlaceOpts = {}): this {
+    if (!geo) return this;
+    place(geo, at);
+    tintGeometry(geo, color);
+    this.parts.push(geo);
+    return this;
+  }
+
+  /**
+   * Stash geometry that already carries its own vertex colours — a `tintEach`
+   * gradient, say. `add` would flatten it back to one flat colour.
+   */
+  keep(geo: THREE.BufferGeometry | null, at: PlaceOpts = {}): this {
+    if (!geo) return this;
+    place(geo, at);
+    if (!geo.attributes.color) tintGeometry(geo, 0xffffff);
+    this.parts.push(geo);
+    return this;
+  }
+
+  box(w: number, h: number, d: number, color: number, at: PlaceOpts = {}): this {
+    return this.add(new THREE.BoxGeometry(safe(w), safe(h), safe(d)), color, at);
+  }
+
+  /** A rounded, worn-edged box — planks, bench slats, lids. */
+  slab(w: number, h: number, d: number, color: number, at: PlaceOpts = {}, seg = 2): this {
+    return this.add(boxAt(w, h, d, Math.min(safe(w), safe(h), safe(d)) * 0.22, seg), color, at);
+  }
+
+  cyl(
+    rTop: number,
+    rBottom: number,
+    h: number,
+    color: number,
+    at: PlaceOpts = {},
+    segs = 10,
+    open = false,
+  ): this {
+    const geo = new THREE.CylinderGeometry(
+      Math.max(rTop, 0),
+      Math.max(rBottom, 0),
+      safe(h),
+      Math.max(3, Math.round(segs)),
+      1,
+      open,
+    );
+    return this.add(geo, color, at);
+  }
+
+  ball(r: number, color: number, at: PlaceOpts = {}, segs = 8): this {
+    const s = Math.max(4, Math.round(segs));
+    return this.add(new THREE.SphereGeometry(safe(r), s, Math.max(3, s >> 1)), color, at);
+  }
+
+  /** A faceted dome — kettle lids, tree canopies, lamp shades. */
+  dome(r: number, h: number, color: number, at: PlaceOpts = {}, segs = 12): this {
+    const s = Math.max(5, Math.round(segs));
+    const geo = new THREE.SphereGeometry(
+      safe(r),
+      s,
+      Math.max(3, s >> 1),
+      0,
+      TAU,
+      0,
+      Math.PI / 2,
+    );
+    geo.scale(1, safe(h) / safe(r), 1);
+    return this.add(geo, color, at);
+  }
+
+  strut(a: THREE.Vector3, b: THREE.Vector3, thickness: number, color: number, square = false): this {
+    return this.add(strut(a, b, thickness, square), color);
+  }
+
+  build(): THREE.BufferGeometry | null {
+    const merged = mergeSafe(this.parts);
+    this.parts.length = 0;
+    return merged;
+  }
+}
+
+/** Per-vertex tint from an arbitrary function of position — gradients, fades. */
+export function tintEach(
+  geo: THREE.BufferGeometry,
+  fn: (x: number, y: number, z: number) => number,
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const arr = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const hex = fn(pos.getX(i), pos.getY(i), pos.getZ(i));
+    c.setHex(Number.isFinite(hex) ? hex : 0xffffff).convertSRGBToLinear();
+    arr[i * 3] = c.r;
+    arr[i * 3 + 1] = c.g;
+    arr[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+/** sRGB-space blend of two hex colours; `t` 0 keeps `a`. */
+export function mix(a: number, b: number, t: number): number {
+  const k = clamp01(Number.isFinite(t) ? t : 0);
+  const ar = (a >> 16) & 0xff;
+  const ag = (a >> 8) & 0xff;
+  const ab = a & 0xff;
+  const br = (b >> 16) & 0xff;
+  const bg = (b >> 8) & 0xff;
+  const bb = b & 0xff;
+  return (
+    ((Math.round(ar + (br - ar) * k) & 0xff) << 16) |
+    ((Math.round(ag + (bg - ag) * k) & 0xff) << 8) |
+    (Math.round(ab + (bb - ab) * k) & 0xff)
+  );
+}
+
+/**
+ * The ground: a ring-tessellated disc whose colour is a function of radius, so
+ * grass can fade into the palette's haze long before its rim and never show a
+ * hard edge against the sweep. Slightly undulating so it is not a mirror.
+ */
+export function groundDisc(
+  radius: number,
+  colorAt: (t: number, x: number, z: number) => number,
+  opts: { segments?: number; rings?: number; relief?: number; seed?: number } = {},
+): THREE.BufferGeometry {
+  const { segments = 44, rings = 8, relief = 0, seed = 1 } = opts;
+  const R = safe(radius, 1);
+  const geo = new THREE.RingGeometry(
+    R * 0.004,
+    R,
+    Math.max(8, Math.round(segments)),
+    Math.max(1, Math.round(rings)),
+  );
+  geo.rotateX(-Math.PI / 2);
+  if (relief > 0) {
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      pos.setY(i, fbm2(x * 0.12 + seed, z * 0.12 - seed, 2) * relief);
+    }
+    geo.computeVertexNormals();
+  }
+  return tintEach(geo, (x, _y, z) => colorAt(Math.hypot(x, z) / Math.max(R, 1e-4), x, z));
+}
+
+/**
+ * A rumpled cloth slab: a picnic check, a linen runner. Built with real
+ * thickness so its edge catches light, with a wandering outline and a droop at
+ * the border, because a perfect rectangle reads as a decal.
+ */
+export function clothSheet(
+  width: number,
+  depth: number,
+  opts: {
+    segments?: number;
+    thickness?: number;
+    rumple?: number;
+    edgeDrop?: number;
+    wander?: number;
+    seed?: number;
+  } = {},
+): THREE.BufferGeometry {
+  const {
+    segments = 12,
+    thickness = 0.035,
+    rumple = 0.02,
+    edgeDrop = 0.03,
+    wander = 0.035,
+    seed = 4,
+  } = opts;
+  const w = safe(width, 0.05);
+  const d = safe(depth, 0.05);
+  const n = clamp(Math.round(segments), 2, 28);
+  const geo = new THREE.BoxGeometry(w, safe(thickness, 2e-3), d, n, 1, n);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const hw = w / 2;
+  const hd = d / 2;
+  for (let i = 0; i < pos.count; i++) {
+    let x = pos.getX(i);
+    let z = pos.getZ(i);
+    const ex = Math.abs(x) / hw;
+    const ez = Math.abs(z) / hd;
+    const edge = Math.max(ex, ez);
+    const wob = fbm2(x * 1.7 + seed * 3.1, z * 1.7 - seed * 1.3, 2);
+    // wandering hem
+    const grow = 1 + wob * wander * Math.pow(edge, 3);
+    x *= grow;
+    z *= grow;
+    const y = pos.getY(i) + wob * rumple - Math.pow(clamp01((edge - 0.55) / 0.45), 2) * edgeDrop;
+    pos.setXYZ(i, x, y, z);
+  }
+  geo.computeVertexNormals();
+  return ceilGeo(geo, 0);
+}
+
+/** Sample a hanging catenary between two points; `sag` is the dip at midspan. */
+export function catenary(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  sag: number,
+  steps: number,
+): THREE.Vector3[] {
+  const n = clamp(Math.round(steps), 2, 64);
+  const s = num(sag);
+  const out: THREE.Vector3[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    out.push(
+      new THREE.Vector3(
+        lerp(a.x, b.x, t),
+        lerp(a.y, b.y, t) - s * Math.sin(Math.PI * t),
+        lerp(a.z, b.z, t),
+      ),
+    );
+  }
+  return out;
+}
+
+/**
+ * A ring of uprights facing the origin: fence boards, wainscot staves, the
+ * spokes of anything that has to read the same from every yaw. `make` is
+ * handed the index, the jittered radius and an rng so the line can be untidy.
+ */
+export function ringOfPosts(
+  batch: PropBatch,
+  count: number,
+  radius: number,
+  rng: Rng,
+  make: (batch: PropBatch, index: number, at: PlaceOpts, r: number) => void,
+): THREE.Vector3[] {
+  const n = clamp(Math.round(count), 3, 400);
+  const R = safe(radius, 1);
+  const anchors: THREE.Vector3[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU;
+    const r = R * (1 + rng.signed() * 0.012);
+    const at: PlaceOpts = { x: Math.sin(a) * r, z: Math.cos(a) * r, ry: a };
+    anchors.push(new THREE.Vector3(at.x, 0, at.z));
+    make(batch, i, at, r);
+  }
+  return anchors;
+}
+
+// --- environment painters ---------------------------------------------------
+
+/**
+ * Plank wood, grain running along **u** so a box's top face carries the grain
+ * down its length. Wavering lines, a couple of knots, varying alpha — never a
+ * flat brown.
+ */
+export function plankPainter(
+  base: number,
+  dark: number,
+  light: number,
+  opts: { seed?: number; lines?: number; knots?: number; wear?: number } = {},
+): CanvasPainter {
+  const { seed = 7, lines = 40, knots = 2, wear = 0.5 } = opts;
+  return (g, size) => {
+    mottleFill(g, size, base, { amp: 13, amp2: 7, warm: 5 });
+    const rng = new Rng(seed * 7919 + 31);
+    for (let i = 0; i < lines; i++) {
+      const y0 = ((i + rng.range(-0.4, 0.4)) / lines) * size;
+      const k = rng.int(1, 4); // integer periods keep the tile seamless in u
+      const amp = rng.range(0.003, 0.02) * size;
+      const phase = rng.range(0, TAU);
+      const isDark = rng.bool(0.66);
+      g.strokeStyle = isDark
+        ? cssRgba(dark, rng.range(0.1, 0.4))
+        : cssRgba(light, rng.range(0.08, 0.28));
+      g.lineWidth = rng.range(0.0014, 0.007) * size;
+      g.beginPath();
+      for (let x = 0; x <= size; x += 4) {
+        const u = x / size;
+        const y =
+          y0 +
+          Math.sin(u * TAU * k + phase) * amp +
+          Math.sin(u * TAU * (k + 2) + phase * 1.7) * amp * 0.35;
+        if (x === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    for (let i = 0; i < knots; i++) {
+      const kx = rng.range(0.12, 0.88) * size;
+      const ky = rng.range(0.12, 0.88) * size;
+      for (let r = 1; r <= 5; r++) {
+        g.strokeStyle = cssRgba(dark, 0.28 - r * 0.04);
+        g.lineWidth = size * 0.0035;
+        g.beginPath();
+        g.ellipse(kx, ky, r * size * 0.02, r * size * 0.011, rng.range(0, TAU), 0, TAU);
+        g.stroke();
+      }
+    }
+    // weathering: sun-bleached patches and a few grey splits
+    for (let i = 0; i < Math.round(70 * wear); i++) {
+      g.globalAlpha = rng.range(0.03, 0.14);
+      g.fillStyle = rng.bool(0.6) ? cssHex(light) : cssHex(dark);
+      wrapArc(g, rng.range(0, size), rng.range(0, size), rng.range(0.01, 0.07) * size, size);
+    }
+    g.globalAlpha = 1;
+  };
+}
+
+/** Mown turf: mottled green with a fine cross-hatch of blade highlights. */
+export function turfPainter(
+  base: number,
+  dark: number,
+  light: number,
+  seed = 5,
+): CanvasPainter {
+  return (g, size) => {
+    mottleFill(g, size, base, { amp: 30, amp2: 16, freq: 3, freq2: 15 });
+    const rng = new Rng(seed * 4441 + 17);
+    g.lineCap = 'round';
+    for (let i = 0; i < 900; i++) {
+      const x = rng.range(0, size);
+      const y = rng.range(0, size);
+      const len = rng.range(0.006, 0.022) * size;
+      const a = rng.range(-0.5, 0.5) + (rng.bool() ? 0 : Math.PI);
+      g.globalAlpha = rng.range(0.05, 0.3);
+      g.strokeStyle = rng.bool(0.55) ? cssHex(light) : cssHex(dark);
+      g.lineWidth = rng.range(0.0016, 0.0045) * size;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+  };
+}
+
+/** Woven linen: a warp/weft grid softened by noise. */
+export function linenPainter(base: number, thread: number, seed = 3): CanvasPainter {
+  return (g, size) => {
+    mottleFill(g, size, base, { amp: 7, amp2: 4 });
+    const rng = new Rng(seed * 2711 + 5);
+    const pitch = Math.max(3, Math.round(size / 48));
+    for (let i = 0; i < size; i += pitch) {
+      g.globalAlpha = rng.range(0.04, 0.12);
+      g.fillStyle = cssHex(thread);
+      g.fillRect(i, 0, Math.max(1, pitch * 0.45), size);
+      g.globalAlpha = rng.range(0.04, 0.12);
+      g.fillRect(0, i, size, Math.max(1, pitch * 0.45));
+    }
+    for (let i = 0; i < 140; i++) {
+      g.globalAlpha = rng.range(0.03, 0.1);
+      g.fillStyle = rng.bool() ? '#ffffff' : cssHex(thread);
+      wrapArc(g, rng.range(0, size), rng.range(0, size), rng.range(0.004, 0.02) * size, size);
+    }
+    g.globalAlpha = 1;
+  };
 }

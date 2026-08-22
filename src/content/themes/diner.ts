@@ -12,15 +12,17 @@
  * squat disc. No two share a profile in black at 120px.
  */
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
 import type { MaterialLibrary } from '../../render/api';
-import { TAU } from '../../core/math';
-import { droopSlab, mesh, puck, roughen, ruffle, scatter } from '../kit';
+import type { Rng } from '../../core/rng';
+import { TAU, clamp01 } from '../../core/math';
+import { droopSlab, fbm2, mesh, puck, roughen, ruffle, scatter } from '../kit';
 import {
   areaCount,
   baconPainter,
   charPainter,
   checkerPainter,
+  clothSheet,
   coverCount,
   crumbBumpTex,
   cutRadius,
@@ -29,18 +31,26 @@ import {
   finishLayer,
   fitGeoY,
   glazePainter,
+  groundDisc,
   groundGeo,
+  catenary,
   ceilGeo,
   leafVeinTex,
   mergeSafe,
+  mix,
+  num,
   paintTomatoFlesh,
+  pickE,
   pickQ,
+  plankPainter,
+  PropBatch,
   propSize,
   rasherRun,
   ringTorus,
   roughAmt,
   safe,
   specklePainter,
+  turfPainter,
 } from './shared-savory';
 
 // ---------------------------------------------------------------------------
@@ -536,46 +546,417 @@ function dinerPlate(ctx: FoodBuildCtx): THREE.Object3D {
   return g;
 }
 
-function dinerScenery(ctx: FoodBuildCtx): THREE.Object3D {
-  const g = new THREE.Group();
-  const m = ctx.materials;
-  const w = safe(ctx.width, 0.4);
-  const floorY = -plateThickness(ctx) - 0.006;
+// ---------------------------------------------------------------------------
+// environment — a backyard barbecue
+// ---------------------------------------------------------------------------
+//
+// Golden hour in a suburban yard: a weathered picnic table under the plate, a
+// kettle grill smoking gently, a cooler and a folding chair on the mown grass,
+// a board fence closing the yard off and a swag of festoon lights over it all.
+//
+// Framing notes (camera: FOV 46, yaw 45, pitch 0.5 rad, ~11.5 units back):
+//   • the picnic table's near corner falls off the bottom of the frame, so the
+//     table fills the foreground rather than floating in it;
+//   • the fence at 15.5 units lands about a quarter of the way down the
+//     screen — a horizon line ABOVE the tower's crown, so it never crowds it;
+//   • the grass disc stops at 26 units, by which point its vertex colours have
+//     already faded into the palette's haze, so there is no rim to see.
+//
+// Nothing within 5 units of the origin rises above `tableTopY`; the fence,
+// trees and light posts are the only things that do, and they are 13-23 units
+// out and desaturated towards the fog.
 
-  const floor = discFace(w * 3.0, w * 3.0, pickQ(ctx, 24, 40, 64));
-  floor.translate(0, floorY, 0);
-  g.add(
-    mesh(
-      floor,
-      m.standard('diner.floor', {
-        color: 0xffffff,
-        roughness: 0.44,
-        map: m.texture('diner.checker', checkerPainter(0xf3ede0, 0x2b2b33, 4), {
-          size: 256,
-          repeat: [3.5, 3.5],
-        }),
-      }),
-      { cast: false, receive: true },
+/** Drop from the table top to the grass. Compressed: a real one would dwarf the plate. */
+const YARD_DROP = 2.3;
+/** The cloth is the top surface; the planks sit this far under it. */
+const CLOTH_LIFT = 0.045;
+
+const yardWoodMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.wood', {
+    color: 0xffffff,
+    roughness: 0.66,
+    metalness: 0,
+    vertexColors: true,
+    // Near-white grain: the plank's hue lives in the vertex colours, so the map
+    // only modulates. Tinting both would square the brown into mud.
+    map: m.texture(
+      'diner.env.plank',
+      plankPainter(0xefe6d8, 0x8a6c46, 0xfffaf0, { seed: 12, lines: 46, knots: 3, wear: 0.9 }),
+      { size: 256, repeat: [0.55, 1.1] },
     ),
-  );
+  });
 
-  // a chrome napkin dispenser, kept to a silhouette and pushed well clear of
-  // the tower footprint (the plate is already 1.35x the base footprint)
-  const bw = w * 0.16;
-  const bh = w * 0.19;
-  const box = new THREE.BoxGeometry(bw, bh, bw * 0.52);
-  groundGeo(box, floorY);
-  box.translate(w * 0.78, 0, -w * 0.6);
-  g.add(mesh(box, chromeMat(m), { receive: false }));
-
-  const napkin = new THREE.BoxGeometry(bw * 0.72, bh * 0.1, bw * 0.16);
-  groundGeo(napkin, floorY + bh);
-  napkin.translate(w * 0.78, 0, -w * 0.6);
-  g.add(
-    mesh(napkin, m.standard('diner.napkin', { color: 0xfaf6ec, roughness: 0.92 }), {
-      receive: false,
+const turfMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.turf', {
+    color: 0xffffff,
+    roughness: 0.97,
+    vertexColors: true,
+    map: m.texture('diner.env.turf', turfPainter(0xe4e4e4, 0xb0b0b0, 0xffffff, 6), {
+      size: 256,
+      repeat: [24, 24],
     }),
+  });
+
+const clothMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.cloth', {
+    color: 0xffffff,
+    roughness: 0.93,
+    map: m.texture('diner.env.gingham', checkerPainter(0xf4ecdb, 0xc4483a, 6), {
+      size: 256,
+      repeat: [2.2, 1.9],
+    }),
+  });
+
+const yardPaintMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.paint', {
+    color: 0xffffff,
+    roughness: 0.42,
+    metalness: 0.16,
+    vertexColors: true,
+  });
+
+const yardFarMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.far', {
+    color: 0xffffff,
+    roughness: 0.9,
+    metalness: 0,
+    vertexColors: true,
+  });
+
+const bulbMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.bulb', {
+    color: 0xffe9c4,
+    roughness: 0.35,
+    emissive: 0xffbf6e,
+    emissiveIntensity: 1.7,
+  });
+
+const smokeMat = (m: MaterialLibrary): THREE.Material =>
+  m.standard('diner.env.smoke', {
+    color: 0xf6ece0,
+    roughness: 1,
+    transparent: true,
+    opacity: 0.15,
+    depthWrite: false,
+  });
+
+/** The picnic table: plank top, chunky cross-braced A-frames, two benches. */
+function picnicTable(batch: PropBatch, topY: number, yardY: number, rng: Rng): void {
+  const HALF_X = 4.3;
+  const planks = 5;
+  const gap = 0.075;
+  const plankW = (5.3 - gap * (planks - 1)) / planks;
+  const deck = topY - CLOTH_LIFT;
+
+  for (let i = 0; i < planks; i++) {
+    const z = -5.3 / 2 + plankW / 2 + i * (plankW + gap);
+    // Every board is a slightly different tree.
+    const tone = mix(0xc79256, 0x9d6f3c, rng.next() * 0.85);
+    batch.slab(HALF_X * 2, 0.19, plankW, tone, { y: deck, z, ceil: true });
+  }
+
+  // spine + skirts under the deck
+  batch.box(HALF_X * 1.86, 0.2, 0.34, 0x8a6134, { y: deck - 0.29, z: 0 });
+  for (const s of [-1, 1]) {
+    batch.box(HALF_X * 1.9, 0.18, 0.2, 0x94693a, { y: deck - 0.24, z: s * 2.35 });
+  }
+
+  const legTop = deck - 0.24;
+  for (const s of [-1, 1]) {
+    const x = s * 2.95;
+    // splayed A-frame legs
+    for (const t of [-1, 1]) {
+      batch.strut(
+        new THREE.Vector3(x, legTop, t * 0.8),
+        new THREE.Vector3(x, yardY + 0.02, t * 3.5),
+        0.28,
+        0x8b6236,
+        true,
+      );
+    }
+    // bench bearer and the little cross tie that makes it an A, not an H
+    batch.box(0.24, 0.19, 7.6, 0x7f5930, { y: yardY + 1.05, x });
+    batch.box(0.2, 0.16, 2.4, 0x87602f, { y: yardY + 1.72, x });
+  }
+
+  // benches
+  for (const s of [-1, 1]) {
+    batch.slab(8.0, 0.16, 0.98, mix(0xc08a4d, 0xa1723e, rng.next() * 0.7), {
+      y: yardY + 1.15,
+      z: s * 3.3,
+      ground: true,
+    });
+  }
+}
+
+/** Kettle grill: a dome on three legs. That is the whole silhouette. */
+function kettleGrill(batch: PropBatch, x: number, z: number, yardY: number, ry: number): void {
+  const ENAMEL = 0x2a2d33;
+  const STEEL = 0xb9c0c8;
+  const hub = yardY + 1.02;
+
+  for (let i = 0; i < 3; i++) {
+    const a = ry + (i / 3) * TAU;
+    batch.strut(
+      new THREE.Vector3(x + Math.sin(a) * 0.3, hub - 0.1, z + Math.cos(a) * 0.3),
+      new THREE.Vector3(x + Math.sin(a) * 0.72, yardY + 0.02, z + Math.cos(a) * 0.72),
+      0.11,
+      STEEL,
+    );
+  }
+  // bowl (a dome, inverted) and lid
+  batch.dome(0.84, 0.6, ENAMEL, { x, y: hub, z, rx: Math.PI }, 14);
+  batch.cyl(0.85, 0.85, 0.07, STEEL, { x, y: hub + 0.03, z }, 16);
+  batch.dome(0.85, 0.6, ENAMEL, { x, y: hub + 0.06, z }, 14);
+  batch.cyl(0.17, 0.2, 0.09, STEEL, { x, y: hub + 0.68, z }, 8);
+  // lid handle
+  batch.box(0.5, 0.07, 0.09, 0x33363c, { x, y: hub + 0.78, z, ry });
+  // a shelf, so it is not perfectly symmetrical from every yaw
+  batch.box(0.72, 0.06, 0.34, 0xa9662e, {
+    x: x + Math.sin(ry + 1.6) * 1.0,
+    y: hub + 0.02,
+    z: z + Math.cos(ry + 1.6) * 1.0,
+    ry: ry + 1.6,
+  });
+}
+
+function coolerBox(batch: PropBatch, x: number, z: number, yardY: number, ry: number): void {
+  batch.slab(1.5, 0.82, 0.94, 0x2f6ea8, { x, z, ry, y: yardY, ground: true });
+  batch.slab(1.58, 0.18, 1.0, 0xe9eef1, { x, z, ry, y: yardY + 0.82, ground: true });
+  batch.box(0.5, 0.05, 0.07, 0xd9dee2, { x, z, ry, y: yardY + 1.05 });
+}
+
+function foldingChair(batch: PropBatch, x: number, z: number, yardY: number, ry: number): void {
+  const FRAME = 0xb6bcc4;
+  const CANVAS = 0xd4502c;
+  const seat = yardY + 0.98;
+  const cs = Math.sin(ry);
+  const cz = Math.cos(ry);
+  const at = (dx: number, dz: number, y: number): THREE.Vector3 =>
+    new THREE.Vector3(x + dx * cz + dz * cs, y, z - dx * cs + dz * cz);
+
+  for (const s of [-1, 1]) {
+    batch.strut(at(s * 0.52, -0.42, seat + 0.06), at(s * 0.52, 0.5, yardY + 0.02), 0.07, FRAME);
+    batch.strut(at(s * 0.52, 0.42, seat + 0.06), at(s * 0.52, -0.5, yardY + 0.02), 0.07, FRAME);
+    batch.strut(at(s * 0.52, -0.42, seat), at(s * 0.62, -0.62, seat + 1.0), 0.07, FRAME);
+  }
+  batch.box(1.06, 0.09, 0.94, CANVAS, { x, y: seat + 0.06, z, ry });
+  batch.box(1.02, 0.72, 0.09, CANVAS, { x, y: seat + 0.62, z, ry, rx: -0.16 });
+  // the back rail sits behind the canvas
+  batch.box(1.1, 0.07, 0.07, FRAME, {
+    x: x - 0.2 * cs,
+    y: seat + 1.0,
+    z: z - 0.2 * cz,
+    ry,
+  });
+}
+
+function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
+  const g = new THREE.Group();
+  g.name = 'diner.backyard';
+  const m = ctx.materials;
+  const q = ctx.quality;
+  const rng = ctx.rng.fork(4177);
+  const topY = num(ctx.tableTopY, -0.35);
+  const yardY = topY - YARD_DROP;
+
+  // --- ground: mown grass fading into the golden-hour haze -----------------
+  const HAZE = 0xf7cba6;
+  const turf = new PropBatch();
+  // `keep`, not `add`: the disc already carries the radial fade in its vertex
+  // colours and a flat tint would wipe it back to one green.
+  turf.keep(
+    groundDisc(
+      24,
+      (t, x, z) => {
+        // broad patchiness first, then the fade into the haze
+        const patch = clamp01(0.5 + fbm2(x * 0.085 + 4.1, z * 0.085 - 2.7, 2) * 0.9);
+        const near = mix(0x9dbf5e, 0xb6cb78, patch);
+        return t < 0.3 ? near : mix(near, HAZE, clamp01((t - 0.3) / 0.52));
+      },
+      { segments: pickE(q, 30, 42, 54), rings: pickE(q, 6, 8, 10), relief: 0.09, seed: 3 },
+    ),
+    { y: yardY },
   );
+
+  const tufts = pickE(q, 22, 46, 76);
+  for (let i = 0; i < tufts; i++) {
+    const a = rng.range(0, TAU);
+    const r = 3.4 + Math.sqrt(rng.next()) * 10.5;
+    const h = rng.range(0.26, 0.52);
+    turf.add(
+      new THREE.ConeGeometry(rng.range(0.15, 0.24), h, 4, 1),
+      mix(0x8fae56, 0x789a45, rng.next()),
+      { x: Math.sin(a) * r, z: Math.cos(a) * r, y: yardY, ground: true, ry: rng.range(0, TAU) },
+    );
+  }
+  const turfGeo = turf.build();
+  if (turfGeo) g.add(mesh(turfGeo, turfMat(m), { cast: false, receive: true }));
+
+  // --- the picnic table ----------------------------------------------------
+  const table = new PropBatch();
+  picnicTable(table, topY, yardY, rng);
+  const tableGeo = table.build();
+  if (tableGeo) g.add(mesh(tableGeo, yardWoodMat(m), { cast: false, receive: true }));
+
+  // --- the checked cloth: top face exactly on tableTopY --------------------
+  const cloth = clothSheet(5.2, 4.35, {
+    segments: pickE(q, 7, 11, 15),
+    thickness: 0.05,
+    rumple: 0.022,
+    edgeDrop: 0.035,
+    wander: 0.04,
+    seed: 6,
+  });
+  cloth.rotateY(rng.range(-0.09, 0.09));
+  cloth.translate(rng.range(-0.16, 0.16), topY, rng.range(-0.14, 0.14));
+  g.add(mesh(cloth, clothMat(m), { cast: false, receive: true }));
+
+  // --- mid-ground props: grill, cooler, chair ------------------------------
+  const props = new PropBatch();
+  const grillA = -2.38 + rng.range(-0.25, 0.25);
+  const grillD = 6.9 + rng.range(-0.35, 0.35);
+  const grillX = Math.sin(grillA) * grillD;
+  const grillZ = Math.cos(grillA) * grillD;
+  kettleGrill(props, grillX, grillZ, yardY, rng.range(0, TAU));
+
+  const coolA = -0.9 + rng.range(-0.2, 0.2);
+  const coolD = 6.2 + rng.range(-0.35, 0.35);
+  coolerBox(props, Math.sin(coolA) * coolD, Math.cos(coolA) * coolD, yardY, coolA + 1.3);
+
+  if (q !== 'low') {
+    const chairA = 1.92 + rng.range(-0.2, 0.2);
+    const chairD = 6.6 + rng.range(-0.35, 0.35);
+    foldingChair(
+      props,
+      Math.sin(chairA) * chairD,
+      Math.cos(chairA) * chairD,
+      yardY,
+      chairA + Math.PI + rng.range(-0.4, 0.4),
+    );
+  }
+  const propGeo = props.build();
+  if (propGeo) g.add(mesh(propGeo, yardPaintMat(m), { cast: true, receive: true }));
+
+  // --- background: fence line, trees, festoon posts ------------------------
+  const far = new PropBatch();
+  const FENCE_R = 17.2;
+  const boards = pickE(q, 60, 96, 130);
+  // Board width follows the count, so the line stays a fence at every tier
+  // instead of collapsing into a paddock rail on LOW. The 0.82 leaves a hair
+  // gap that keeps a little sky in it and stops it reading as a stockade wall.
+  const boardW = ((TAU * FENCE_R) / boards) * 0.82;
+  const fenceTone = (t: number): number => mix(mix(0xdcbb8c, 0xb99b6c, t), HAZE, 0.34);
+  for (let i = 0; i < boards; i++) {
+    const a = (i / boards) * TAU;
+    const r = FENCE_R * (1 + rng.signed() * 0.008);
+    // every eighth board is a post: taller, thicker, and it breaks the ruler line
+    const post = i % 8 === 0;
+    far.box(
+      post ? boardW * 1.5 : boardW,
+      (post ? 2.42 : 2.12) + rng.range(-0.06, 0.12),
+      post ? 0.2 : 0.09,
+      fenceTone(post ? 0.85 : rng.next()),
+      { x: Math.sin(a) * r, z: Math.cos(a) * r, ry: a, y: yardY, ground: true },
+    );
+  }
+  // one rail behind the boards, just proud enough to catch the light
+  const railSegs = pickE(q, 18, 26, 34);
+  for (let i = 0; i < railSegs; i++) {
+    const a0 = (i / railSegs) * TAU;
+    const a1 = ((i + 1) / railSegs) * TAU;
+    const rr = FENCE_R - 0.14;
+    far.strut(
+      new THREE.Vector3(Math.sin(a0) * rr, yardY + 1.55, Math.cos(a0) * rr),
+      new THREE.Vector3(Math.sin(a1) * rr, yardY + 1.55, Math.cos(a1) * rr),
+      0.13,
+      mix(0xb08c58, HAZE, 0.38),
+      true,
+    );
+  }
+
+  // shrubs along the fence foot: they break the dead line where boards meet grass
+  const shrubs = pickE(q, 9, 15, 22);
+  for (let i = 0; i < shrubs; i++) {
+    const a = (i / shrubs) * TAU + rng.range(-0.22, 0.22);
+    const d = FENCE_R - rng.range(0.5, 1.9);
+    const w = rng.range(0.75, 1.5);
+    far.dome(
+      w,
+      w * rng.range(0.55, 0.85),
+      mix(mix(0x6f9a44, 0x8bab52, rng.next()), HAZE, 0.3),
+      { x: Math.sin(a) * d, z: Math.cos(a) * d, y: yardY },
+      q === 'low' ? 6 : 9,
+    );
+  }
+
+  const trees = pickE(q, 5, 7, 9);
+  for (let i = 0; i < trees; i++) {
+    const a = (i / trees) * TAU + rng.range(-0.35, 0.35);
+    const d = 20.0 + rng.range(-1.6, 3.2);
+    const x = Math.sin(a) * d;
+    const z = Math.cos(a) * d;
+    const trunkH = 1.75 + rng.range(-0.25, 0.5);
+    const spread = 1.8 + rng.range(-0.3, 0.7);
+    far.cyl(0.16, 0.26, trunkH, mix(0x8a6540, HAZE, 0.42), { x, z, y: yardY, ground: true }, 6);
+    const lobes = q === 'low' ? 1 : 3;
+    for (let k = 0; k < lobes; k++) {
+      const ox = k === 0 ? 0 : rng.range(-0.7, 0.7);
+      const oz = k === 0 ? 0 : rng.range(-0.7, 0.7);
+      far.ball(spread * (k === 0 ? 1 : rng.range(0.6, 0.82)), mix(0x7ba24c, HAZE, 0.42), {
+        x: x + ox,
+        z: z + oz,
+        y: yardY + trunkH + spread * 0.72 + rng.range(-0.25, 0.3),
+      }, q === 'low' ? 6 : 8);
+    }
+  }
+
+  // festoon lights: four posts, four swags, so a swag crosses every yaw
+  const bulbs = new PropBatch();
+  if (q !== 'low') {
+    const POST_R = 13.2;
+    const POST_H = 4.2;
+    const posts: THREE.Vector3[] = [];
+    for (let i = 0; i < 4; i++) {
+      const a = 0.62 + (i / 4) * TAU;
+      const x = Math.sin(a) * POST_R;
+      const z = Math.cos(a) * POST_R;
+      far.box(0.18, POST_H, 0.18, mix(0x9a7546, HAZE, 0.4), { x, z, y: yardY, ground: true });
+      posts.push(new THREE.Vector3(x, yardY + POST_H - 0.1, z));
+    }
+    for (let i = 0; i < 4; i++) {
+      const pts = catenary(posts[i], posts[(i + 1) % 4], 1.05, pickE(q, 5, 7, 9));
+      for (let k = 0; k < pts.length - 1; k++) {
+        far.strut(pts[k], pts[k + 1], 0.05, 0x4a4038);
+        if (k > 0) bulbs.add(new THREE.SphereGeometry(0.11, 6, 4), 0xffffff, {
+          x: pts[k].x,
+          y: pts[k].y - 0.12,
+          z: pts[k].z,
+        });
+      }
+    }
+  }
+  const farGeo = far.build();
+  if (farGeo) g.add(mesh(farGeo, yardFarMat(m), { cast: false, receive: false }));
+  const bulbGeo = bulbs.build();
+  if (bulbGeo) g.add(mesh(bulbGeo, bulbMat(m), { cast: false, receive: false }));
+
+  // --- a wisp of charcoal smoke -------------------------------------------
+  if (q !== 'low') {
+    const puffs = new PropBatch();
+    const n = q === 'high' ? 6 : 4;
+    for (let i = 0; i < n; i++) {
+      const t = i / n;
+      puffs.ball(0.3 + t * 0.55, 0xffffff, {
+        x: grillX + Math.sin(t * 4.1 + 1.2) * (0.25 + t * 0.75),
+        y: yardY + 1.95 + t * 1.7,
+        z: grillZ + Math.cos(t * 3.3) * (0.2 + t * 0.6),
+      }, 7);
+    }
+    const smokeGeo = puffs.build();
+    if (smokeGeo) g.add(mesh(smokeGeo, smokeMat(m), { cast: false, receive: false }));
+  }
+
   return g;
 }
 
@@ -619,7 +1000,6 @@ export const dinerTheme: ThemeDef = {
   ],
   hero: [7, 1, 2, 3, 4, 0],
   plate: dinerPlate,
-  // TODO(environment): replaced by the per-theme environment builder.
-  // scenery: dinerScenery,
+  environment: dinerEnvironment,
   ambience: 'diner',
 };

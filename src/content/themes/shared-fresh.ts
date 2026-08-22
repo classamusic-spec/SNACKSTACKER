@@ -12,8 +12,9 @@
 import * as THREE from 'three';
 import type { FoodBuildCtx } from '../api';
 import { Rng } from '../../core/rng';
-import { TAU, clamp, clamp01 } from '../../core/math';
-import { fbm2, mergeAll, squareness, superRadius } from '../kit';
+import type { QualityTier } from '../../core/types';
+import { TAU, clamp, clamp01, lerp } from '../../core/math';
+import { fbm2, mergeAll, roundedBox, squareness, superRadius, tintGeometry } from '../kit';
 import { BASE_FOOTPRINT as FULL } from '../../core/world';
 
 // ---------------------------------------------------------------------------
@@ -539,6 +540,332 @@ export function weave(
     }
   }
   c.restore();
+}
+
+// ---------------------------------------------------------------------------
+// environments — the place a theme happens in
+// ---------------------------------------------------------------------------
+//
+// `ThemeDef.environment` is built once per run rather than once per layer, so
+// it can afford real geometry — but only if it is merged hard. Everything here
+// returns raw BufferGeometry so a whole class of props (every terracotta pot,
+// every glass jar) collapses into a single draw call through `mergeAll`.
+//
+// The camera is the reason for most of the numbers a caller will pass in. It
+// sits ~10 units out from the tower axis at a fixed 0.5 rad pitch, so the
+// horizon is always just off the top of the frame: everything on screen is
+// below eye level, distant things ride HIGH in the frame, and a prop's base is
+// hidden by the table whenever it stands further out and lower down than the
+// table's far edge. That is what lets background scenery stand on a floor that
+// is never drawn.
+
+/** Prop-count multiplier per tier. Low keeps the hero props and drops the rest. */
+export function envDetail(quality: QualityTier): number {
+  return quality === 'high' ? 1 : quality === 'medium' ? 0.7 : 0.42;
+}
+
+/** Scale an environment prop count by tier, never below `min`. */
+export function envCount(quality: QualityTier, base: number, min = 0): number {
+  const n = Math.round(base * envDetail(quality));
+  return Math.max(min, Math.max(0, n));
+}
+
+/** Segment count per tier for environment geometry. */
+export function envSeg(quality: QualityTier, high: number, medium: number, low: number): number {
+  const v = quality === 'high' ? high : quality === 'medium' ? medium : low;
+  return Math.max(3, Math.round(v));
+}
+
+/**
+ * A surface of revolution from a `[radius, y]` profile — jars, pots, bottles,
+ * cake stands, spools. The single most useful shape in a kitchen environment,
+ * and the kit has no equivalent because food is rarely turned on a lathe.
+ *
+ * Returns null rather than throwing on a degenerate profile.
+ */
+export function lathe(
+  profile: ReadonlyArray<readonly [number, number]>,
+  segments = 16,
+  opts: { phiStart?: number; phiLength?: number } = {},
+): THREE.BufferGeometry | null {
+  const pts: THREE.Vector2[] = [];
+  for (const [r, y] of profile) {
+    if (!Number.isFinite(r) || !Number.isFinite(y)) return null;
+    pts.push(new THREE.Vector2(Math.max(r, 0), y));
+  }
+  if (pts.length < 2) return null;
+  const geo = new THREE.LatheGeometry(
+    pts,
+    Math.max(3, Math.round(segments)),
+    opts.phiStart ?? 0,
+    opts.phiLength ?? TAU,
+  );
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Points along a cord hanging between two anchors. A straight line between two
+ * poles reads as fake instantly; this is the curve a real string takes.
+ */
+export function catenary(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  sag: number,
+  steps = 16,
+): THREE.Vector3[] {
+  const n = Math.max(2, Math.round(steps));
+  const out: THREE.Vector3[] = [];
+  const k = 1.6;
+  const coshK = Math.cosh(k);
+  const denom = coshK - 1 || 1;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const droop = (coshK - Math.cosh(k * (t * 2 - 1))) / denom;
+    out.push(
+      new THREE.Vector3(
+        lerp(a.x, b.x, t),
+        lerp(a.y, b.y, t) - sag * droop,
+        lerp(a.z, b.z, t),
+      ),
+    );
+  }
+  return out;
+}
+
+export interface FlagLineOpts {
+  /** Colours cycled through the flags; each is baked into vertex colours. */
+  colors: readonly number[];
+  cordColor?: number;
+  sag?: number;
+  cordRadius?: number;
+  flags?: number;
+  flagWidth?: number;
+  flagDrop?: number;
+  /** 'pennant' is a triangle (bunting); 'papel' is a notched rectangle. */
+  shape?: 'pennant' | 'papel';
+  /** Random yaw either side of square-on, in radians, so flags catch the light. */
+  twist?: number;
+  segments?: number;
+}
+
+/**
+ * A cord strung between two anchors with flags hanging off it — bunting over a
+ * patisserie counter, papel picado over a patio. Everything is baked into one
+ * geometry with vertex colours, so a whole party's worth of flags is one draw.
+ *
+ * The flags face outward from the cord, which is what makes them read from any
+ * camera angle: a line strung tangentially around the scene always presents
+ * its flags broadside to a camera orbiting the middle.
+ */
+export function flagLine(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  rng: Rng,
+  opts: FlagLineOpts,
+): THREE.BufferGeometry | null {
+  const {
+    colors,
+    cordColor = 0x6b5a72,
+    sag = 0.5,
+    cordRadius = 0.012,
+    flags = 9,
+    flagWidth = 0.24,
+    flagDrop = 0.3,
+    shape = 'pennant',
+    twist = 0.5,
+    segments = 18,
+  } = opts;
+  if (!colors.length) return null;
+  if (!Number.isFinite(a.x + a.y + a.z + b.x + b.y + b.z)) return null;
+
+  const path = catenary(a, b, sag, segments);
+  const parts: THREE.BufferGeometry[] = [];
+  const cord = ribbon(path, cordRadius, { tubular: segments, radial: 3 });
+  if (cord) parts.push(tintGeometry(cord, cordColor));
+
+  const n = Math.max(0, Math.round(flags));
+  const tangent = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const t = (i + 0.5) / n;
+    const idx = clamp(Math.round(t * (path.length - 1)), 1, path.length - 1);
+    const p = path[idx];
+    tangent.copy(path[idx]).sub(path[idx - 1]);
+    if (tangent.lengthSq() < 1e-10) continue;
+
+    const w = flagWidth * rng.range(0.88, 1.12);
+    const h = flagDrop * rng.range(0.85, 1.15);
+    const s = new THREE.Shape();
+    if (shape === 'papel') {
+      s.moveTo(-w / 2, 0);
+      s.lineTo(w / 2, 0);
+      s.lineTo(w / 2, -h * 0.72);
+      s.lineTo(0, -h);
+      s.lineTo(-w / 2, -h * 0.72);
+    } else {
+      s.moveTo(-w / 2, 0);
+      s.lineTo(w / 2, 0);
+      s.lineTo(0, -h);
+    }
+    const flag = new THREE.ShapeGeometry(s);
+    const yaw = Math.atan2(-tangent.z, tangent.x) + rng.signed() * twist;
+    flag.rotateY(yaw);
+    flag.translate(p.x, p.y - cordRadius * 0.5, p.z);
+    parts.push(tintGeometry(flag, colors[i % colors.length]));
+  }
+  return mergeAll(parts);
+}
+
+/**
+ * Merge a bucket of environment geometry into one draw call.
+ *
+ * `mergeAll` is strict in the way three's merger is strict: every input must
+ * agree on indexing and on which attributes exist. That is fine for food,
+ * where a layer is built from one family of shapes, but an environment mixes
+ * extruded slabs (non-indexed, no colour) with lathes, spheres and shape
+ * geometry (indexed, tinted). This levels them first — everything is
+ * flattened to non-indexed and given whatever attribute the others carry — so
+ * a whole material's worth of props really does collapse to a single mesh.
+ */
+export function mergeEnv(
+  parts: Array<THREE.BufferGeometry | null | undefined>,
+): THREE.BufferGeometry | null {
+  const list = parts.filter(
+    (p): p is THREE.BufferGeometry => !!p && !!p.attributes.position && p.attributes.position.count > 0,
+  );
+  if (!list.length) return null;
+
+  const flat: THREE.BufferGeometry[] = [];
+  for (const g of list) {
+    if (g.index) {
+      flat.push(g.toNonIndexed());
+      g.dispose();
+    } else {
+      flat.push(g);
+    }
+  }
+
+  const wantUv = flat.some((g) => !!g.attributes.uv);
+  const wantColor = flat.some((g) => !!g.attributes.color);
+  for (const g of flat) {
+    const count = g.attributes.position.count;
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (wantUv && !g.attributes.uv) {
+      g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+    }
+    if (wantColor && !g.attributes.color) {
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3).fill(1), 3));
+    }
+    for (const name of Object.keys(g.attributes)) {
+      if (name === 'position' || name === 'normal') continue;
+      if (name === 'uv' && wantUv) continue;
+      if (name === 'color' && wantColor) continue;
+      g.deleteAttribute(name);
+    }
+    g.morphAttributes = {};
+  }
+  return mergeAll(flat);
+}
+
+/**
+ * Bake a vertical colour ramp into vertex colours. A distant wall painted one
+ * flat colour reads as a cardboard cut-out; a wall that darkens toward the
+ * floor reads as a room. Costs nothing at draw time and lets a whole
+ * background share one vertex-coloured material.
+ */
+export function tintGradientY(
+  geo: THREE.BufferGeometry,
+  low: number,
+  high: number,
+  y0: number,
+  y1: number,
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const a = new THREE.Color(low).convertSRGBToLinear();
+  const b = new THREE.Color(high).convertSRGBToLinear();
+  const arr = new Float32Array(pos.count * 3);
+  const span = Math.abs(y1 - y0) > 1e-6 ? y1 - y0 : 1;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const t = Number.isFinite(y) ? clamp01((y - y0) / span) : 0;
+    arr[i * 3] = lerp(a.r, b.r, t);
+    arr[i * 3 + 1] = lerp(a.g, b.g, t);
+    arr[i * 3 + 2] = lerp(a.b, b.b, t);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+export interface RingSlot {
+  x: number;
+  z: number;
+  radius: number;
+  /** Yaw that turns an object's +Z away from the middle. */
+  yaw: number;
+}
+
+/**
+ * Placements around the tower, one per angular sector with jitter inside it.
+ * Sectors (rather than free random angles) are what stop three jars clumping
+ * on one side and leaving the camera's far arc empty on the other — and the
+ * home screen turns all the way around, so every arc gets its turn on screen.
+ */
+export function ringSlots(
+  rng: Rng,
+  count: number,
+  rMin: number,
+  rMax: number,
+  opts: { jitter?: number; startAngle?: number } = {},
+): RingSlot[] {
+  const n = Math.max(0, Math.round(count));
+  const out: RingSlot[] = [];
+  if (n === 0) return out;
+  const jitter = clamp01(opts.jitter ?? 0.62);
+  const start = opts.startAngle ?? 0;
+  const step = TAU / n;
+  const lo = Math.max(0.01, Math.min(rMin, rMax));
+  const hi = Math.max(lo + 1e-4, Math.max(rMin, rMax));
+  for (let i = 0; i < n; i++) {
+    const yaw = start + step * (i + 0.5 + rng.signed() * jitter * 0.5);
+    const radius = rng.range(lo, hi);
+    out.push({ x: Math.sin(yaw) * radius, z: Math.cos(yaw) * radius, radius, yaw });
+  }
+  return out;
+}
+
+/**
+ * The table itself: a rounded slab whose TOP FACE lands exactly on `top`, with
+ * the whole body hanging below it. Exactness matters — the plate is already
+ * sitting on that plane, so a slab a hair too high punches through it.
+ */
+export function tableSlab(
+  width: number,
+  depth: number,
+  thickness: number,
+  opts: { radius?: number; segments?: number; top?: number } = {},
+): THREE.BufferGeometry {
+  const w = Math.max(width, MIN_DIM);
+  const d = Math.max(depth, MIN_DIM);
+  const t = Math.max(thickness, 0.02);
+  const r = safeRadius(opts.radius ?? Math.min(w, d) * 0.12, w, d, t);
+  const geo = roundedBox(w, t, d, r, Math.max(1, Math.round(opts.segments ?? 3)));
+  geo.translate(0, (opts.top ?? 0) - t, 0);
+  return geo;
+}
+
+/**
+ * A point on the boundary of a rounded rectangle, parameterised by angle.
+ * Used to walk a table's perimeter — scalloped valances, edge trim, the line
+ * of pots along a wall — without re-deriving the corner arcs every time.
+ */
+export function rectPerimeter(halfW: number, halfD: number, angle: number, round = 0.55): THREE.Vector2 {
+  const a = Math.max(halfW, 1e-4);
+  const b = Math.max(halfD, 1e-4);
+  const n = 2 + (1 - clamp01(round)) * 8;
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const k = Math.pow(Math.pow(Math.abs(c), n) + Math.pow(Math.abs(s), n), -1 / n);
+  return new THREE.Vector2(a * c * k, b * s * k);
 }
 
 export { THREE };

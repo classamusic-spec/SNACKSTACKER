@@ -12,32 +12,30 @@
  * game with a granular fringe.
  */
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { QualityTier } from '../../core/types';
 import type { MaterialLibrary } from '../../render/api';
-import { clamp } from '../../core/math';
-import { mesh, pour, puck, roughen, scatter, tintGeometry } from '../kit';
+import { Rng } from '../../core/rng';
+import { TAU, clamp } from '../../core/math';
+import { fbm2, mergeAll, mesh, pour, puck, roughen, scatter, tintGeometry } from '../kit';
 import {
   areaCount,
   arcStrip,
   boxAt,
   charPainter,
-  checkerPainter,
   coverCount,
   crumbBumpTex,
   cuppedDisc,
   cutSquare,
   ceilGeo,
-  discFace,
   domeGeo,
   fineDetail,
   finishLayer,
   fitGeoY,
   geoHeight,
-  groundGeo,
   leafGeo,
   leafVeinTex,
   mergeSafe,
-  paintFlourDust,
   paintWoodGrain,
   pickQ,
   propSize,
@@ -655,77 +653,724 @@ function pizzaPlate(ctx: FoodBuildCtx): THREE.Object3D {
   );
 }
 
-function pizzaScenery(ctx: FoodBuildCtx): THREE.Object3D {
-  const g = new THREE.Group();
-  const m = ctx.materials;
-  const w = safe(ctx.width, 0.4);
-  const floorY = -boardThickness(ctx) - 0.004;
+// ===========================================================================
+// environment — a piazza terrace at dusk
+// ===========================================================================
 
-  // a dusting of flour on the counter
-  const dust = discFace(w * 2.6, w * 2.6, pickQ(ctx, 20, 32, 48));
-  dust.translate(0, floorY, 0);
-  g.add(
-    mesh(
-      dust,
-      m.standard('pizza.flour', {
-        color: 0xffffff,
-        roughness: 0.95,
-        map: m.texture('pizza.flourDust', paintFlourDust, {
-          size: 256,
-          wrap: THREE.ClampToEdgeWrapping,
-        }),
-        transparent: true,
-        depthWrite: false,
-      }),
-      { cast: false, receive: false },
-    ),
-  );
+/**
+ * Layout contract, in priority order:
+ *
+ *  1. The marble lands on `ctx.tableTopY` (a hair below, so it can never punch
+ *     through the board or z-fight the contact shadow).
+ *  2. Nothing rises above that plane inside `SWEEP_HALF` of either axis —
+ *     that is the corridor a sliding layer sweeps through — so the bottle,
+ *     the cruet and the shaker all live out on the diagonals.
+ *  3. The piazza floor is `FLOOR_DROP` down and dissolves into the sweep with
+ *     a baked vertex alpha, so there is no hard horizon and the backdrop still
+ *     owns the top of frame.
+ *
+ * Everything merges into eight vertex-coloured draws: a whole street of
+ * terracotta facades, roofs, pots and an awning is a single mesh.
+ */
 
-  // a few clumps so the flour is not just a decal
-  const clumps = scatter(
-    12,
-    w * 2.2,
-    w * 2.2,
-    (i, rng) => {
-      const s = new THREE.TetrahedronGeometry(w * 0.012 * rng.range(0.6, 1.4), 0);
-      return s;
-    },
-    { seed: 5, y: floorY, margin: w * 0.9, spacing: 0, randomYaw: true, randomTilt: 1 },
-  );
-  if (clumps) {
-    g.add(
-      mesh(clumps, m.standard('pizza.flourClump', { color: 0xf7efe0, roughness: 0.96 }), {
-        cast: false,
-        receive: false,
-      }),
-    );
+const ENV_SINK = 0.0025;
+const TABLE_R = 3.35;
+const TABLE_T = 0.19;
+const FLOOR_DROP = 3.0;
+/** Half-width of the axis-aligned corridor a sliding layer sweeps through. */
+const SWEEP_HALF = 1.45;
+
+const envPick = <T>(q: QualityTier, low: T, med: T, high: T): T =>
+  q === 'low' ? low : q === 'medium' ? med : high;
+
+/**
+ * Merge bucket. Each part carries its colour in vertex colours, so a dozen
+ * differently-tinted props collapse into a single draw call.
+ */
+class EnvBucket {
+  private readonly parts: THREE.BufferGeometry[] = [];
+
+  add(geo: THREE.BufferGeometry | null, color: number): void {
+    if (!geo) return;
+    const pos = geo.getAttribute('position');
+    if (!pos || pos.count < 3) {
+      geo.dispose();
+      return;
+    }
+    let g = geo;
+    // mergeGeometries refuses a mix of indexed and non-indexed inputs and the
+    // kit hands back both kinds, so everything is flattened on the way in.
+    if (g.index) {
+      const flat = g.toNonIndexed();
+      g.dispose();
+      g = flat;
+    }
+    tintGeometry(g, color);
+    this.parts.push(g);
   }
 
-  // a checkered cloth corner intruding from the far side
-  const cloth = boxAt(w * 0.95, w * 0.012, w * 0.72, w * 0.02, 1);
-  const fold = boxAt(w * 0.95, w * 0.01, w * 0.16, w * 0.014, 1);
-  fold.translate(0, w * 0.011, -w * 0.3);
-  const clothGeo = mergeSafe([cloth, fold]);
-  if (clothGeo) {
-    clothGeo.rotateY(-0.42);
-    groundGeo(clothGeo, floorY);
-    clothGeo.translate(w * 0.92, 0, w * 0.66);
-    g.add(
-      mesh(
-        clothGeo,
-        m.standard('pizza.cloth', {
-          color: 0xffffff,
-          roughness: 0.92,
-          map: m.texture('pizza.checkCloth', checkerPainter(0xf4ece0, 0xc1272d, 4), {
-            size: 256,
-            repeat: [2.2, 2.2],
-          }),
-        }),
-        { cast: false },
-      ),
-    );
+  build(mat: THREE.Material, cast: boolean, receive: boolean): THREE.Mesh | null {
+    const merged = mergeAll(this.parts);
+    this.parts.length = 0;
+    if (!merged) return null;
+    const m = new THREE.Mesh(merged, mat);
+    m.castShadow = cast;
+    m.receiveShadow = receive;
+    return m;
   }
+}
+
+/** Box with its base on y = 0. */
+function envBox(w: number, h: number, d: number): THREE.BufferGeometry {
+  const hh = Math.max(h, 1e-3);
+  const g = new THREE.BoxGeometry(Math.max(w, 1e-3), hh, Math.max(d, 1e-3));
+  g.translate(0, hh / 2, 0);
   return g;
+}
+
+/** Cylinder / cone with its base on y = 0. */
+function envCyl(rTop: number, rBot: number, h: number, sides: number): THREE.BufferGeometry {
+  const hh = Math.max(h, 1e-3);
+  const g = new THREE.CylinderGeometry(
+    Math.max(rTop, 0),
+    Math.max(rBot, 1e-4),
+    hh,
+    Math.max(3, Math.round(sides)),
+    1,
+  );
+  g.translate(0, hh / 2, 0);
+  return g;
+}
+
+/** Faceted blob, centred on its own origin. */
+function envBlob(r: number, detail: number): THREE.BufferGeometry {
+  return new THREE.IcosahedronGeometry(Math.max(r, 1e-3), Math.max(0, detail));
+}
+
+/** Author a prop at the origin with its base on y = 0, then post it here. */
+function at(g: THREE.BufferGeometry, x: number, y: number, z: number, yaw = 0): THREE.BufferGeometry {
+  if (yaw) g.rotateY(yaw);
+  g.translate(x, y, z);
+  return g;
+}
+
+/** A rod between two arbitrary points — chair legs, festoon wire. */
+const STRUT_UP = new THREE.Vector3(0, 1, 0);
+function strut(
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  r: number,
+  sides: number,
+): THREE.BufferGeometry | null {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dz = bz - az;
+  const len = Math.hypot(dx, dy, dz);
+  if (!(len > 1e-4) || !Number.isFinite(len)) return null;
+  const g = new THREE.CylinderGeometry(Math.max(r, 1e-4), Math.max(r, 1e-4), len, Math.max(3, sides), 1);
+  const dir = new THREE.Vector3(dx / len, dy / len, dz / len);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(STRUT_UP, dir));
+  g.translate((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+  return g;
+}
+
+/**
+ * A ring-tessellated ground disc with per-vertex RGBA, so the far rim fades to
+ * nothing instead of ending on a hard edge. Planar UVs in world units keep the
+ * paving tiling even across every ring.
+ */
+function envGround(
+  radii: readonly number[],
+  segments: number,
+  uvScale: number,
+  shade: (radius: number) => readonly [number, number, number, number],
+): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const uv: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  const push = (x: number, z: number, r: number): void => {
+    pos.push(x, 0, z);
+    nrm.push(0, 1, 0);
+    uv.push(x * uvScale, z * uvScale);
+    const s = shade(r);
+    col.push(s[0], s[1], s[2], s[3]);
+  };
+
+  push(0, 0, 0);
+  for (let ri = 0; ri < radii.length; ri++) {
+    const r = radii[ri];
+    for (let s = 0; s < segments; s++) {
+      const a = (s / segments) * TAU;
+      push(Math.cos(a) * r, Math.sin(a) * r, r);
+    }
+  }
+  for (let s = 0; s < segments; s++) idx.push(0, 1 + ((s + 1) % segments), 1 + s);
+  for (let ri = 0; ri < radii.length - 1; ri++) {
+    const a0 = 1 + ri * segments;
+    const b0 = a0 + segments;
+    for (let s = 0; s < segments; s++) {
+      const s1 = (s + 1) % segments;
+      idx.push(a0 + s, a0 + s1, b0 + s);
+      idx.push(a0 + s1, b0 + s1, b0 + s);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  g.setIndex(idx);
+  return g;
+}
+
+// --- painted surfaces ------------------------------------------------------
+
+/** Soft grey veining over a warm off-white. Subtle: it is a table, not agate. */
+function paintMarble(c: CanvasRenderingContext2D, size: number): void {
+  c.fillStyle = '#F2EDE3';
+  c.fillRect(0, 0, size, size);
+  const rng = new Rng(0x3a12);
+
+  // broad clouding
+  for (let i = 0; i < 26; i++) {
+    const g = c.createRadialGradient(
+      rng.next() * size,
+      rng.next() * size,
+      0,
+      rng.next() * size,
+      rng.next() * size,
+      size * rng.range(0.14, 0.42),
+    );
+    g.addColorStop(0, `rgba(206,199,188,${rng.range(0.05, 0.14).toFixed(3)})`);
+    g.addColorStop(1, 'rgba(206,199,188,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, size, size);
+  }
+
+  // veins: a few strong, many faint, all leaning the same way
+  for (let i = 0; i < 22; i++) {
+    const strong = i < 4;
+    let x = rng.next() * size;
+    let y = -size * 0.1;
+    c.strokeStyle = strong
+      ? `rgba(126,124,124,${rng.range(0.16, 0.3).toFixed(3)})`
+      : `rgba(158,155,150,${rng.range(0.05, 0.14).toFixed(3)})`;
+    c.lineWidth = size * (strong ? rng.range(0.004, 0.009) : rng.range(0.0015, 0.004));
+    c.beginPath();
+    c.moveTo(x, y);
+    const drift = rng.range(0.25, 0.75);
+    while (y < size * 1.1) {
+      y += size * 0.06;
+      x += size * 0.06 * drift + fbm2(x * 0.02, y * 0.02, 3) * size * 0.05;
+      c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+  // polish grain
+  for (let i = 0; i < 500; i++) {
+    c.fillStyle = rng.bool() ? 'rgba(255,255,255,0.1)' : 'rgba(190,185,178,0.08)';
+    c.fillRect(rng.next() * size, rng.next() * size, size * 0.004, size * 0.004);
+  }
+}
+
+/** Worn piazza flags: irregular courses, dark joints, a lot of foot polish. */
+function paintPiazza(c: CanvasRenderingContext2D, size: number): void {
+  c.fillStyle = '#3A2C24';
+  c.fillRect(0, 0, size, size);
+  const rng = new Rng(0x77a3);
+  const rows = 4;
+  const rh = size / rows;
+  for (let r = 0; r < rows; r++) {
+    let x = -rng.next() * rh;
+    while (x < size) {
+      const w = rh * rng.range(0.8, 1.9);
+      const shade = rng.range(0, 1);
+      const base = 128 + Math.round(shade * 44);
+      c.fillStyle = `rgb(${base},${base - 16},${base - 34})`;
+      c.fillRect(x + size * 0.006, r * rh + size * 0.006, w - size * 0.012, rh - size * 0.012);
+      // worn highlight along the top-left of every flag
+      c.fillStyle = `rgba(240,228,208,${rng.range(0.04, 0.13).toFixed(3)})`;
+      c.fillRect(x + size * 0.006, r * rh + size * 0.006, w - size * 0.012, rh * 0.18);
+      x += w;
+    }
+  }
+  // grime and wear
+  for (let i = 0; i < 1400; i++) {
+    const s = size * rng.range(0.002, 0.008);
+    c.fillStyle = rng.bool(0.55) ? 'rgba(58,44,36,0.16)' : 'rgba(226,212,190,0.1)';
+    c.fillRect(rng.next() * size, rng.next() * size, s, s);
+  }
+}
+
+// --- props -----------------------------------------------------------------
+
+/** Straw base, round shoulder, long neck. A fiasco at 120px. */
+function chiantiBottle(
+  straw: EnvBucket,
+  glass: EnvBucket,
+  x: number,
+  y: number,
+  z: number,
+  yaw: number,
+  sides: number,
+): void {
+  const base = envCyl(0.36, 0.4, 0.6, sides);
+  roughen(base, 0.012, 14, 5);
+  straw.add(at(base, x, y, z, yaw), 0xcaa257);
+  straw.add(at(envCyl(0.34, 0.38, 0.06, sides), x, y + 0.02, z), 0x9b7a3c);
+  straw.add(at(envCyl(0.15, 0.35, 0.3, sides), x, y + 0.6, z), 0xbe9750);
+  glass.add(at(envCyl(0.075, 0.14, 0.62, sides), x, y + 0.88, z), 0x1e3f26);
+  glass.add(at(envCyl(0.092, 0.082, 0.06, sides), x, y + 1.5, z), 0x27502f);
+  straw.add(at(envCyl(0.088, 0.088, 0.09, sides), x, y + 1.47, z), 0x8f2320);
+}
+
+/** Terracotta pot, then whatever grows out of it. */
+function pot(terra: EnvBucket, x: number, y: number, z: number, s: number, sides: number): number {
+  terra.add(at(envCyl(0.42 * s, 0.52 * s, 0.6 * s, sides), x, y, z), 0xb8663c);
+  terra.add(at(envCyl(0.48 * s, 0.44 * s, 0.11 * s, sides), x, y + 0.55 * s, z), 0xc4744a);
+  terra.add(at(envCyl(0.4 * s, 0.4 * s, 0.04 * s, sides), x, y + 0.58 * s, z), 0x3a2a22);
+  return y + 0.6 * s;
+}
+
+/** A facade: mass, roof, shuttered windows, a lamp or two behind the glass. */
+function facade(
+  terra: EnvBucket,
+  wood: EnvBucket,
+  bulbs: EnvBucket,
+  rng: Rng,
+  bearing: number,
+  radius: number,
+  w: number,
+  h: number,
+  y: number,
+  fade: number,
+  detail: boolean,
+): void {
+  const cx = Math.cos(bearing) * radius;
+  const cz = Math.sin(bearing) * radius;
+  const yaw = -bearing + Math.PI / 2;
+  // unit vector along the facade, and the inward face normal
+  const ax = Math.sin(bearing);
+  const az = -Math.cos(bearing);
+  const inx = -Math.cos(bearing);
+  const inz = -Math.sin(bearing);
+  const d = 3.2;
+
+  const wall = new THREE.Color(rng.pick([0xd09a63, 0xc87f52, 0xdcae7c, 0xb87550]));
+  wall.lerp(new THREE.Color(0xd99a72), fade);
+  terra.add(at(envBox(w, h, d), cx, y, cz, yaw), wall.getHex());
+
+  const roof = new THREE.Color(0x9c4a33).lerp(new THREE.Color(0xd99a72), fade * 0.8);
+  terra.add(at(envBox(w + 0.7, 0.34, d + 0.7), cx, y + h, cz, yaw), roof.getHex());
+  terra.add(at(envBox(w + 0.3, 0.16, d + 0.3), cx, y + h + 0.34, cz, yaw), roof.getHex());
+
+  if (!detail) return;
+
+  const cols = Math.max(2, Math.round(w / 2.4));
+  const rows = Math.max(1, Math.floor((h - 1.4) / 1.9));
+  const ww = 0.62;
+  const wh = 1.05;
+  for (let r = 0; r < rows; r++) {
+    for (let cIdx = 0; cIdx < cols; cIdx++) {
+      const u = (cIdx / (cols - 1 || 1) - 0.5) * (w - 1.4);
+      const wy = y + 1.1 + r * 1.9;
+      const px = cx + ax * u + inx * (d / 2 + 0.02);
+      const pz = cz + az * u + inz * (d / 2 + 0.02);
+      const lit = rng.bool(0.4);
+      if (lit) bulbs.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0xffc07a);
+      else terra.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0x241a18);
+      // shutters, one of them usually swung open
+      const shutter = new THREE.Color(rng.pick([0x41603f, 0x354a57, 0x6c4a35])).lerp(
+        new THREE.Color(0xd99a72),
+        fade * 0.7,
+      );
+      for (const s of [-1, 1]) {
+        const open = rng.bool(0.45);
+        wood.add(
+          at(
+            envBox(open ? 0.1 : ww * 0.52, wh * 1.06, open ? ww * 0.5 : 0.09),
+            px + ax * s * (ww * (open ? 0.62 : 0.27)),
+            wy - wh * 0.03,
+            pz + az * s * (ww * (open ? 0.62 : 0.27)),
+            yaw,
+          ),
+          shutter.getHex(),
+        );
+      }
+      terra.add(at(envBox(ww * 1.28, 0.1, 0.16), px, wy - 0.1, pz, yaw), 0xe6d3b4);
+    }
+  }
+}
+
+/** Catenary of warm bulbs on a thin dark wire. */
+function festoon(
+  wire: EnvBucket,
+  bulbs: EnvBucket,
+  b0: number,
+  b1: number,
+  radius: number,
+  y: number,
+  sag: number,
+  steps: number,
+): void {
+  const pt = (t: number): [number, number, number] => {
+    const b = b0 + (b1 - b0) * t;
+    const r = radius * (0.94 + 0.12 * Math.sin(t * Math.PI));
+    return [Math.cos(b) * r, y - sag * 4 * t * (1 - t), Math.sin(b) * r];
+  };
+  let prev = pt(0);
+  for (let i = 1; i <= steps; i++) {
+    const next = pt(i / steps);
+    wire.add(strut(prev[0], prev[1], prev[2], next[0], next[1], next[2], 0.028, 4), 0x1b1512);
+    if (i % 2 === 0 && i < steps) {
+      bulbs.add(at(envBlob(0.13, 0), next[0], next[1] - 0.14, next[2]), 0xffca86);
+    }
+    prev = next;
+  }
+}
+
+// --- the build -------------------------------------------------------------
+
+function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
+  const root = new THREE.Group();
+  root.name = 'pizza.piazza';
+
+  const m = ctx.materials;
+  const q = ctx.quality;
+  const rng = ctx.rng;
+  const topY = Number.isFinite(ctx.tableTopY) ? ctx.tableTopY : -0.35;
+  const deck = topY - ENV_SINK;
+  const floorY = deck - FLOOR_DROP;
+  const detail = envPick(q, 0, 1, 1);
+  const sides = envPick(q, 8, 12, 16);
+
+  // ---- materials (keyed by look; the library shares them across runs) ----
+  const marbleMat = m.physical('pizza.env.marble', {
+    color: 0xffffff,
+    map: m.texture('pizza.env.marble.map', paintMarble, {
+      size: 512,
+      repeat: [1, 1],
+      wrap: THREE.ClampToEdgeWrapping,
+    }),
+    roughness: 0.24,
+    metalness: 0,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.18,
+  });
+  const ironMat = m.standard('pizza.env.iron', {
+    color: 0xffffff,
+    roughness: 0.44,
+    metalness: 0.62,
+    vertexColors: true,
+  });
+  const paveMat = m.standard('pizza.env.pave', {
+    color: 0xffffff,
+    map: m.texture('pizza.env.pave.map', paintPiazza, { size: 256, repeat: [1, 1] }),
+    roughness: 0.92,
+    metalness: 0,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+  });
+  const terraMat = m.standard('pizza.env.terracotta', {
+    color: 0xffffff,
+    roughness: 0.86,
+    metalness: 0,
+    vertexColors: true,
+  });
+  const woodMat = m.standard('pizza.env.wood', {
+    color: 0xffffff,
+    roughness: 0.72,
+    metalness: 0,
+    vertexColors: true,
+  });
+  const glassMat = m.physical('pizza.env.glass', {
+    color: 0xffffff,
+    roughness: 0.1,
+    metalness: 0,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.06,
+    transparent: true,
+    opacity: 0.86,
+    vertexColors: true,
+  });
+  const greenMat = m.standard('pizza.env.green', {
+    color: 0xffffff,
+    roughness: 0.9,
+    metalness: 0,
+    vertexColors: true,
+    flatShading: true,
+  });
+  const bulbMat = m.standard('pizza.env.bulb', {
+    color: 0x1d1206,
+    emissive: 0xffc98a,
+    emissiveIntensity: 1.3,
+    roughness: 1,
+    metalness: 0,
+    vertexColors: true,
+  });
+
+  const iron = new EnvBucket();
+  const terra = new EnvBucket();
+  const wood = new EnvBucket();
+  const glass = new EnvBucket();
+  const green = new EnvBucket();
+  const bulbs = new EnvBucket();
+
+  // ---- the table ---------------------------------------------------------
+  // Round marble top; its upper surface is the plate's table.
+  const top = puck(TABLE_R * 2, TABLE_T, TABLE_R * 2, {
+    wobble: 0.004,
+    domed: 0,
+    radial: envPick(q, 28, 40, 56),
+    rings: 2,
+    seed: 4,
+    square: 0,
+  });
+  top.translate(0, deck - TABLE_T, 0);
+  const topMesh = new THREE.Mesh(top, marbleMat);
+  topMesh.castShadow = true;
+  topMesh.receiveShadow = true;
+  root.add(topMesh);
+
+  // cast-iron pedestal: collar, turned column, three splayed feet
+  const collarY = deck - TABLE_T - 0.12;
+  iron.add(at(envCyl(0.5, 0.44, 0.12, sides), 0, collarY, 0), 0x2b2523);
+  const colH = collarY - (floorY + 0.16);
+  iron.add(at(envCyl(0.2, 0.27, colH, sides), 0, floorY + 0.16, 0), 0x241f1d);
+  const bulge = envBlob(0.34, detail);
+  bulge.scale(1, 0.62, 1);
+  iron.add(at(bulge, 0, floorY + 0.16 + colH * 0.55, 0), 0x2f2825);
+  iron.add(at(envCyl(0.58, 0.66, 0.16, sides), 0, floorY, 0), 0x241f1d);
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * TAU + 0.5;
+    const foot = envBox(1.15, 0.14, 0.3);
+    foot.translate(0.62, 0, 0);
+    iron.add(at(foot, 0, floorY, 0, -a), 0x2b2523);
+    iron.add(at(envBlob(0.16, 0), Math.cos(a) * 1.14, floorY + 0.12, Math.sin(a) * 1.14), 0x2b2523);
+  }
+
+  // ---- on the table ------------------------------------------------------
+  // All four props keep min(|x|,|z|) > SWEEP_HALF, jittered so nothing is
+  // evenly spaced.
+  const diag = (i: number, r: number): [number, number] => {
+    const a = Math.PI / 4 + (i * Math.PI) / 2 + rng.range(-0.22, 0.22);
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  };
+
+  const [bxx, bzz] = diag(0, 2.5 + rng.range(-0.1, 0.1));
+  chiantiBottle(wood, glass, bxx, deck, bzz, rng.range(0, TAU), sides);
+
+  const [cxx, czz] = diag(1, 2.45 + rng.range(-0.15, 0.15));
+  glass.add(at(envCyl(0.13, 0.2, 0.4, sides), cxx, deck, czz), 0x9d8c33);
+  glass.add(at(envCyl(0.055, 0.12, 0.28, sides), cxx, deck + 0.4, czz), 0xb8a648);
+  iron.add(at(envCyl(0.07, 0.06, 0.07, sides), cxx, deck + 0.67, czz), 0x8d8f92);
+  const pourer = envCyl(0.028, 0.035, 0.26, 6);
+  pourer.rotateZ(0.75);
+  iron.add(at(pourer, cxx + 0.02, deck + 0.68, czz, rng.range(0, TAU)), 0x8d8f92);
+
+  const [sxx, szz] = diag(2, 2.35 + rng.range(-0.12, 0.12));
+  glass.add(at(envCyl(0.19, 0.2, 0.3, sides), sxx, deck, szz), 0xf0e3c4);
+  iron.add(at(envCyl(0.2, 0.205, 0.11, sides), sxx, deck + 0.3, szz), 0x93959a);
+  iron.add(at(envCyl(0.14, 0.19, 0.05, sides), sxx, deck + 0.41, szz), 0x93959a);
+
+  const [vxx, vzz] = diag(3, 2.4 + rng.range(-0.12, 0.12));
+  terra.add(at(envCyl(0.13, 0.17, 0.26, sides), vxx, deck, vzz), 0xc07a4e);
+  for (let i = 0; i < 4; i++) {
+    const stem = envCyl(0.012, 0.016, rng.range(0.22, 0.38), 4);
+    stem.rotateZ(rng.signed() * 0.4);
+    green.add(at(stem, vxx + rng.signed() * 0.05, deck + 0.24, vzz + rng.signed() * 0.05, rng.range(0, TAU)), 0x4d7a3a);
+    const leaf = envBlob(rng.range(0.05, 0.09), 0);
+    leaf.scale(1.5, 0.4, 1);
+    green.add(at(leaf, vxx + rng.signed() * 0.13, deck + rng.range(0.4, 0.58), vzz + rng.signed() * 0.13, rng.range(0, TAU)), 0x5e9b47);
+  }
+
+  // ---- the piazza floor --------------------------------------------------
+  const gseg = envPick(q, 28, 44, 60);
+  const radii = envPick<readonly number[]>(
+    q,
+    [2.6, 7, 13, 19, 25],
+    [2, 4.5, 8, 12.5, 17, 21, 25],
+    [1.8, 3.6, 6.6, 10, 13.5, 17, 20.5, 25],
+  );
+  const ground = envGround(radii, gseg, 0.16, (r) => {
+    const fade = 1 - THREE.MathUtils.smoothstep(r, 12.5, 24.5);
+    const warm = 1 - 0.34 * THREE.MathUtils.smoothstep(r, 3, 20);
+    return [warm, warm * 0.95, warm * 0.9, fade];
+  });
+  ground.translate(0, floorY, 0);
+  const groundMesh = new THREE.Mesh(ground, paveMat);
+  groundMesh.castShadow = false;
+  groundMesh.receiveShadow = false;
+  groundMesh.renderOrder = -1;
+  root.add(groundMesh);
+
+  // ---- mid ground: a bentwood chair pushed in at the table ---------------
+  const chairA = rng.range(0, TAU);
+  const chairR = 5.1;
+  const ccx = Math.cos(chairA) * chairR;
+  const ccz = Math.sin(chairA) * chairR;
+  const chairYaw = -chairA + Math.PI / 2;
+  {
+    const seatY = floorY + 1.55;
+    const legs: Array<[number, number]> = [
+      [-0.44, -0.44],
+      [0.44, -0.44],
+      [-0.4, 0.4],
+      [0.4, 0.4],
+    ];
+    for (const [lx, lz] of legs) {
+      const rx = ccx + lx * Math.cos(chairYaw) - lz * Math.sin(chairYaw);
+      const rz = ccz - lx * Math.sin(chairYaw) - lz * Math.cos(chairYaw);
+      wood.add(strut(rx * 1.06, floorY, rz * 1.06, rx, seatY, rz, 0.05, 5), 0x5b3a24);
+    }
+    wood.add(at(envCyl(0.6, 0.58, 0.09, envPick(q, 10, 14, 18)), ccx, seatY, ccz), 0x6b4527);
+    const backX = ccx + Math.cos(chairA) * 0.42;
+    const backZ = ccz + Math.sin(chairA) * 0.42;
+    const railY = seatY + 1.25;
+    for (const s of [-1, 1]) {
+      const ux = Math.sin(chairA) * 0.34 * s;
+      const uz = -Math.cos(chairA) * 0.34 * s;
+      wood.add(strut(backX + ux, seatY, backZ + uz, backX + ux, railY, backZ + uz, 0.045, 5), 0x5b3a24);
+    }
+    const arch = new THREE.TorusGeometry(0.34, 0.05, 4, envPick(q, 6, 8, 10), Math.PI);
+    arch.rotateY(-chairA + Math.PI / 2);
+    wood.add(at(arch, backX, railY, backZ), 0x5b3a24);
+    const splat = new THREE.TorusGeometry(0.3, 0.035, 4, envPick(q, 5, 7, 9), Math.PI);
+    splat.rotateY(-chairA + Math.PI / 2);
+    wood.add(at(splat, backX, seatY + 0.62, backZ), 0x5b3a24);
+  }
+
+  // pots of cypress and geraniums, scattered around the terrace edge
+  const pots = envPick(q, 2, 4, 5);
+  for (let i = 0; i < pots; i++) {
+    const a = (i / pots) * TAU + rng.range(-0.5, 0.5);
+    const r = rng.range(6.2, 9.4);
+    const px = Math.cos(a) * r;
+    const pz = Math.sin(a) * r;
+    const s = rng.range(0.85, 1.2);
+    const rim = pot(terra, px, floorY, pz, s, sides);
+    if (rng.bool(0.6)) {
+      const cone = envCyl(0.03, 0.44 * s, rng.range(2.6, 3.4) * s, envPick(q, 5, 7, 8));
+      roughen(cone, 0.05, 5, i + 2);
+      green.add(at(cone, px, rim - 0.05, pz, rng.range(0, TAU)), 0x2f5137);
+    } else {
+      const mound = envBlob(0.52 * s, detail);
+      mound.scale(1.2, 0.8, 1.2);
+      green.add(at(mound, px, rim + 0.28 * s, pz), 0x3f6b3c);
+      for (let f = 0; f < 5; f++) {
+        const fa = rng.range(0, TAU);
+        const fr = rng.range(0.1, 0.45) * s;
+        green.add(
+          at(envBlob(rng.range(0.08, 0.13), 0), px + Math.cos(fa) * fr, rim + rng.range(0.4, 0.7) * s, pz + Math.sin(fa) * fr),
+          rng.bool(0.7) ? 0xc1272d : 0xe86a4a,
+        );
+      }
+    }
+  }
+
+  // ---- background: the piazza itself -------------------------------------
+  const blocks = envPick(q, 3, 4, 6);
+  const facadeBearings: number[] = [];
+  for (let i = 0; i < blocks; i++) {
+    const bearing = (i / blocks) * TAU + rng.range(-0.28, 0.28);
+    facadeBearings.push(bearing);
+    const r = rng.range(15.5, 20);
+    const fade = THREE.MathUtils.clamp((r - 14) / 16, 0, 0.5);
+    facade(terra, wood, bulbs, rng, bearing, r, rng.range(7, 11), rng.range(4.6, 6.2), floorY, fade, q !== 'low');
+  }
+
+  // a bell tower and a dome, well back, purely as silhouette
+  if (q !== 'low') {
+    const ba = rng.range(0, TAU);
+    const br = 23;
+    const bxr = Math.cos(ba) * br;
+    const bzr = Math.sin(ba) * br;
+    const towerC = new THREE.Color(0xc08a63).lerp(new THREE.Color(0xd99a72), 0.55).getHex();
+    terra.add(at(envBox(1.9, 6.2, 1.9), bxr, floorY, bzr, -ba), towerC);
+    terra.add(at(envBox(2.3, 0.3, 2.3), bxr, floorY + 6.1, bzr, -ba), 0xa8553c);
+    terra.add(at(envCyl(0.2, 1.25, 1.2, 4), bxr, floorY + 6.4, bzr, -ba + Math.PI / 4), 0xa8553c);
+    bulbs.add(at(envBox(0.55, 0.9, 0.1), bxr + Math.cos(ba + Math.PI) * 0.97, floorY + 4.3, bzr + Math.sin(ba + Math.PI) * 0.97, -ba), 0xffbe7a);
+
+    const da = ba + rng.range(0.35, 0.6);
+    const dxr = Math.cos(da) * (br - 1.5);
+    const dzr = Math.sin(da) * (br - 1.5);
+    terra.add(at(envBox(4.4, 3.4, 4.4), dxr, floorY, dzr, -da), towerC);
+    terra.add(at(envCyl(2.1, 2.4, 0.7, 12), dxr, floorY + 3.4, dzr), 0xa8553c);
+    const dome = new THREE.SphereGeometry(2.05, envPick(q, 10, 14, 18), envPick(q, 5, 7, 9), 0, TAU, 0, Math.PI / 2);
+    terra.add(at(dome, dxr, floorY + 4.05, dzr), 0x8f6a52);
+    terra.add(at(envCyl(0.16, 0.3, 0.7, 8), dxr, floorY + 6.0, dzr), 0xa8553c);
+  }
+
+  // a striped awning over the nearest shopfront
+  if (q !== 'low' && facadeBearings.length) {
+    const ab = facadeBearings[0] + rng.range(-0.1, 0.1);
+    const ar = 12.6;
+    const acx = Math.cos(ab) * ar;
+    const acz = Math.sin(ab) * ar;
+    const yaw = -ab + Math.PI / 2;
+    const ax = Math.sin(ab);
+    const az = -Math.cos(ab);
+    const inx = -Math.cos(ab);
+    const inz = -Math.sin(ab);
+    const strips = 9;
+    const span = 6.3;
+    for (let i = 0; i < strips; i++) {
+      const u = (i / (strips - 1) - 0.5) * span;
+      const slat = envBox(span / strips + 0.02, 0.09, 2.4);
+      slat.rotateX(0.34);
+      terra.add(
+        at(slat, acx + ax * u + inx * 1.1, floorY + 3.5, acz + az * u + inz * 1.1, yaw),
+        i % 2 === 0 ? 0xefe2c8 : 0xb03a34,
+      );
+      wood.add(
+        at(envBox(span / strips + 0.02, 0.34, 0.08), acx + ax * u + inx * 2.28, floorY + 3.16, acz + az * u + inz * 2.28, yaw),
+        i % 2 === 0 ? 0xefe2c8 : 0xb03a34,
+      );
+    }
+    for (const s of [-1, 1]) {
+      wood.add(
+        strut(
+          acx + ax * (span / 2) * s + inx * 2.2,
+          floorY + 3.2,
+          acz + az * (span / 2) * s + inz * 2.2,
+          acx + ax * (span / 2) * s,
+          floorY + 4.1,
+          acz + az * (span / 2) * s,
+          0.05,
+          5,
+        ),
+        0x2b2523,
+      );
+    }
+  }
+
+  // festoon lights, strung between the facades
+  const strands = envPick(q, 1, 2, 3);
+  for (let i = 0; i < strands; i++) {
+    const b0 = rng.range(0, TAU);
+    const b1 = b0 + rng.range(1.0, 1.9);
+    festoon(iron, bulbs, b0, b1, rng.range(13.5, 16.5), floorY + 4.5, rng.range(0.9, 1.5), envPick(q, 6, 9, 12));
+  }
+
+  // ---- assemble ----------------------------------------------------------
+  const meshes: Array<THREE.Mesh | null> = [
+    iron.build(ironMat, false, true),
+    terra.build(terraMat, false, false),
+    wood.build(woodMat, false, false),
+    glass.build(glassMat, false, false),
+    green.build(greenMat, false, false),
+    bulbs.build(bulbMat, false, false),
+  ];
+  for (const mesh of meshes) if (mesh) root.add(mesh);
+  return root;
 }
 
 // ---------------------------------------------------------------------------
@@ -768,7 +1413,6 @@ export const pizzaTheme: ThemeDef = {
   ],
   hero: [0, 1, 2, 3, 5, 4],
   plate: pizzaPlate,
-  // TODO(environment): replaced by the per-theme environment builder.
-  // scenery: pizzaScenery,
+  environment: pizzaEnvironment,
   ambience: 'pizza',
 };

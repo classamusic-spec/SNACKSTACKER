@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Snackery — Stack the snack.</title>
+    <meta name="description" content="Snackery is a 3D food stacking game. One tap, infinite tower, zero friction." />
+    <meta name="theme-color" content="#1b1116" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Snackery" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+
+    <meta property="og:title" content="Snackery — Stack the snack." />
+    <meta property="og:description" content="A premium 3D food stacking game." />
+    <meta property="og:type" content="website" />
+
+    <style>
+      /* Critical shell styles: no white flash before the bundle evaluates. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #17101a;
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      body {
+        touch-action: manipulation;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #gl {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      /* The UI is a thin layer over the game: taps fall through to the canvas
+         and only real controls opt back in. */
+      #app {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+      #nojs {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font: 500 17px/1.5 -apple-system, "SF Pro Text", system-ui, sans-serif;
+        text-align: center;
+        padding: 24px;
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-p9NPSh8A.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/three-D2mNG-g0.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-CzXBWOK4.css">
+  </head>
+  <body>
+    <canvas id="gl"></canvas>
+    <div id="app"></div>
+    <noscript><div id="nojs">Snackery needs JavaScript to run.</div></noscript>
+  </body>
+</html>

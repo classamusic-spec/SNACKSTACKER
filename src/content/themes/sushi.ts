@@ -7,10 +7,21 @@
  * (a painted fat-striation albedo, clearcoat and a little transmission).
  */
 import * as THREE from 'three';
-import type { FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { EnvBuildCtx, FoodBuildCtx, FoodDef, ThemeDef } from '../api';
+import type { QualityTier } from '../../core/types';
 import { Rng } from '../../core/rng';
 import { TAU, clamp } from '../../core/math';
-import { mergeAll, mesh, pillow, puck, roughen, roundedBox, droopSlab, tintGeometry } from '../kit';
+import {
+  fbm2,
+  mergeAll,
+  mesh,
+  pillow,
+  puck,
+  roughen,
+  roundedBox,
+  droopSlab,
+  tintGeometry,
+} from '../kit';
 import {
   areaRatio,
   fillFlat,
@@ -31,7 +42,6 @@ import {
   softStroke,
   speckle,
   topSampler,
-  weave,
 } from './shared-fresh';
 
 // ---------------------------------------------------------------------------
@@ -196,11 +206,6 @@ function paintTamago(c: CanvasRenderingContext2D, size: number): void {
   }
   speckle(c, size, 90, ['#FFF0B8', '#D9A32C'], 0.002, 0.007, 12, 0.5);
   noiseWash(c, size, 5, 0.12, 33, '#8A5F14', '#FFF2C4');
-}
-
-function paintTatami(c: CanvasRenderingContext2D, size: number): void {
-  weave(c, size, 16, '#C9B98A', '#B7A578', '#8E7F58');
-  noiseWash(c, size, 4, 0.2, 17, '#4A3F26', '#E8DDBC');
 }
 
 // ---------------------------------------------------------------------------
@@ -852,54 +857,722 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
   return g;
 }
 
-function buildScenery(ctx: FoodBuildCtx): THREE.Object3D {
-  const g = new THREE.Group();
-  const w = Math.max(ctx.width, 1);
-  const groundY = -PLATE_T;
+// ===========================================================================
+// environment — a hinoki counter in a lantern-lit garden
+// ===========================================================================
 
-  const tatami = ctx.materials.standard('sushi.tatami', {
-    color: 0xbcae83,
-    map: ctx.materials.texture('sushi.tatami.albedo', paintTatami, { size: 256, repeat: [3, 3] }),
-    roughness: 0.88,
-    metalness: 0,
-  });
-  const wood = ctx.materials.standard('sushi.chopstick', {
-    color: 0x3a2a22,
-    roughness: 0.52,
-    metalness: 0,
-  });
-  const ceramic = ctx.materials.physical('sushi.rest', {
-    color: 0x1d2b33,
-    roughness: 0.24,
-    metalness: 0,
-    clearcoat: 0.7,
-    clearcoatRoughness: 0.12,
-  });
+/**
+ * Layout contract, in priority order:
+ *
+ *  1. The counter top lands on `ctx.tableTopY` (a hair below it, so it can
+ *     never punch through the plate and never z-fights the contact shadow).
+ *  2. Nothing rises above that plane inside `SWEEP_HALF` of either axis —
+ *     that is the corridor a sliding layer sweeps through — so the counter
+ *     props all live out on the diagonals where a layer can never reach.
+ *  3. The garden floor is `FLOOR_DROP` below the counter and dissolves into
+ *     the sweep with a baked vertex alpha, so the backdrop still owns the top
+ *     of frame and there is no hard horizon line.
+ *
+ * Everything is merged into eight vertex-coloured draws. A whole family of
+ * props — stone lantern, basin, rocks, moss, the folded cloth — is one mesh.
+ */
 
-  // tatami weave disc, sitting just under the board
-  const matR = w * 1.85;
-  const disc = new THREE.CylinderGeometry(matR, matR, 0.06, seg(ctx, 48, 36, 20), 1);
-  disc.translate(0, groundY - 0.03, 0);
-  const dm = mesh(disc, tatami, { cast: false, receive: true });
-  g.add(dm);
+const ENV_SINK = 0.0025;
+const COUNTER_W = 9.2;
+const COUNTER_D = 4.7;
+const COUNTER_T = 0.52;
+const FLOOR_DROP = 3.1;
+/** Half-width of the axis-aligned corridor a sliding layer sweeps through. */
+const SWEEP_HALF = 1.45;
 
-  // chopstick rest
-  const rest = pillow(w * 0.16, 0.075, w * 0.08, { round: 0.7, segments: 14, squash: 0.4 });
-  rest.translate(w * 0.86, groundY, -w * 0.42);
-  g.add(mesh(rest, ceramic));
+const envPick = <T>(q: QualityTier, low: T, med: T, high: T): T =>
+  q === 'low' ? low : q === 'medium' ? med : high;
 
-  // a pair of chopsticks resting on it
-  const len = w * 1.05;
-  for (let i = 0; i < 2; i++) {
-    const off = (i - 0.5) * 0.055;
-    const stick = new THREE.CylinderGeometry(0.017, 0.026, len, 7, 1);
-    stick.rotateZ(Math.PI / 2);
-    stick.rotateY(-0.34);
-    stick.translate(w * 0.86 + len * 0.12, groundY + 0.075, -w * 0.42 + off + len * 0.28);
-    g.add(mesh(stick, wood));
+/**
+ * Merge bucket. Each part carries its colour in vertex colours, so a dozen
+ * differently-tinted props collapse into a single draw call.
+ */
+class EnvBucket {
+  private readonly parts: THREE.BufferGeometry[] = [];
+
+  add(geo: THREE.BufferGeometry | null, color: number): void {
+    if (!geo) return;
+    const pos = geo.getAttribute('position');
+    if (!pos || pos.count < 3) {
+      geo.dispose();
+      return;
+    }
+    let g = geo;
+    // mergeGeometries refuses a mix of indexed and non-indexed inputs, and the
+    // kit hands back both kinds, so everything is flattened on the way in.
+    if (g.index) {
+      const flat = g.toNonIndexed();
+      g.dispose();
+      g = flat;
+    }
+    tintGeometry(g, color);
+    this.parts.push(g);
   }
 
+  build(mat: THREE.Material, cast: boolean, receive: boolean): THREE.Mesh | null {
+    const merged = mergeAll(this.parts);
+    this.parts.length = 0;
+    if (!merged) return null;
+    const m = new THREE.Mesh(merged, mat);
+    m.castShadow = cast;
+    m.receiveShadow = receive;
+    return m;
+  }
+}
+
+/** Box with its base on y = 0. */
+function envBox(w: number, h: number, d: number): THREE.BufferGeometry {
+  const hh = Math.max(h, 1e-3);
+  const g = new THREE.BoxGeometry(Math.max(w, 1e-3), hh, Math.max(d, 1e-3));
+  g.translate(0, hh / 2, 0);
   return g;
+}
+
+/** Cylinder / cone with its base on y = 0. */
+function envCyl(rTop: number, rBot: number, h: number, sides: number): THREE.BufferGeometry {
+  const hh = Math.max(h, 1e-3);
+  const g = new THREE.CylinderGeometry(
+    Math.max(rTop, 0),
+    Math.max(rBot, 1e-4),
+    hh,
+    Math.max(3, Math.round(sides)),
+    1,
+  );
+  g.translate(0, hh / 2, 0);
+  return g;
+}
+
+/** Faceted blob, centred on its own origin. */
+function envBlob(r: number, detail: number): THREE.BufferGeometry {
+  return new THREE.IcosahedronGeometry(Math.max(r, 1e-3), Math.max(0, detail));
+}
+
+/** Author a prop at the origin with its base on y = 0, then post it here. */
+function at(g: THREE.BufferGeometry, x: number, y: number, z: number, yaw = 0): THREE.BufferGeometry {
+  if (yaw) g.rotateY(yaw);
+  g.translate(x, y, z);
+  return g;
+}
+
+/**
+ * A ring-tessellated ground disc with per-vertex RGBA, so the far rim can fade
+ * to nothing instead of ending on a hard edge. Planar UVs in world units keep
+ * the texture tiling even across every ring.
+ */
+function envGround(
+  radii: readonly number[],
+  segments: number,
+  uvScale: number,
+  shade: (radius: number) => readonly [number, number, number, number],
+): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const uv: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  const push = (x: number, z: number, r: number): void => {
+    pos.push(x, 0, z);
+    nrm.push(0, 1, 0);
+    uv.push(x * uvScale, z * uvScale);
+    const s = shade(r);
+    col.push(s[0], s[1], s[2], s[3]);
+  };
+
+  push(0, 0, 0);
+  for (let ri = 0; ri < radii.length; ri++) {
+    const r = radii[ri];
+    for (let s = 0; s < segments; s++) {
+      const a = (s / segments) * TAU;
+      push(Math.cos(a) * r, Math.sin(a) * r, r);
+    }
+  }
+  for (let s = 0; s < segments; s++) idx.push(0, 1 + ((s + 1) % segments), 1 + s);
+  for (let ri = 0; ri < radii.length - 1; ri++) {
+    const a0 = 1 + ri * segments;
+    const b0 = a0 + segments;
+    for (let s = 0; s < segments; s++) {
+      const s1 = (s + 1) % segments;
+      idx.push(a0 + s, a0 + s1, b0 + s);
+      idx.push(a0 + s1, b0 + s1, b0 + s);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  g.setIndex(idx);
+  return g;
+}
+
+// --- painted surfaces ------------------------------------------------------
+
+/** Hinoki: pale blond, dead-straight, very fine. Never a flat tan. */
+function paintHinoki(c: CanvasRenderingContext2D, size: number): void {
+  const g = c.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, '#F2E7CE');
+  g.addColorStop(0.5, '#EADEC1');
+  g.addColorStop(1, '#F0E4C8');
+  c.fillStyle = g;
+  c.fillRect(0, 0, size, size);
+
+  const rng = new Rng(0x51ce);
+  for (let i = 0; i < 240; i++) {
+    const y = rng.next() * size;
+    const dark = rng.bool(0.62);
+    c.strokeStyle = dark
+      ? `rgba(190,161,110,${rng.range(0.06, 0.2).toFixed(3)})`
+      : `rgba(255,250,232,${rng.range(0.08, 0.26).toFixed(3)})`;
+    c.lineWidth = size * rng.range(0.0016, 0.006);
+    c.beginPath();
+    for (let x = 0; x <= size; x += size / 12) {
+      const yy = y + fbm2(x * 0.008 + i * 3.1, i * 0.6, 2) * size * 0.01;
+      if (x === 0) c.moveTo(x, yy);
+      else c.lineTo(x, yy);
+    }
+    c.stroke();
+  }
+  // a couple of soft knots so the grain has somewhere to come from
+  for (let k = 0; k < 3; k++) {
+    const kx = rng.next() * size;
+    const ky = rng.next() * size;
+    for (let r = 1; r < 5; r++) {
+      c.strokeStyle = `rgba(176,146,98,${(0.16 / r).toFixed(3)})`;
+      c.lineWidth = size * 0.004;
+      c.beginPath();
+      c.ellipse(kx, ky, size * 0.012 * r * 2.4, size * 0.012 * r, 0, 0, TAU);
+      c.stroke();
+    }
+  }
+}
+
+/** Matching relief so the satin finish catches the grain, not a flat sheen. */
+function paintHinokiBump(c: CanvasRenderingContext2D, size: number): void {
+  c.fillStyle = '#808080';
+  c.fillRect(0, 0, size, size);
+  const rng = new Rng(0x51cf);
+  for (let i = 0; i < 200; i++) {
+    const y = rng.next() * size;
+    c.strokeStyle = rng.bool() ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.16)';
+    c.lineWidth = size * rng.range(0.002, 0.006);
+    c.beginPath();
+    c.moveTo(0, y);
+    c.lineTo(size, y + fbm2(i * 2.3, 0.7, 2) * size * 0.01);
+    c.stroke();
+  }
+}
+
+/** Raked gravel, seen at night: near-black with a cool sheen along the rake. */
+function paintGravel(c: CanvasRenderingContext2D, size: number): void {
+  c.fillStyle = '#232F3A';
+  c.fillRect(0, 0, size, size);
+  const rng = new Rng(0x6ea5);
+  for (let i = 0; i < 6; i++) {
+    const y = (i / 6) * size + rng.range(-4, 4);
+    c.strokeStyle = 'rgba(120,152,176,0.13)';
+    c.lineWidth = size * 0.02;
+    c.beginPath();
+    for (let x = 0; x <= size; x += size / 16) {
+      c.lineTo(x, y + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.012);
+    }
+    c.stroke();
+    c.strokeStyle = 'rgba(6,10,14,0.3)';
+    c.lineWidth = size * 0.012;
+    c.beginPath();
+    for (let x = 0; x <= size; x += size / 16) {
+      c.lineTo(x, y + size * 0.028 + Math.sin((x / size) * TAU * 1.5 + i) * size * 0.012);
+    }
+    c.stroke();
+  }
+  for (let i = 0; i < 900; i++) {
+    const s = size * rng.range(0.002, 0.006);
+    c.fillStyle = rng.bool(0.5) ? 'rgba(146,171,190,0.16)' : 'rgba(8,12,17,0.3)';
+    c.beginPath();
+    c.arc(rng.next() * size, rng.next() * size, s, 0, TAU);
+    c.fill();
+  }
+}
+
+// --- petals ----------------------------------------------------------------
+
+interface Petal {
+  x: number;
+  z: number;
+  top: number;
+  fall: number;
+  speed: number;
+  sway: number;
+  phase: number;
+  spin: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * A slow drift of blossom past the camera. One mesh, one draw, animated on the
+ * CPU from an absolute clock so repeated render passes in a frame are
+ * idempotent. Sixty quads is nothing; the drift is what sells the night.
+ */
+function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material): THREE.Mesh | null {
+  if (count <= 0) return null;
+  const verts = count * 6;
+  const position = new Float32Array(verts * 3);
+  const normal = new Float32Array(verts * 3);
+  for (let i = 0; i < verts; i++) normal[i * 3 + 1] = 1;
+
+  const petals: Petal[] = [];
+  for (let i = 0; i < count; i++) {
+    const a = rng.range(0, TAU);
+    // biased outwards so nothing drifts through the tower itself
+    const r = 3.2 + rng.next() * rng.next() * 6.4;
+    petals.push({
+      x: Math.cos(a) * r,
+      z: Math.sin(a) * r,
+      top: deck + rng.range(3.2, 6.4),
+      fall: rng.range(4.2, 7.4),
+      speed: rng.range(0.4, 0.8),
+      sway: rng.range(0.16, 0.5),
+      phase: rng.range(0, TAU),
+      spin: rng.range(0.45, 1.5) * (rng.bool() ? 1 : -1),
+      w: rng.range(0.075, 0.14),
+      h: rng.range(0.05, 0.095),
+    });
+  }
+
+  const geo = new THREE.BufferGeometry();
+  const attr = new THREE.BufferAttribute(position, 3);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('position', attr);
+  geo.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, deck + 2, 0), 14);
+
+  const write = (t: number): void => {
+    if (!Number.isFinite(t)) return;
+    for (let i = 0; i < petals.length; i++) {
+      const p = petals[i];
+      const cycle = ((t * p.speed) / p.fall + p.phase) % 1;
+      const cy = p.top - (cycle < 0 ? cycle + 1 : cycle) * p.fall;
+      const cx = p.x + Math.sin(t * 1.5 + p.phase) * p.sway;
+      const cz = p.z + Math.cos(t * 1.13 + p.phase * 1.7) * p.sway;
+      const ang = t * p.spin + p.phase;
+      const tilt = 0.5 + 0.45 * Math.sin(t * 1.9 + p.phase);
+      const ux = Math.cos(ang) * p.w;
+      const uz = Math.sin(ang) * p.w;
+      const vh = Math.cos(tilt) * p.h;
+      const vx = -Math.sin(ang) * vh;
+      const vz = Math.cos(ang) * vh;
+      const vy = Math.sin(tilt) * p.h;
+
+      const o = i * 18;
+      const set = (k: number, sx: number, sy: number): void => {
+        position[o + k] = cx + ux * sx + vx * sy;
+        position[o + k + 1] = cy + vy * sy;
+        position[o + k + 2] = cz + uz * sx + vz * sy;
+      };
+      set(0, -1, -1);
+      set(3, 1, -1);
+      set(6, 1, 1);
+      set(9, -1, -1);
+      set(12, 1, 1);
+      set(15, -1, 1);
+    }
+    attr.needsUpdate = true;
+  };
+
+  write(0);
+  const m = new THREE.Mesh(geo, mat);
+  m.frustumCulled = false;
+  m.castShadow = false;
+  m.receiveShadow = false;
+  m.renderOrder = 3;
+  m.onBeforeRender = () => write(performance.now() * 0.001);
+  return m;
+}
+
+// --- props -----------------------------------------------------------------
+
+/** Base block, shaft, fire box, flared roof, finial. Reads at 120px. */
+function stoneLantern(stone: EnvBucket, glow: EnvBucket, s: number, x: number, y: number, z: number, yaw: number, tone: number): void {
+  let h = 0;
+  stone.add(at(envCyl(0.5 * s, 0.62 * s, 0.26 * s, 8), x, y + h, z, yaw), tone);
+  h += 0.24 * s;
+  stone.add(at(envCyl(0.17 * s, 0.2 * s, 0.9 * s, 8), x, y + h, z, yaw), tone);
+  h += 0.88 * s;
+  stone.add(at(envCyl(0.44 * s, 0.5 * s, 0.15 * s, 8), x, y + h, z, yaw), tone);
+  h += 0.14 * s;
+  stone.add(at(envCyl(0.4 * s, 0.42 * s, 0.5 * s, 8), x, y + h, z, yaw), tone);
+  glow.add(at(envCyl(0.3 * s, 0.31 * s, 0.36 * s, 8), x, y + h + 0.07 * s, z, yaw), 0xffcf96);
+  h += 0.5 * s;
+  stone.add(at(envCyl(0.82 * s, 0.86 * s, 0.07 * s, 8), x, y + h, z, yaw), tone);
+  h += 0.06 * s;
+  stone.add(at(envCyl(0.14 * s, 0.84 * s, 0.42 * s, 8), x, y + h, z, yaw), tone);
+  h += 0.4 * s;
+  const cap = envBlob(0.14 * s, 0);
+  stone.add(at(cap, x, y + h + 0.1 * s, z), tone);
+}
+
+/** Dark trunk, a couple of limbs, a cloud of pink. */
+function cherryTree(
+  wood: EnvBucket,
+  blossom: EnvBucket,
+  rng: Rng,
+  detail: number,
+  x: number,
+  y: number,
+  z: number,
+  scale: number,
+  fade: number,
+): void {
+  const trunkH = 2.5 * scale;
+  const lean = rng.signed() * 0.09;
+  const trunk = envCyl(0.13 * scale, 0.25 * scale, trunkH, 7);
+  trunk.rotateZ(lean);
+  wood.add(at(trunk, x, y, z), 0x1b1620);
+
+  const limbs = detail > 0 ? 3 : 2;
+  for (let i = 0; i < limbs; i++) {
+    const a = rng.range(0, TAU);
+    const len = rng.range(0.7, 1.3) * scale;
+    const limb = envCyl(0.045 * scale, 0.1 * scale, len, 5);
+    limb.rotateZ(rng.range(0.5, 0.95));
+    limb.rotateY(a);
+    wood.add(at(limb, x + lean * -trunkH, y + trunkH * rng.range(0.55, 0.85), z), 0x1b1620);
+  }
+
+  const blobs = detail > 0 ? 5 : 3;
+  const pinks = [0xf6b6c8, 0xefa2ba, 0xffc9d6, 0xe294ae];
+  for (let i = 0; i < blobs; i++) {
+    const a = rng.range(0, TAU);
+    const rr = rng.range(0, 1.15) * scale;
+    const size = rng.range(0.72, 1.28) * scale;
+    const blob = envBlob(size, detail);
+    blob.scale(1, rng.range(0.62, 0.86), 1);
+    const tint = new THREE.Color(rng.pick(pinks));
+    tint.lerp(new THREE.Color(0x16242f), fade);
+    blossom.add(
+      at(blob, x + Math.cos(a) * rr, y + trunkH + rng.range(0.15, 0.85) * scale, z + Math.sin(a) * rr),
+      tint.getHex(),
+    );
+  }
+}
+
+/** Posts and three rails, built straight then swung out to a bearing. */
+function bambooFence(
+  wood: EnvBucket,
+  rng: Rng,
+  radius: number,
+  bearing: number,
+  span: number,
+  y: number,
+  tone: number,
+): void {
+  const h = 1.35;
+  const bays = Math.max(2, Math.round(span / 1.5));
+  const cx = Math.cos(bearing) * radius;
+  const cz = Math.sin(bearing) * radius;
+  const yaw = -bearing;
+  for (let i = 0; i <= bays; i++) {
+    const u = (i / bays - 0.5) * span;
+    const post = envCyl(0.055, 0.065, h * rng.range(0.95, 1.05), 5);
+    wood.add(at(post, cx + Math.cos(yaw) * u, y, cz - Math.sin(yaw) * u), tone);
+  }
+  for (let r = 0; r < 3; r++) {
+    const rail = envCyl(0.045, 0.045, span, 5);
+    rail.rotateZ(Math.PI / 2);
+    rail.rotateY(yaw);
+    wood.add(at(rail, cx, y + 0.28 + r * 0.44, cz), tone);
+  }
+}
+
+/** Glowing paper, a dark lattice in front of it, a heavy eave over the top. */
+function shojiWall(
+  wood: EnvBucket,
+  glow: EnvBucket,
+  radius: number,
+  bearing: number,
+  span: number,
+  y: number,
+  bars: number,
+): void {
+  const h = 3.3;
+  const cx = Math.cos(bearing) * radius;
+  const cz = Math.sin(bearing) * radius;
+  const yaw = -bearing + Math.PI / 2;
+  const nx = Math.cos(yaw);
+  const nz = -Math.sin(yaw);
+
+  glow.add(at(envBox(span, h, 0.1), cx, y + 0.5, cz, yaw), 0xffb877);
+  // lattice: sits a few centimetres proud of the paper on the camera side
+  const px = -Math.cos(bearing) * 0.09;
+  const pz = -Math.sin(bearing) * 0.09;
+  for (let i = 0; i <= bars; i++) {
+    const u = (i / bars - 0.5) * span;
+    wood.add(at(envBox(0.07, h, 0.06), cx + nx * u + px, y + 0.5, cz + nz * u + pz, yaw), 0x140f0d);
+  }
+  for (let i = 0; i < 3; i++) {
+    wood.add(
+      at(envBox(span, 0.07, 0.06), cx + px, y + 0.5 + (i + 1) * (h / 4), cz + pz, yaw),
+      0x140f0d,
+    );
+  }
+  wood.add(at(envBox(span + 0.5, 0.16, 0.14), cx + px, y + 0.5 + h, cz + pz, yaw), 0x140f0d);
+  // eave
+  wood.add(at(envBox(span + 1.2, 0.2, 1.0), cx, y + 0.5 + h + 0.16, cz, yaw), 0x0e0b0a);
+  // posts down to the ground
+  for (const s of [-1, 1]) {
+    wood.add(at(envBox(0.16, h + 0.6, 0.16), cx + nx * (span / 2) * s, y, cz + nz * (span / 2) * s, yaw), 0x140f0d);
+  }
+}
+
+// --- the build -------------------------------------------------------------
+
+function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
+  const root = new THREE.Group();
+  root.name = 'sushi.garden';
+
+  const m = ctx.materials;
+  const q = ctx.quality;
+  const rng = ctx.rng;
+  const topY = Number.isFinite(ctx.tableTopY) ? ctx.tableTopY : -0.3;
+  const plate = Number.isFinite(ctx.plateWidth) && ctx.plateWidth > 0.4 ? ctx.plateWidth : 3.24;
+  const deck = topY - ENV_SINK;
+  const floorY = deck - FLOOR_DROP;
+  const detail = envPick(q, 0, 1, 1);
+
+  // ---- materials (keyed by look; the library shares them across runs) ----
+  const hinokiMat = m.standard('sushi.env.hinoki', {
+    color: 0xffffff,
+    map: m.texture('sushi.env.hinoki.map', paintHinoki, { size: 256, repeat: [0.1, 0.62] }),
+    bumpMap: m.dataTexture('sushi.env.hinoki.bump', paintHinokiBump, { size: 256, repeat: [0.1, 0.62] }),
+    bumpScale: 0.004,
+    roughness: 0.4,
+    metalness: 0,
+    vertexColors: true,
+  });
+  const gravelMat = m.standard('sushi.env.gravel', {
+    color: 0xffffff,
+    map: m.texture('sushi.env.gravel.map', paintGravel, { size: 256, repeat: [1, 1] }),
+    roughness: 0.96,
+    metalness: 0,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+  });
+  const matteMat = m.standard('sushi.env.matte', {
+    color: 0xffffff,
+    roughness: 0.94,
+    metalness: 0,
+    vertexColors: true,
+  });
+  const woodMat = m.standard('sushi.env.wood', {
+    color: 0xffffff,
+    roughness: 0.6,
+    metalness: 0,
+    vertexColors: true,
+  });
+  const satinMat = m.physical('sushi.env.satin', {
+    color: 0xffffff,
+    roughness: 0.18,
+    metalness: 0,
+    clearcoat: 0.7,
+    clearcoatRoughness: 0.1,
+    vertexColors: true,
+  });
+  const blossomMat = m.physical('sushi.env.blossom', {
+    color: 0xffffff,
+    roughness: 0.86,
+    metalness: 0,
+    sheen: 0.6,
+    sheenColor: 0xffd7e2,
+    sheenRoughness: 0.6,
+    vertexColors: true,
+    flatShading: true,
+  });
+  const glowMat = m.standard('sushi.env.glow', {
+    color: 0x120a06,
+    emissive: 0xffb877,
+    emissiveIntensity: 1.15,
+    roughness: 1,
+    metalness: 0,
+    vertexColors: true,
+  });
+  const petalMat = m.standard('sushi.env.petal', {
+    color: 0x1a1014,
+    emissive: 0xffb8cc,
+    emissiveIntensity: 0.62,
+    roughness: 1,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  const counter = new EnvBucket();
+  const matte = new EnvBucket();
+  const wood = new EnvBucket();
+  const satin = new EnvBucket();
+  const blossom = new EnvBucket();
+  const glow = new EnvBucket();
+
+  // ---- the counter -------------------------------------------------------
+  // A single thick slab of hinoki. Its top surface is the plate's table.
+  const slabR = envPick(q, 1, 2, 3);
+  const slab = roundedBox(COUNTER_W, COUNTER_T, COUNTER_D, 0.05, slabR);
+  counter.add(at(slab, 0, deck - COUNTER_T, 0), 0xffffff);
+  // end grain: a hair proud of each short end so the edge reads as a cut face
+  for (const s of [-1, 1]) {
+    counter.add(
+      at(envBox(0.05, COUNTER_T * 0.92, COUNTER_D * 0.985), s * (COUNTER_W / 2), deck - COUNTER_T * 0.96, 0),
+      0xd8c8a4,
+    );
+  }
+  // recessed base, so the slab reads as thick and floating
+  const baseH = FLOOR_DROP - COUNTER_T;
+  counter.add(at(envBox(COUNTER_W * 0.78, baseH, COUNTER_D * 0.5), 0, floorY, 0), 0x6d6152);
+  counter.add(at(envBox(COUNTER_W * 0.82, 0.09, COUNTER_D * 0.56), 0, floorY, 0), 0x4a4238);
+
+  // ---- on the counter ----------------------------------------------------
+  // Everything here keeps min(|x|,|z|) > SWEEP_HALF so a sliding layer can
+  // never pass through it.
+  const dishX = 2.35 + rng.range(-0.1, 0.15);
+  const dishZ = SWEEP_HALF + 0.25 + rng.range(0, 0.15);
+  satin.add(at(envCyl(0.42, 0.36, 0.11, 20), dishX, deck, dishZ), 0x0b1013);
+  satin.add(at(envCyl(0.34, 0.34, 0.02, 20), dishX, deck + 0.075, dishZ), 0x241a12);
+
+  const restX = -2.5 + rng.range(-0.15, 0.15);
+  const restZ = -(SWEEP_HALF + 0.3 + rng.range(0, 0.2));
+  const rest = pillow(0.44, 0.11, 0.17, { round: 0.75, segments: 12, squash: 0.45 });
+  satin.add(at(rest, restX, deck, restZ, rng.range(-0.3, 0.3)), 0x22333c);
+  for (let i = 0; i < 2; i++) {
+    const stick = envCyl(0.017, 0.026, 1.55, 6);
+    stick.rotateZ(Math.PI / 2);
+    stick.rotateY(-0.42);
+    satin.add(at(stick, restX + 0.12, deck + 0.1 + i * 0.036, restZ + 0.05 + i * 0.055), 0x150f0d);
+  }
+
+  // a folded indigo cloth
+  const clothX = -(plate * 0.62 + 1.5);
+  const clothZ = SWEEP_HALF + 0.4;
+  matte.add(at(envBox(0.95, 0.05, 0.62), clothX, deck, clothZ, 0.22), 0x14243f);
+  matte.add(at(envBox(0.86, 0.05, 0.5), clothX + 0.04, deck + 0.05, clothZ - 0.02, 0.18), 0x1b2f4e);
+
+  // a single branch in a vase — the ikebana
+  const vaseX = 3.0 + rng.range(-0.2, 0.2);
+  const vaseZ = -(SWEEP_HALF + 0.45 + rng.range(0, 0.3));
+  satin.add(at(envCyl(0.17, 0.24, 0.62, 14), vaseX, deck, vaseZ), 0x16323a);
+  satin.add(at(envCyl(0.2, 0.17, 0.08, 14), vaseX, deck + 0.6, vaseZ), 0x1d3f47);
+  const branch = envCyl(0.014, 0.032, 1.15, 5);
+  branch.rotateZ(0.22);
+  wood.add(at(branch, vaseX, deck + 0.55, vaseZ), 0x241a1c);
+  for (let i = 0; i < 3; i++) {
+    const twig = envCyl(0.009, 0.018, rng.range(0.28, 0.46), 4);
+    twig.rotateZ(rng.range(0.6, 1.1) * (i % 2 ? 1 : -1));
+    twig.rotateY(rng.range(0, TAU));
+    wood.add(at(twig, vaseX - 0.13 + i * 0.09, deck + 0.9 + i * 0.22, vaseZ), 0x241a1c);
+    blossom.add(
+      at(envBlob(rng.range(0.07, 0.11), detail), vaseX - 0.2 + i * 0.16, deck + 1.05 + i * 0.24, vaseZ + rng.signed() * 0.12),
+      0xf7bcca,
+    );
+  }
+
+  // ---- the garden floor --------------------------------------------------
+  const gseg = envPick(q, 28, 44, 60);
+  const radii = envPick<readonly number[]>(
+    q,
+    [2.4, 7, 13, 19, 25],
+    [1.8, 4.2, 8, 12.5, 17, 21, 25],
+    [1.6, 3.4, 6.4, 10, 13.5, 17, 20.5, 25],
+  );
+  const ground = envGround(radii, gseg, 0.13, (r) => {
+    const fade = 1 - THREE.MathUtils.smoothstep(r, 12.5, 24.5);
+    const dark = 1 - 0.42 * THREE.MathUtils.smoothstep(r, 3, 20);
+    return [dark, dark * 0.99, dark * 1.02, fade];
+  });
+  ground.translate(0, floorY, 0);
+  const groundMesh = new THREE.Mesh(ground, gravelMat);
+  groundMesh.castShadow = false;
+  groundMesh.receiveShadow = false;
+  groundMesh.renderOrder = -1;
+  root.add(groundMesh);
+
+  // ---- mid ground --------------------------------------------------------
+  // tsukubai: a squat stone basin, a bamboo spout, a black disc of water
+  const basinA = rng.range(2.5, 3.1);
+  const bx = Math.cos(basinA) * 9.2;
+  const bz = Math.sin(basinA) * 9.2;
+  matte.add(at(envBlob(0.85, detail), bx, floorY + 0.18, bz), 0x2b3138);
+  matte.add(at(envCyl(0.76, 0.7, 0.62, 10), bx, floorY + 0.4, bz), 0x39414a);
+  satin.add(at(envCyl(0.62, 0.62, 0.03, 12), bx, floorY + 0.99, bz), 0x0a1116);
+  const spoutBase = envCyl(0.075, 0.09, 1.5, 6);
+  wood.add(at(spoutBase, bx - 1.0, floorY, bz + 0.5), 0x6f6b47);
+  const spout = envCyl(0.06, 0.07, 1.1, 6);
+  spout.rotateZ(Math.PI / 2 - 0.28);
+  wood.add(at(spout, bx - 0.95, floorY + 1.42, bz + 0.5), 0x7d7850);
+  satin.add(at(envCyl(0.012, 0.012, 0.42, 4), bx - 0.12, floorY + 1.02, bz + 0.42), 0x8fb6c4);
+
+  // rocks and moss, never evenly spaced
+  const rocks = envPick(q, 3, 6, 8);
+  for (let i = 0; i < rocks; i++) {
+    const a = rng.range(0, TAU);
+    const r = rng.range(6.5, 13.5);
+    const s = rng.range(0.3, 0.85);
+    const rock = envBlob(s, detail);
+    rock.scale(rng.range(0.9, 1.5), rng.range(0.4, 0.7), rng.range(0.9, 1.4));
+    matte.add(
+      at(rock, Math.cos(a) * r, floorY + s * 0.2, Math.sin(a) * r, rng.range(0, TAU)),
+      rng.bool(0.6) ? 0x2c3239 : 0x1e2a25,
+    );
+  }
+
+  // ---- background --------------------------------------------------------
+  if (q !== 'low') {
+    const fences = envPick(q, 2, 3, 4);
+    for (let i = 0; i < fences; i++) {
+      const bearing = (i / fences) * TAU + rng.range(-0.35, 0.35);
+      bambooFence(wood, rng, rng.range(10.5, 12.5), bearing, rng.range(4.5, 7), floorY, 0x565c3f);
+    }
+  }
+
+  const lanterns = envPick(q, 1, 2, 2);
+  for (let i = 0; i < lanterns; i++) {
+    const a = rng.range(0, TAU);
+    const r = rng.range(8.5, 12);
+    stoneLantern(matte, glow, rng.range(0.85, 1.15), Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0, TAU), 0x424a52);
+  }
+
+  const walls = envPick(q, 1, 2, 3);
+  for (let i = 0; i < walls; i++) {
+    const bearing = (i / walls) * TAU + rng.range(-0.4, 0.4) + 0.6;
+    shojiWall(wood, glow, rng.range(14.5, 16.5), bearing, rng.range(6, 8.5), floorY, envPick(q, 3, 4, 5));
+  }
+
+  const trees = envPick(q, 3, 5, 7);
+  for (let i = 0; i < trees; i++) {
+    const a = (i / trees) * TAU + rng.range(-0.4, 0.4);
+    const r = rng.range(13, 21);
+    const fade = THREE.MathUtils.clamp((r - 12) / 14, 0, 0.55);
+    cherryTree(wood, blossom, rng, detail, Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0.85, 1.35), fade);
+  }
+
+  // ---- assemble ----------------------------------------------------------
+  const meshes: Array<THREE.Mesh | null> = [
+    counter.build(hinokiMat, false, true),
+    satin.build(satinMat, true, true),
+    matte.build(matteMat, false, true),
+    wood.build(woodMat, false, false),
+    blossom.build(blossomMat, false, false),
+    glow.build(glowMat, false, false),
+    buildPetals(envPick(q, 8, 26, 44), deck, rng, petalMat),
+  ];
+  for (const mesh of meshes) if (mesh) root.add(mesh);
+  return root;
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,7 +1684,6 @@ export const sushiTheme: ThemeDef = {
   foods,
   hero: [0, 2, 3, 4, 5, 1],
   plate: buildPlate,
-  // TODO(environment): replaced by the per-theme environment builder.
-  // scenery: buildScenery,
+  environment: sushiEnvironment,
   ambience: 'sushi',
 };
