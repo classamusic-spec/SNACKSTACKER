@@ -860,7 +860,10 @@ function envGround(
 
 /** Soft grey veining over a warm off-white. Subtle: it is a table, not agate. */
 function paintMarble(c: CanvasRenderingContext2D, size: number): void {
-  c.fillStyle = '#F2EDE3';
+  // The top is lit hard by the key, so the paint has to start a stop below
+  // "white" and the veins a good deal stronger than they look on the canvas —
+  // at exposure the first pass came out as a plain white disc.
+  c.fillStyle = '#E8E1D4';
   c.fillRect(0, 0, size, size);
   const rng = new Rng(0x3a12);
 
@@ -874,21 +877,21 @@ function paintMarble(c: CanvasRenderingContext2D, size: number): void {
       rng.next() * size,
       size * rng.range(0.14, 0.42),
     );
-    g.addColorStop(0, `rgba(206,199,188,${rng.range(0.05, 0.14).toFixed(3)})`);
-    g.addColorStop(1, 'rgba(206,199,188,0)');
+    g.addColorStop(0, `rgba(186,178,166,${rng.range(0.1, 0.24).toFixed(3)})`);
+    g.addColorStop(1, 'rgba(186,178,166,0)');
     c.fillStyle = g;
     c.fillRect(0, 0, size, size);
   }
 
   // veins: a few strong, many faint, all leaning the same way
-  for (let i = 0; i < 22; i++) {
-    const strong = i < 4;
+  for (let i = 0; i < 26; i++) {
+    const strong = i < 6;
     let x = rng.next() * size;
     let y = -size * 0.1;
     c.strokeStyle = strong
-      ? `rgba(126,124,124,${rng.range(0.16, 0.3).toFixed(3)})`
-      : `rgba(158,155,150,${rng.range(0.05, 0.14).toFixed(3)})`;
-    c.lineWidth = size * (strong ? rng.range(0.004, 0.009) : rng.range(0.0015, 0.004));
+      ? `rgba(104,101,100,${rng.range(0.3, 0.5).toFixed(3)})`
+      : `rgba(140,136,130,${rng.range(0.12, 0.26).toFixed(3)})`;
+    c.lineWidth = size * (strong ? rng.range(0.004, 0.01) : rng.range(0.0015, 0.004));
     c.beginPath();
     c.moveTo(x, y);
     const drift = rng.range(0.25, 0.75);
@@ -965,7 +968,13 @@ function pot(terra: EnvBucket, x: number, y: number, z: number, s: number, sides
   return y + 0.6 * s;
 }
 
-/** A facade: mass, roof, shuttered windows, a lamp or two behind the glass. */
+/**
+ * A facade: mass, roof, shuttered windows, a lamp or two behind the glass.
+ *
+ * `detail` 1 keeps the windows and drops the joinery — a plain terracotta box
+ * with a roof on it reads as a shipping crate, and the windows are what turn
+ * the far side of the square into a street, so they survive even on low.
+ */
 function facade(
   terra: EnvBucket,
   wood: EnvBucket,
@@ -977,7 +986,7 @@ function facade(
   h: number,
   y: number,
   fade: number,
-  detail: boolean,
+  detail: 0 | 1 | 2,
 ): void {
   const cx = Math.cos(bearing) * radius;
   const cz = Math.sin(bearing) * radius;
@@ -998,6 +1007,13 @@ function facade(
   terra.add(at(envBox(w + 0.7, 0.34, d + 0.7), cx, y + h, cz, yaw), roof.getHex());
   terra.add(at(envBox(w + 0.3, 0.16, d + 0.3), cx, y + h + 0.34, cz, yaw), roof.getHex());
 
+  // A ground-floor course a shade deeper than the wall. One box, and it stops
+  // the mass reading as a single unbroken slab of orange across the horizon —
+  // but only a shade: at a third of the way to brown the whole far side of the
+  // square went dark and the terrace lost its dusk.
+  const plinth = wall.clone().lerp(new THREE.Color(0x6d4530), 0.16);
+  terra.add(at(envBox(w + 0.06, Math.min(0.8, h * 0.26), d + 0.06), cx, y, cz, yaw), plinth.getHex());
+
   if (!detail) return;
 
   const cols = Math.max(2, Math.round(w / 2.4));
@@ -1013,6 +1029,7 @@ function facade(
       const lit = rng.bool(0.4);
       if (lit) bulbs.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0xffc07a);
       else terra.add(at(envBox(ww, wh, 0.08), px, wy, pz, yaw), 0x241a18);
+      if (detail < 2) continue;
       // shutters, one of them usually swung open
       const shutter = new THREE.Color(rng.pick([0x41603f, 0x354a57, 0x6c4a35])).lerp(HAZE, fade * 0.62);
       for (const s of [-1, 1]) {
@@ -1157,7 +1174,9 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const bulbMat = m.standard('pizza.env.bulb', {
     color: 0x1d1206,
     emissive: 0xffc98a,
-    emissiveIntensity: 1.3,
+    // Dusk, not night: the bulbs have to out-punch a still-bright sky before
+    // they read as "the lights are coming on" rather than as cream beads.
+    emissiveIntensity: 2.1,
     roughness: 1,
     metalness: 0,
     vertexColors: true,
@@ -1314,28 +1333,31 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     wood.add(at(splat, backX, seatY + 0.62, backZ), 0x5b3a24);
   }
 
-  // pots of cypress and geraniums, scattered around the terrace edge
-  const pots = envPick(q, 4, 7, 9);
+  // Pots of geraniums round the terrace, cypresses out against the buildings.
+  //
+  // The two cannot share a radius. A cypress is a tall dark cone, and a tall
+  // dark cone standing alone on empty paving at r 10 reads as a spike growing
+  // out of the pizza however low its tip is pinned — the downward camera pitch
+  // projects a distant object HIGHER on screen than a near one, so the
+  // cylindrical clearance rule alone does not save it. Pushed out to 13.5-17.5
+  // it stands in front of the facades instead, where it reads as part of the
+  // street, and is small enough on screen to be a silhouette rather than a bar.
+  const pots = envPick(q, 6, 8, 10);
   for (let i = 0; i < pots; i++) {
     const a = (i / pots) * TAU + rng.range(-0.3, 0.3);
-    // Out past FAR_R: at 7.4 a cypress spire landed directly behind the tower
-    // and, though it cleared the rule, it still cut into the food's outline.
-    const r = rng.range(9.8, 12.6);
+    const cypress = rng.bool(0.55);
+    const r = cypress ? rng.range(13.5, 17.5) : rng.range(9.5, 12.4);
     const px = Math.cos(a) * r;
     const pz = Math.sin(a) * r;
     const s = rng.range(0.85, 1.2);
     const rim = pot(terra, px, floorY, pz, s, sides);
-    if (rng.bool(0.55)) {
-      // A cypress is a tall dark cone, and a tall dark cone parked behind the
-      // tower reads as a spike growing out of the pizza. Its tip is therefore
-      // pinned just above the table plane — well under PROP_LIFT — so at every
-      // yaw of the home-screen orbit it stays beside the food, never through
-      // it. It still has a 6:1 spire ratio, so the silhouette survives.
-      const ceiling = deck + 0.55;
-      const coneH = Math.max(1.2, Math.min(rng.range(2.6, 3.4) * s, ceiling - (rim - 0.05)));
+    if (cypress) {
+      const coneH = rng.range(3.0, 4.1) * s;
       const cone = envCyl(0.03, 0.44 * s, coneH, envPick(q, 5, 7, 8));
       roughen(cone, 0.05, 5, i + 2);
-      green.add(at(cone, px, rim - 0.05, pz, rng.range(0, TAU)), 0x2f5137);
+      // Dusk green, not black: a true cypress colour turns into a hole in the
+      // frame once the sky behind it is this bright.
+      green.add(at(cone, px, rim - 0.05, pz, rng.range(0, TAU)), 0x4a6f4c);
     } else {
       const mound = envBlob(0.52 * s, detail);
       mound.scale(1.2, 0.8, 1.2);
@@ -1355,7 +1377,7 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // Well back and deliberately low: at 16 units a six-unit facade filled the
   // top-right quadrant as a flat orange slab cropped by the frame. Out at 19+
   // with a shorter mass it reads as a street on the far side of the piazza.
-  const blocks = envPick(q, 8, 12, 15);
+  const blocks = envPick(q, 10, 12, 14);
   const facadeBearings: number[] = [];
   const facadeRadii: number[] = [];
   for (let i = 0; i < blocks; i++) {
@@ -1366,11 +1388,34 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     // Heavy wash toward the fog colour: the far wall has to sit BACK, and at
     // this density a saturated terracotta ring would shout over the food.
     const fade = THREE.MathUtils.clamp((r - 11) / 13, 0.56, 0.86);
-    facade(terra, wood, bulbs, rng, bearing, r, rng.range(9, 13), rng.range(2.8, 4.2), floorY, fade, q !== 'low');
+    facade(
+      terra, wood, bulbs, rng, bearing, r,
+      // A wide spread of heights: equal-height blocks merge into one band
+      // across the horizon, and a stepped roofline is what reads as a street.
+      rng.range(10.5, 14), rng.range(2.5, 4.9), floorY, fade,
+      q === 'low' ? 1 : 2,
+    );
   }
 
-  // a bell tower and a dome, well back, purely as silhouette
-  if (q !== 'low') {
+  // A second roofline further back, in the gaps of the first. A ring of
+  // facades never closes exactly, and a gap with nothing behind it reads as a
+  // missing tooth rather than a side street; twelve hazed boxes give the holes
+  // something to look through to, for a couple of hundred triangles.
+  for (let i = 0; i < 12; i++) {
+    const bearing = ((i + 0.5) / 12) * TAU + rng.range(-0.14, 0.14);
+    const r = rng.range(26, 30);
+    const hz = new THREE.Color(0xd8b490).lerp(new THREE.Color(0xe9d3b8), 0.55).getHex();
+    const bh = rng.range(2.2, 3.6);
+    terra.add(
+      at(envBox(rng.range(9, 15), bh, 2.4), Math.cos(bearing) * r, floorY, Math.sin(bearing) * r, -bearing + Math.PI / 2),
+      hz,
+    );
+  }
+
+  // A bell tower and a dome, well back, purely as silhouette. Cheap enough
+  // (a few hundred triangles) to survive on low, where they are the single
+  // clearest statement that this is a piazza and not a patio.
+  {
     const ba = rng.range(0, TAU);
     const br = 28;
     const bxr = Math.cos(ba) * br;
@@ -1392,7 +1437,7 @@ function pizzaEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
 
   // a striped awning over the nearest shopfront
-  for (const awningIdx of envPick<readonly number[]>(q, [], [0, 3], [0, 4, 8])) {
+  for (const awningIdx of envPick<readonly number[]>(q, [0], [0, 3], [0, 4, 8])) {
     const idx = awningIdx % facadeBearings.length;
     const ab = facadeBearings[idx] + rng.range(-0.08, 0.08);
     // hung off the front of that facade, not floating in the middle of the square

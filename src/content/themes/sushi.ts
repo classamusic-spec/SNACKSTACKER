@@ -1057,9 +1057,12 @@ function envGround(
 /** Hinoki: pale blond, dead-straight, very fine. Never a flat tan. */
 function paintHinoki(c: CanvasRenderingContext2D, size: number): void {
   const g = c.createLinearGradient(0, 0, 0, size);
-  g.addColorStop(0, '#F2E7CE');
-  g.addColorStop(0.5, '#EADEC1');
-  g.addColorStop(1, '#F0E4C8');
+  // A stop down from where this started: hinoki is blond, but at the theme's
+  // exposure #F2E7CE clipped to paper-white and the counter out-shouted the
+  // salmon it is supposed to be serving.
+  g.addColorStop(0, '#E4D7B6');
+  g.addColorStop(0.5, '#DBCDA9');
+  g.addColorStop(1, '#E2D5B1');
   c.fillStyle = g;
   c.fillRect(0, 0, size, size);
 
@@ -1183,8 +1186,10 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
       sway: rng.range(0.16, 0.5),
       phase: rng.range(0, TAU),
       spin: rng.range(0.45, 1.5) * (rng.bool() ? 1 : -1),
-      w: rng.range(0.075, 0.14),
-      h: rng.range(0.05, 0.095),
+      // Half the first pass: at 0.14 a petal crossing the lens read as a pink
+      // playing card, which is a very expensive way to break the illusion.
+      w: rng.range(0.04, 0.075),
+      h: rng.range(0.028, 0.05),
     });
   }
 
@@ -1218,12 +1223,14 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
         position[o + k + 1] = cy + vy * sy;
         position[o + k + 2] = cz + uz * sx + vz * sy;
       };
-      set(0, -1, -1);
-      set(3, 1, -1);
-      set(6, 1, 1);
-      set(9, -1, -1);
-      set(12, 1, 1);
-      set(15, -1, 1);
+      // A rhombus, not a rectangle: same two triangles, but the corners meet
+      // on the axes so the silhouette is a petal rather than a pink tile.
+      set(0, -1, 0);
+      set(3, 0, -1);
+      set(6, 1, 0);
+      set(9, -1, 0);
+      set(12, 1, 0);
+      set(15, 0, 1);
     }
     attr.needsUpdate = true;
   };
@@ -1234,7 +1241,14 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
   m.castShadow = false;
   m.receiveShadow = false;
   m.renderOrder = 3;
-  m.onBeforeRender = () => write(performance.now() * 0.001);
+  // Drifting petals are ambient motion, which is exactly what a reduced-motion
+  // reader asked us not to do. They still hang in the air; they just stop
+  // falling. Queried once, not per frame.
+  const still =
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      : false;
+  if (!still) m.onBeforeRender = () => write(performance.now() * 0.001);
   return m;
 }
 
@@ -1284,9 +1298,11 @@ function cherryTree(
 ): void {
   const trunkH = 2.4 * scale;
   const lean = rng.signed() * 0.09;
-  const trunk = envCyl(0.16 * scale, 0.34 * scale, trunkH, 7);
+  const trunk = envCyl(0.2 * scale, 0.4 * scale, trunkH, 7);
   trunk.rotateZ(lean);
-  wood.add(at(trunk, x, y, z), 0x33272f);
+  // Warm charcoal, not near-black: at 0x33272f the trunk vanished into the
+  // gravel and every tree read as a pink cloud with nothing holding it up.
+  wood.add(at(trunk, x, y, z), 0x53414a);
   // A root mound, so the trunk is visibly planted instead of stopping in the
   // dark. Without it the tree reads as a lollipop pasted onto the sky.
   const mound = envBlob(0.5 * scale, Math.max(0, detail - 1));
@@ -1300,7 +1316,7 @@ function cherryTree(
     const limb = envCyl(0.045 * scale, 0.1 * scale, len, 5);
     limb.rotateZ(rng.range(0.5, 0.95));
     limb.rotateY(a);
-    wood.add(at(limb, x + lean * -trunkH, y + trunkH * rng.range(0.55, 0.85), z), 0x33272f);
+    wood.add(at(limb, x + lean * -trunkH, y + trunkH * rng.range(0.55, 0.85), z), 0x53414a);
   }
 
   // Soft pink against the dark blue is the theme's signature contrast, so the
@@ -1460,6 +1476,11 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     sheen: 0.6,
     sheenColor: 0xffd7e2,
     sheenRoughness: 0.6,
+    // A faint rose self-light. Flat-shaded facets turned away from the key
+    // were falling to maroon, and maroon blossom against a blue night is the
+    // one thing this theme cannot afford — the pink IS the signature image.
+    emissive: 0x3d1a26,
+    emissiveIntensity: 0.5,
     vertexColors: true,
     flatShading: true,
   });
@@ -1657,7 +1678,7 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     wood.build(woodMat, false, false),
     blossom.build(blossomMat, false, false),
     glow.build(glowMat, false, false),
-    buildPetals(envPick(q, 8, 26, 44), deck, rng, petalMat),
+    buildPetals(envPick(q, 12, 34, 56), deck, rng, petalMat),
   ];
   for (const mesh of meshes) if (mesh) root.add(mesh);
   return root;
