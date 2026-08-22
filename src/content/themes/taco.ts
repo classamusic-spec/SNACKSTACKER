@@ -1127,6 +1127,48 @@ function shadeAdobe(
 }
 
 /**
+ * Pool mist in the feet of a silhouette layer without losing what is already
+ * painted on its crest.
+ *
+ * `tintGradientY` would do the ramp, but it REPLACES vertex colour, and by
+ * this point each roof already carries which side of it the sunset is on.
+ * This multiplies instead: full existing colour at `crestY`, washed toward
+ * `mist` by `amount` at `footY` and below.
+ *
+ * The reason every distance layer needs it: four flat cut-outs in the same
+ * hue read as one brown mass. Give each one a dark crest standing against the
+ * pale, misted base of the layer behind it and the same four cut-outs read as
+ * five miles of air.
+ */
+function mistBelow(
+  geo: THREE.BufferGeometry,
+  mist: number,
+  footY: number,
+  crestY: number,
+  amount: number,
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute | undefined;
+  if (!pos) return geo;
+  const prev = geo.attributes.color as THREE.BufferAttribute | undefined;
+  const m = new THREE.Color(mist).convertSRGBToLinear();
+  const span = Math.abs(crestY - footY) > 1e-6 ? crestY - footY : 1;
+  const cap = clamp01(amount);
+  const arr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const t = (1 - (Number.isFinite(y) ? clamp01((y - footY) / span) : 1)) * cap;
+    const cr = prev ? prev.getX(i) : 1;
+    const cg = prev ? prev.getY(i) : 1;
+    const cb = prev ? prev.getZ(i) : 1;
+    arr[i * 3] = lerp(cr, m.r, t);
+    arr[i * 3 + 1] = lerp(cg, m.g, t);
+    arr[i * 3 + 2] = lerp(cb, m.b, t);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+/**
  * A closed ring of ground seen edge-on — the whole trick behind the ridge and
  * the mesa. Two triangles per segment, one draw for the entire horizon, and
  * because it is a ring it reads identically at every yaw the home screen
@@ -1737,7 +1779,10 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       }
     }
     const roofGeo = mergeEnv(roofParts);
-    if (roofGeo) far.push(hazeByRadius(roofGeo, DUSK_HAZE, 13, 20, 0.44, 1.05));
+    if (roofGeo) {
+      mistBelow(roofGeo, 0xe8b088, top + ROOF_TOP - 2.4, top + ROOF_TOP, 0.62);
+      far.push(hazeByRadius(roofGeo, DUSK_HAZE, 13, 20, 0.38, 1.05));
+    }
   }
 
   {
@@ -1792,7 +1837,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       body.rotateY(a + rng.signed() * 0.3);
       body.translate(x, (roofY + top - 6) * 0.5, z);
       const face = clamp01(-Math.cos(a - SUN_AZ));
-      town.push(tintGeometry(body, face > 0.4 ? 0x9c6250 : 0x6f4450));
+      town.push(tintGeometry(body, face > 0.4 ? 0x9c6250 : 0x5c3a4c));
     }
     const townGeo = mergeEnv(town);
     if (townGeo) {
@@ -1800,8 +1845,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       // what separates one silhouette layer from the next — a dark crest read
       // against the pale base of the layer behind it — and it is the reason
       // four flat cut-outs read as distance rather than as one brown mass.
-      tintGradientY(townGeo, 0xf0c39a, 0x8a5560, top - 3.4, top + TOWN_TOP);
-      far.push(hazeByRadius(townGeo, DUSK_HAZE, 17, 28, 0.6, 1.12));
+      mistBelow(townGeo, 0xefc19c, top + TOWN_TOP - 2.6, top + TOWN_TOP, 0.72);
+      far.push(hazeByRadius(townGeo, DUSK_HAZE, 17, 28, 0.5, 1.12));
     }
   }
 
@@ -1816,7 +1861,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       y: ridgeAt(a),
     }));
     const parts: Array<THREE.BufferGeometry | null> = [];
-    if (ring) parts.push(tintGeometry(ring, 0x6d4256));
+    if (ring) parts.push(tintGeometry(ring, 0x4e3260));
 
     const cacti = lo ? 6 : q === 'medium' ? 10 : 15;
     for (let i = 0; i < cacti; i++) {
@@ -1849,8 +1894,8 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
     const ridgeGeo = mergeEnv(parts);
     if (ridgeGeo) {
-      tintGradientY(ridgeGeo, 0xf4cba6, 0x6d4a68, top - 5, crestY);
-      far.push(hazeByRadius(ridgeGeo, DUSK_HAZE, 26, 43, 0.74, 1.2));
+      mistBelow(ridgeGeo, 0xf2caa6, crestY - 3.4, crestY, 0.78);
+      far.push(hazeByRadius(ridgeGeo, DUSK_HAZE, 26, 43, 0.62, 1.2));
     }
   }
 
@@ -1871,8 +1916,9 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       };
     });
     if (ring) {
-      tintGradientY(ring, 0xf7d6b4, 0x76567e, top - 8, cap);
-      far.push(hazeByRadius(ring, DUSK_HAZE, 38, 60, 0.86, 1.32));
+      tintGeometry(ring, 0x543a6e);
+      mistBelow(ring, 0xf6d6b6, cap - 4.4, cap, 0.82);
+      far.push(hazeByRadius(ring, DUSK_HAZE, 38, 60, 0.74, 1.32));
     }
   }
 
