@@ -1,0 +1,12 @@
+# QA artefacts and alternate build outputs — none of this belongs in a deploy.
+shots
+dist
+dist-single
+dist-audit
+dist-env
+.test-build
+tools
+tests
+docs
+snackery.html
+*.log
