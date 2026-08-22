@@ -26,7 +26,10 @@ const browser = await chromium.launch({
     '--js-flags=--expose-gc',
   ],
 });
-const page = await browser.newPage({ viewport: { width: 393, height: 852 }, deviceScaleFactor: 1 });
+// Small viewport on purpose: software rendering is fill-rate bound, and a
+// quarter of the pixels roughly quadruples the frame rate, which is what makes
+// a long soak run finish in reasonable time.
+const page = await browser.newPage({ viewport: { width: 240, height: 520 }, deviceScaleFactor: 1 });
 const errors = [];
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => {
@@ -54,8 +57,16 @@ await page.waitForFunction(() => window.__snackeryStats?.state === 'home', null,
 
 const stats = () => page.evaluate(() => ({ ...window.__snackeryStats }));
 
-/** Play until the run ends, tapping when aligned so towers get genuinely tall. */
-const playRun = (maxMs = 45000) =>
+/**
+ * Play until the run ends.
+ *
+ * Deliberately NOT aiming for perfects. Under software rendering the page runs
+ * at 2-4fps, so `offset` is sampled far too coarsely to ever land inside the
+ * 0.10 perfect tolerance — aiming tight just times out after one tap and
+ * exercises nothing. A soak wants long runs that generate many offcuts, so it
+ * taps at any workable overlap and lets the tower narrow naturally.
+ */
+const playRun = (maxMs = 60000) =>
   page.evaluate(
     (maxMs) =>
       new Promise((done) => {
@@ -63,7 +74,6 @@ const playRun = (maxMs = 45000) =>
         const t0 = performance.now();
         let taps = 0;
         let cd = 0;
-        let sloppy = 0;
         const step = () => {
           const s = window.__snackeryStats;
           if (!s) return done({ taps, reason: 'no-stats' });
@@ -71,15 +81,10 @@ const playRun = (maxMs = 45000) =>
           if (performance.now() - t0 > maxMs) return done({ taps, reason: 'timeout', layers: s.layers });
           if (s.state === 'playing') {
             if (cd > 0) cd--;
-            else if (s.offset !== null) {
-              // Mostly accurate, deliberately sloppy every 5th drop so the
-              // tower narrows and runs actually end.
-              const want = ++sloppy % 5 === 0 ? 0.75 : 0.14;
-              if (Math.abs(s.offset) <= want) {
-                c.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-                taps++;
-                cd = 4;
-              }
+            else if (s.offset !== null && Math.abs(s.offset) < 0.9) {
+              c.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+              taps++;
+              cd = 2;
             }
           }
           requestAnimationFrame(step);
@@ -124,6 +129,7 @@ for (let i = 0; i < RUNS; i++) {
   await page.waitForTimeout(300);
 
   const r = await playRun();
+  if (r.reason === 'timeout') console.log(`     (run ${i + 1} timed out, not a natural game over)`);
   await page.waitForTimeout(1500);
   const s = await stats();
   samples.push(s);
