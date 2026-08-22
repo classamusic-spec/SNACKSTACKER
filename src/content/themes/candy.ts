@@ -27,6 +27,7 @@ import {
   discXZ,
   envCount,
   envSeg,
+  facingQuad,
   fillFlat,
   fillGradient,
   finalize,
@@ -37,6 +38,7 @@ import {
   noiseWash,
   propCount,
   propScale,
+  radialGlow,
   rectPerimeter,
   ringSlots,
   safeD,
@@ -863,6 +865,33 @@ function paintCandyStripe(c: CanvasRenderingContext2D, size: number): void {
 
 type Profile = Array<[number, number]>;
 
+/**
+ * Flute a turned shape: push every vertex in or out along its own radius by a
+ * cosine of its bearing.
+ *
+ * This is the single cheapest thing that makes glass look like glass. A smooth
+ * cylinder under a studio rig catches one broad highlight and reads as
+ * plastic; a fluted one catches a row of narrow ones that slide as the camera
+ * turns, and the turntable on the home screen is doing exactly that all day.
+ * It also survives the low tier, where transmission is switched off and the
+ * specular is all the jar has left to say glass with.
+ */
+function flute(geo: THREE.BufferGeometry, ribs: number, depth: number): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute | undefined;
+  if (!pos || ribs < 2 || depth === 0) return geo;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const r = Math.hypot(x, z);
+    if (r < 1e-4) continue;
+    const k = 1 + depth * Math.cos(Math.atan2(x, z) * ribs);
+    pos.setXYZ(i, x * k, pos.getY(i), z * k);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function jarBody(h: number, r: number, segments: number): THREE.BufferGeometry | null {
   const p: Profile = [
     [0, 0],
@@ -878,6 +907,58 @@ function jarBody(h: number, r: number, segments: number): THREE.BufferGeometry |
     [0, h],
   ];
   return lathe(p, segments);
+}
+
+/**
+ * The jar as an actual vessel: an outer wall, an inner wall a glass-thickness
+ * inside it, and a solid slug of glass in the base.
+ *
+ * A single lathed surface has no thickness, and with `transmission` on it
+ * refracts like a soap bubble; with transmission OFF at the low tier it reads
+ * as a painted plastic cup. The inner wall costs one more surface and buys the
+ * dark meniscus at the rim and the double edge down the silhouette that the
+ * eye actually uses to decide something is glass. The base slug is where the
+ * light pools, so it is the brightest part of the whole prop.
+ */
+function jarShell(
+  h: number,
+  r: number,
+  segments: number,
+  wall: boolean,
+  ribs: number,
+): THREE.BufferGeometry | null {
+  const parts: Array<THREE.BufferGeometry | null> = [];
+  const outer = jarBody(h, r, segments);
+  if (outer) parts.push(ribs > 0 ? flute(outer, ribs, 0.035) : outer);
+  if (wall) {
+    const t = Math.min(0.055, r * 0.17);
+    const inner = lathe(
+      [
+        [0, h * 0.1],
+        [r * 0.74 - t, h * 0.1],
+        [r - t, h * 0.16],
+        [r * 0.99 - t, h * 0.56],
+        [r * 0.88 - t, h * 0.75],
+        [r * 0.66 - t, h * 0.87],
+        [r * 0.64 - t, h * 0.94],
+      ],
+      segments,
+    );
+    if (inner) parts.push(inner);
+  }
+  // the slug of glass the jar stands on
+  const foot = lathe(
+    [
+      [0, 0],
+      [r * 0.9, h * 0.035],
+      [r * 0.86, h * 0.1],
+      [r * 0.5, h * 0.12],
+      [0, h * 0.1],
+    ],
+    segments,
+  );
+  if (foot) parts.push(foot);
+  return mergeEnv(parts);
 }
 
 function jarLid(r: number, h: number, segments: number): THREE.BufferGeometry | null {
@@ -935,6 +1016,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   const paper: Array<THREE.BufferGeometry | null> = [];
   const far: Array<THREE.BufferGeometry | null> = [];
   const flags: Array<THREE.BufferGeometry | null> = [];
+  /** Anything that is light rather than a thing: the cove, the shop window,
+   *  and the pools the jars focus onto the marble. */
+  const glow: Array<THREE.BufferGeometry | null> = [];
+  // Low tier gets six draws. The bunting is the same matte, double-sided,
+  // vertex-coloured material the room is built from, so it is a free merge.
+  const flagsOut = lo ? far : flags;
 
   // --- the counter -------------------------------------------------------
   // The slab's top face lands exactly on tableTopY: the plate is already there.
@@ -953,7 +1040,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     tintGeometry(
       tableSlab(COUNTER_HALF_W * 2 + 0.5, COUNTER_HALF_D * 2 + 0.5, 0.2, {
         radius: 2.4,
-        segments: envSeg(q, 3, 2, 2),
+        segments: 2,
         top: lipTop,
       }),
       0xf3e6ff,
@@ -963,7 +1050,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     tintGeometry(
       tableSlab(COUNTER_HALF_W * 2 - 1.1, COUNTER_HALF_D * 2 - 1.1, 0.9, {
         radius: 1.9,
-        segments: envSeg(q, 3, 2, 2),
+        segments: 2,
         top: lipTop - 0.19,
       }),
       0xb49be0,
@@ -972,12 +1059,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
 
   // Scalloped valance under the lip — a hard square edge would be a desk.
   if (rich) {
-    const count = q === 'high' ? 52 : 34;
+    const count = q === 'high' ? 28 : 22;
     const scallops: Array<THREE.BufferGeometry | null> = [];
     for (let i = 0; i < count; i++) {
       const a = (i / count) * TAU;
       const p = rectPerimeter(COUNTER_HALF_W + 0.2, COUNTER_HALF_D + 0.2, a, 0.5);
-      const s = new THREE.SphereGeometry(0.33, envSeg(q, 8, 6, 5), envSeg(q, 4, 3, 3));
+      const s = new THREE.SphereGeometry(0.33, envSeg(q, 7, 6, 5), envSeg(q, 3, 3, 3));
       s.scale(1, 0.78, 1);
       s.translate(p.x, lipTop - 0.12, p.y);
       scallops.push(s);
@@ -992,8 +1079,21 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // screen at all, and the tower itself hides the middle ~15 of that. The two
   // slots either side of the tower therefore get the best props; everything
   // else is spread around for the home screen's turntable.
-  const jarSeg = envSeg(q, 16, 13, 10);
+  const jarSeg = envSeg(q, 14, 12, 10);
   const propRng = rng;
+
+  /**
+   * The bright ring a glass jar throws onto the counter. Not a real caustic —
+   * a soft alpha disc on the marble — but it is the cue that tells the eye the
+   * thing above it is transparent, and it survives the low tier where
+   * transmission is switched off and nothing else does.
+   */
+  const caustic = (x: number, z: number, radius: number): void => {
+    const disc = new THREE.PlaneGeometry(radius, radius);
+    disc.rotateX(-Math.PI / 2);
+    disc.translate(x, top + 0.006, z);
+    glow.push(disc);
+  };
 
   /** A glass sweet jar with a knobbed lid and a heap of sweets inside. */
   const sweetJar = (arc: number, r: number, h: number, tint: number, seed: number): void => {
@@ -1001,11 +1101,13 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const x = Math.sin(a) * r;
     const z = Math.cos(a) * r;
     const rr = h * propRng.range(0.33, 0.4);
-    const body = jarBody(h, rr, jarSeg);
+    const body = jarShell(h, rr, jarSeg, !lo, lo ? 0 : 14);
     if (body) {
       body.translate(x, top, z);
       glass.push(body);
     }
+    // the pool of light the glass focuses onto the marble under it
+    caustic(x, z, rr * 3.4);
     const fill = jarFill(rr * 0.86, h * propRng.range(0.5, 0.78), jarSeg, seed, q === 'high');
     if (fill) {
       fill.translate(x, top + h * 0.05, z);
@@ -1021,20 +1123,29 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // squat jars, then the tall apothecary columns at the back of the counter
   // The last entries sit in the NEAR arc, between the camera and the tower:
   // they land low in the frame and stop the foreground reading as bare floor.
+  // The play frame is 22 degrees wide and the tower covers the middle 61% of
+  // it, which leaves exactly two slots: 0.42 to 0.72 radians either side of
+  // BACK_ARC at four units, narrowing to 0.34-0.58 by five and a half. Every
+  // prop worth looking at goes in those two slots. What was here before put
+  // its best jars at 1.3 and -1.35 rad, which project a full frame-width off
+  // the edge of the screen: gorgeous on the turntable, invisible for the
+  // entire run. The rest of the ring is still dressed, but it is dressed for
+  // the home screen, and it is now the leftovers rather than the hero.
   const jarPlan: Array<[number, number, number]> = lo
     ? [
-        [-1.35, 4.4, 1.05],
-        [2.95, 3.8, 0.92],
+        [0.62, 4.3, 1.0],
+        [-0.66, 4.15, 0.86],
       ]
     : q === 'medium'
       ? [
-          [1.3, 4.1, 0.95],
-          [-1.35, 4.4, 1.05],
+          [0.62, 4.3, 1.0],
+          [-0.66, 4.15, 0.86],
           [2.95, 3.8, 0.92],
         ]
       : [
-          [1.3, 4.1, 0.95],
-          [-1.35, 4.4, 1.05],
+          [0.62, 4.3, 1.0],
+          [-0.66, 4.15, 0.86],
+          [0.4, 5.5, 1.12],
           [2.72, 4.4, 0.88],
           [3.02, 3.7, 1.06],
           [-2.86, 3.9, 0.82],
@@ -1044,15 +1155,19 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     sweetJar(arc, r, h, JAR_CANDY[i % JAR_CANDY.length], i * 7 + 3);
   }
 
+  // The apothecary columns are the tallest thing on the counter, so they get
+  // the outer edge of each slot where they frame the tower instead of
+  // crowding it.
   const tallPlan: Array<[number, number]> = lo
-    ? [[0.47, 4.7]]
+    ? [[0.46, 5.3]]
     : q === 'medium'
       ? [
-          [0.47, 4.7],
-          [-2.1, 5.2],
+          [0.46, 5.3],
+          [-0.52, 5.45],
         ]
       : [
-          [0.47, 4.7],
+          [0.46, 5.3],
+          [-0.52, 5.45],
           [-2.1, 5.2],
           [-1.75, 5.35],
         ];
@@ -1063,11 +1178,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const z = Math.cos(a) * r;
     const h = rng.range(1.75, 2.2);
     const rr = rng.range(0.42, 0.52);
-    const body = jarBody(h, rr, jarSeg);
+    const body = jarShell(h, rr, jarSeg, !lo, lo ? 0 : 18);
     if (body) {
       body.translate(x, top, z);
       glass.push(body);
     }
+    caustic(x, z, rr * 3.2);
     const fill = jarFill(rr * 0.87, h * rng.range(0.4, 0.62), jarSeg, i * 13 + 5, q === 'high');
     if (fill) {
       fill.translate(x, top + h * 0.04, z);
@@ -1139,9 +1255,11 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         seg,
       );
       if (dome) {
+        flute(dome, 20, 0.012);
         dome.translate(x, top + 0.54, z);
         glass.push(dome);
       }
+      caustic(x, z, 2.1);
     }
   }
 
@@ -1202,6 +1320,43 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   }
   // A few sweets loose on the counter in the near arc — the counter is huge
   // and the bottom of the frame is otherwise bare marble.
+  // A flat box of macarons in the near arc. It lands low and wide in the
+  // frame, below the tower, which is the one place a prop can be big without
+  // fighting it.
+  if (rich) {
+    const a = BACK_ARC + Math.PI - 0.22;
+    const r = 4.15;
+    const x = Math.sin(a) * r;
+    const z = Math.cos(a) * r;
+    const box = roundedBox(1.5, 0.24, 1.0, 0.07, 2);
+    box.rotateY(-a + 0.3);
+    box.translate(x, top + 0.12, z);
+    lacquer.push(tintGeometry(box, 0xfdf0f7));
+    const lid = roundedBox(1.56, 0.1, 1.06, 0.05, 2);
+    lid.rotateY(-a + 0.3);
+    lid.rotateZ(0.5);
+    lid.translate(x - 0.95, top + 0.42, z + 0.55);
+    lacquer.push(tintGeometry(lid, 0xf7e2ef));
+    for (let i = 0; i < envCount(q, 8, 4); i++) {
+      const row = i % 4;
+      const col = Math.floor(i / 4);
+      const m = puck(0.3, 0.16, 0.3, {
+        domed: 0.34,
+        wobble: 0.04,
+        radial: envSeg(q, 12, 10, 8),
+        rings: 2,
+        seed: i + 11,
+        square: 0,
+      });
+      m.rotateY(-a + 0.3);
+      m.translate(
+        x + Math.sin(a + 0.3) * (row - 1.5) * 0.34 + Math.sin(a + 1.87) * (col - 0.5) * 0.4,
+        top + 0.24,
+        z + Math.cos(a + 0.3) * (row - 1.5) * 0.34 + Math.cos(a + 1.87) * (col - 0.5) * 0.4,
+      );
+      sweets.push(tintGeometry(m, PASTEL_SWEETS[(i * 2) % PASTEL_SWEETS.length]));
+    }
+  }
   {
     const loose = envCount(q, 14, 6);
     for (let i = 0; i < loose; i++) {
@@ -1214,44 +1369,320 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
   }
 
-  // --- the shelf wall -----------------------------------------------------
-  // Its foot is far below the counter's far edge, which hides it: no floor has
-  // to exist for the room to feel like it has one.
-  const wallSeg = envSeg(q, 40, 30, 22);
-  const wallLow = top - 6.5;
-  const wallHigh = top + 2.45;
-  const wall = new THREE.CylinderGeometry(SHELF_R, SHELF_R, wallHigh - wallLow, wallSeg, 1, true);
-  wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
-  far.push(tintGradientY(wall, 0xb9a4dc, 0xfbe6f4, top - 3.4, wallHigh));
+  // --- the room -----------------------------------------------------------
+  //
+  // What was here before was a cylinder with three flat rings on it, and it
+  // read exactly like that: a painted backdrop with a bead necklace. A room
+  // needs three things this now has.
+  //
+  //   * **A recess.** The shelving is a carcass, not a decal — a front plane
+  //     at 12.4, niche backs a unit behind it at 13.4, boards that span the
+  //     gap with a nosing on the front edge, and dividers between the bays.
+  //     The niche backs are painted a stop darker than the fascia, which is
+  //     the whole of why the bays read as holes.
+  //   * **Something further off.** The far wall is another unit out again at
+  //     14.4 and runs the full height, so what shows above the cornice and
+  //     through the window is a DIFFERENT surface at a DIFFERENT distance.
+  //   * **A ceiling to be under.** The room goes up nearly ten units. At the
+  //     first drop that is off the top of the frame, and by layer fifteen —
+  //     when the camera has climbed six units and the old wall had dropped
+  //     out of shot entirely, leaving a third of the screen as bare sweep —
+  //     it is still there. The top of it is a lit cove graded into `bgTop`,
+  //     so where the room finally ends reads as light, not as a seam.
+  const roomSeg = envSeg(q, 34, 28, 22);
+  const BACK_R = 14.4;
+  const CASE_BACK = 13.4;
+  const CASE_FRONT = 12.4;
+  const CASE_LOW = top - 3.1;
+  const CORNICE_Y = top + 3.35;
+  const ROOM_TOP = top + 9.4;
+  const ROOM_LOW = top - 6.5;
 
-  const shelfInner = SHELF_R - 0.9;
-  const shelfHeights = lo
-    ? [top - 1.6, top + 0.5]
-    : [top - 2.2, top - 0.65, top + 0.9];
-  for (let s = 0; s < shelfHeights.length; s++) {
-    const y = shelfHeights[s];
-    const board = new THREE.RingGeometry(shelfInner, SHELF_R, wallSeg, 1);
-    board.rotateX(-Math.PI / 2);
-    board.translate(0, y + 0.06, 0);
-    far.push(tintGeometry(board, 0xfff6fb));
-    const edge = new THREE.CylinderGeometry(shelfInner, shelfInner, 0.12, wallSeg, 1, true);
-    edge.translate(0, y, 0);
-    far.push(tintGeometry(edge, 0xecd9ee));
+  /** A flat annulus lying in XZ, cut to an arc in the scene's own bearing. */
+  const arcRing = (
+    inner: number,
+    outer: number,
+    aStart: number,
+    aLen: number,
+    y: number,
+    seg: number,
+  ): THREE.BufferGeometry => {
+    const r = new THREE.RingGeometry(inner, outer, Math.max(2, Math.round(seg)), 1, aStart - Math.PI / 2, aLen);
+    r.rotateX(-Math.PI / 2);
+    r.translate(0, y, 0);
+    return r;
+  };
 
-    const perShelf = lo ? 22 : q === 'medium' ? 30 : 40;
-    const slots = ringSlots(rng, perShelf, SHELF_R - 0.58, SHELF_R - 0.34, { jitter: 0.8 });
-    for (let i = 0; i < slots.length; i++) {
-      const slot = slots[i];
-      const jh = rng.range(0.5, 1.05);
-      const jr = rng.range(0.19, 0.34);
-      const jar = new THREE.CylinderGeometry(jr, jr * 0.92, jh, 6, 1, false);
-      jar.translate(slot.x, y + 0.06 + jh * 0.5, slot.z);
-      far.push(
-        tintGeometry(jar, rng.bool(0.42) ? 0xffeaf4 : JAR_CANDY[(i + s) % JAR_CANDY.length]),
+  // The two shop windows. One is aimed into the play frame — at 13 units the
+  // visible arc during a run is only BACK_ARC +/- 0.35 rad, and the tower
+  // covers none of it because the window sits above the tower's shoulder —
+  // and one is round the back for the turntable.
+  const winHalf = 0.115;
+  const winArcs = lo ? [BACK_ARC + 0.21] : [BACK_ARC + 0.21, BACK_ARC - 2.55];
+
+  // Case bays are everything the windows leave. Walk the gaps in order.
+  const sorted = [...winArcs].sort((a, b) => a - b);
+  const caseSpans: Array<[number, number]> = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const from = sorted[i] + winHalf;
+    const to = (i + 1 < sorted.length ? sorted[i + 1] : sorted[0] + TAU) - winHalf;
+    if (to > from + 0.02) caseSpans.push([from, to - from]);
+  }
+
+  // far wall: the surface a window has something to show
+  {
+    const back = new THREE.CylinderGeometry(
+      BACK_R,
+      BACK_R,
+      ROOM_TOP - ROOM_LOW,
+      roomSeg,
+      envSeg(q, 3, 2, 2),
+      true,
+    );
+    back.translate(0, (ROOM_TOP + ROOM_LOW) * 0.5, 0);
+    far.push(tintGradientY(back, 0xbaa8d8, 0xfdeef8, top - 3.0, CORNICE_Y + 2.4));
+  }
+
+  // upper wall, cornice and cove
+  {
+    const upper = new THREE.CylinderGeometry(
+      CASE_FRONT + 0.55,
+      CASE_FRONT + 0.55,
+      ROOM_TOP - CORNICE_Y,
+      roomSeg,
+      envSeg(q, 4, 3, 2),
+      true,
+    );
+    upper.translate(0, (ROOM_TOP + CORNICE_Y) * 0.5, 0);
+    // Brightest at the very top: a cove light washing the ceiling, graded to
+    // meet `bgTop` so the room does not end on a hard line.
+    far.push(tintGradientY(upper, 0xd9c4ef, 0xffe6f6, CORNICE_Y, ROOM_TOP));
+
+    // a stepped plaster cornice, which is most of the "expensive" in the room
+    const steps: Array<[number, number, number]> = [
+      [CASE_FRONT - 0.06, 0.16, 0xfff4fb],
+      [CASE_FRONT + 0.16, 0.13, 0xf6e6fa],
+      [CASE_FRONT + 0.34, 0.2, 0xfffafd],
+      [CASE_FRONT + 0.5, 0.14, 0xe9d6f2],
+    ];
+    let cy = CORNICE_Y;
+    for (const [cr, ch, tint] of steps) {
+      const band = new THREE.CylinderGeometry(cr, cr, ch, roomSeg, 1, true);
+      band.translate(0, cy + ch * 0.5, 0);
+      far.push(tintGeometry(band, tint));
+      far.push(tintGeometry(arcRing(cr, CASE_FRONT + 0.62, 0, TAU, cy + ch, roomSeg), 0xf1dff6));
+      cy += ch;
+    }
+    // Panelling on the upper wall. Six units of unbroken plaster is where a
+    // tall room stops looking expensive and starts looking like a warehouse;
+    // a picture rail and a run of pilaster strips cost 500 triangles and put
+    // a vertical rhythm behind the tower that the shelving below already has.
+    const railY = CORNICE_Y + 0.9;
+    const rail = new THREE.CylinderGeometry(CASE_FRONT + 0.66, CASE_FRONT + 0.66, 0.16, roomSeg, 1, true);
+    rail.translate(0, railY, 0);
+    far.push(tintGeometry(rail, 0xfff6fc));
+    const pilasters = lo ? 10 : q === 'medium' ? 13 : 16;
+    for (let i = 0; i < pilasters; i++) {
+      const pa = BACK_ARC + 0.16 + (i / pilasters) * TAU;
+      const ph = ROOM_TOP - 0.5 - railY;
+      const strip = new THREE.BoxGeometry(0.26, ph, 0.16);
+      strip.rotateY(pa);
+      strip.translate(
+        Math.sin(pa) * (CASE_FRONT + 0.5),
+        railY + ph * 0.5,
+        Math.cos(pa) * (CASE_FRONT + 0.5),
       );
-      const knob = new THREE.SphereGeometry(jr * 0.62, 5, 3);
-      knob.translate(slot.x, y + 0.06 + jh, slot.z);
-      far.push(tintGeometry(knob, 0xfff3fa));
+      far.push(tintGeometry(strip, 0xfdf1f9));
+    }
+
+    // the cove itself: a bright lip at the top of the wall
+    const cove = new THREE.CylinderGeometry(CASE_FRONT + 0.4, CASE_FRONT + 0.55, 0.3, roomSeg, 1, true);
+    cove.translate(0, ROOM_TOP - 0.15, 0);
+    far.push(tintGeometry(cove, 0xfff2fa));
+    glow.push(
+      tintGeometry(
+        new THREE.CylinderGeometry(CASE_FRONT + 0.38, CASE_FRONT + 0.38, 0.5, roomSeg, 1, true),
+        0xffffff,
+      ).translate(0, ROOM_TOP - 0.5, 0),
+    );
+  }
+
+  // the shelf carcass
+  const shelfHeights = lo
+    ? [top - 1.65, top - 0.75, top + 0.15, top + 1.05, top + 1.95, top + 2.85]
+    : [top - 2.1, top - 1.2, top - 0.3, top + 0.6, top + 1.5, top + 2.4];
+  for (const [aStart, aLen] of caseSpans) {
+    const segs = Math.max(3, Math.round((aLen / TAU) * roomSeg));
+    // the back of the niche, a stop darker than anything in front of it
+    const nb = new THREE.CylinderGeometry(
+      CASE_BACK,
+      CASE_BACK,
+      CORNICE_Y - CASE_LOW,
+      segs,
+      envSeg(q, 3, 2, 2),
+      true,
+      aStart,
+      aLen,
+    );
+    nb.translate(0, (CORNICE_Y + CASE_LOW) * 0.5, 0);
+    far.push(tintGradientY(nb, 0xb7a2d4, 0xecdcf4, CASE_LOW, CORNICE_Y));
+
+    for (const y of shelfHeights) {
+      far.push(tintGeometry(arcRing(CASE_FRONT, CASE_BACK, aStart, aLen, y + 0.06, segs), 0xfff8fc));
+      // underside, in shadow — the pair of them is what gives a board thickness
+      far.push(tintGeometry(arcRing(CASE_FRONT, CASE_BACK, aStart, aLen, y - 0.03, segs), 0xc3aeda));
+      const nose = new THREE.CylinderGeometry(CASE_FRONT, CASE_FRONT, 0.085, segs, 1, true, aStart, aLen);
+      nose.translate(0, y + 0.01, 0);
+      far.push(tintGeometry(nose, 0xf3e2f7));
+    }
+
+    // dividers between the bays
+    const bays = Math.max(1, Math.round((aLen / TAU) * (lo ? 34 : q === 'medium' ? 52 : 74)));
+    for (let b = 0; b <= bays; b++) {
+      const a = aStart + (b / bays) * aLen;
+      const div = new THREE.BoxGeometry(0.075, CORNICE_Y - CASE_LOW, CASE_BACK - CASE_FRONT);
+      div.rotateY(a);
+      div.translate(
+        Math.sin(a) * (CASE_FRONT + CASE_BACK) * 0.5,
+        (CORNICE_Y + CASE_LOW) * 0.5,
+        Math.cos(a) * (CASE_FRONT + CASE_BACK) * 0.5,
+      );
+      far.push(tintGeometry(div, 0xf7ecfb));
+    }
+
+    // and the stock: rows of jars standing IN the bays, not on a flat ring
+    const perShelf = Math.max(
+      2,
+      Math.round((aLen / TAU) * (lo ? 28 : q === 'medium' ? 36 : 42)),
+    );
+    for (let s = 0; s < shelfHeights.length; s++) {
+      const y = shelfHeights[s];
+      const slots = ringSlots(rng, perShelf, CASE_FRONT + 0.28, CASE_BACK - 0.34, {
+        jitter: 0.7,
+        startAngle: aStart,
+      });
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i];
+        const a = aStart + ((i + 0.5) / slots.length) * aLen + rng.signed() * 0.012;
+        const rr = slot.radius;
+        const x = Math.sin(a) * rr;
+        const z = Math.cos(a) * rr;
+        const jh = rng.range(0.3, 0.58);
+        const jr = rng.range(0.085, 0.15);
+        const jar = new THREE.CylinderGeometry(jr, jr * 0.92, jh, 5, 1, false);
+        jar.translate(x, y + 0.06 + jh * 0.5, z);
+        far.push(
+          tintGeometry(jar, rng.bool(0.42) ? 0xffeaf4 : JAR_CANDY[(i + s) % JAR_CANDY.length]),
+        );
+      }
+    }
+  }
+
+  // --- the windows, and the shop on the other side of them ----------------
+  for (let w = 0; w < winArcs.length; w++) {
+    const a = winArcs[w];
+    const sillY = top + 0.1;
+    const halfW = Math.sin(winHalf) * CASE_FRONT;
+    const springY = top + 1.7;
+    const headY = springY + halfW;
+
+    // the glazing: a flat panel of daylight set at the far wall
+    const pane = facingQuad(
+      Math.sin(a) * (BACK_R - 0.25),
+      (sillY + headY) * 0.5,
+      Math.cos(a) * (BACK_R - 0.25),
+      halfW * 2.1,
+      headY - sillY,
+    );
+    glow.push(tintGeometry(pane, 0xffffff));
+
+    // glazing bars: six lights over two. Without them the opening reads as a
+    // hole cut in the wall rather than as a window with a shop behind it.
+    for (let bar = 1; bar < 3; bar++) {
+      const bx = (bar / 3 - 0.5) * halfW * 2;
+      const mull = new THREE.BoxGeometry(0.055, headY - sillY, 0.05);
+      mull.rotateY(a);
+      mull.translate(
+        Math.sin(a) * (BACK_R - 0.4) + Math.sin(a + Math.PI / 2) * bx,
+        (sillY + headY) * 0.5,
+        Math.cos(a) * (BACK_R - 0.4) + Math.cos(a + Math.PI / 2) * bx,
+      );
+      far.push(tintGeometry(mull, 0xf6ebfa));
+    }
+    for (let bar = 1; bar < 3; bar++) {
+      const by = sillY + ((headY - sillY) * bar) / 3;
+      const rail = new THREE.BoxGeometry(halfW * 2, 0.055, 0.05);
+      rail.rotateY(a);
+      rail.translate(Math.sin(a) * (BACK_R - 0.4), by, Math.cos(a) * (BACK_R - 0.4));
+      far.push(tintGeometry(rail, 0xf6ebfa));
+    }
+
+    // reveal: jambs, sill and an arched head, all standing proud of the wall
+    const jambH = springY - sillY;
+    for (const side of [-1, 1]) {
+      const ja = a + side * winHalf;
+      const jamb = new THREE.BoxGeometry(0.2, jambH, BACK_R - CASE_FRONT);
+      jamb.rotateY(ja);
+      jamb.translate(
+        Math.sin(ja) * (CASE_FRONT + BACK_R) * 0.5,
+        (springY + sillY) * 0.5,
+        Math.cos(ja) * (CASE_FRONT + BACK_R) * 0.5,
+      );
+      far.push(tintGeometry(jamb, 0xfff6fc));
+    }
+    const sill = new THREE.BoxGeometry(halfW * 2.6, 0.24, BACK_R - CASE_FRONT + 0.4);
+    sill.rotateY(a);
+    sill.translate(
+      Math.sin(a) * (CASE_FRONT + BACK_R) * 0.5,
+      sillY - 0.1,
+      Math.cos(a) * (CASE_FRONT + BACK_R) * 0.5,
+    );
+    far.push(tintGeometry(sill, 0xf4e4f8));
+    // arched head: a half ring standing in the plane of the window
+    const arch = new THREE.RingGeometry(halfW, halfW + 0.17, envSeg(q, 14, 11, 8), 1, 0, Math.PI);
+    arch.rotateY(a + Math.PI);
+    arch.translate(
+      Math.sin(a) * (CASE_FRONT + 0.1),
+      springY,
+      Math.cos(a) * (CASE_FRONT + 0.1),
+    );
+    far.push(tintGeometry(arch, 0xfff6fc));
+    const archBack = new THREE.RingGeometry(halfW, halfW + 0.17, envSeg(q, 14, 11, 8), 1, 0, Math.PI);
+    archBack.rotateY(a + Math.PI);
+    archBack.translate(Math.sin(a) * (BACK_R - 0.3), springY, Math.cos(a) * (BACK_R - 0.3));
+    far.push(tintGeometry(archBack, 0xd8c3e8));
+
+    // the shop beyond: silhouettes standing INSIDE the reveal, so they read
+    // as dark shapes against the daylight rather than as furniture nobody can
+    // see. A bentwood chair and a cafe table is the whole vocabulary needed.
+    if (!lo) {
+      const shopR = BACK_R - 0.75;
+      const shop: Array<THREE.BufferGeometry | null> = [];
+      const tableTop = new THREE.CylinderGeometry(0.42, 0.42, 0.07, envSeg(q, 12, 9, 7), 1);
+      tableTop.translate(0, sillY + 1.05, 0);
+      shop.push(tableTop);
+      const stem = new THREE.CylinderGeometry(0.06, 0.1, 1.05, 6, 1);
+      stem.translate(0, sillY + 0.52, 0);
+      shop.push(stem);
+      const chairBack = new THREE.TorusGeometry(0.3, 0.045, 4, envSeg(q, 12, 9, 7), Math.PI);
+      chairBack.translate(0.72, sillY + 1.32, 0);
+      shop.push(chairBack);
+      const chairSeat = new THREE.CylinderGeometry(0.3, 0.28, 0.06, envSeg(q, 10, 8, 6), 1);
+      chairSeat.translate(0.72, sillY + 0.98, 0);
+      shop.push(chairSeat);
+      for (let l = 0; l < 3; l++) {
+        const leg = new THREE.CylinderGeometry(0.035, 0.035, 0.95, 4, 1);
+        leg.translate(0.72 + (l - 1) * 0.2, sillY + 0.48, l === 1 ? 0.18 : -0.14);
+        shop.push(leg);
+      }
+      const merged = mergeEnv(shop);
+      if (merged) {
+        merged.rotateY(a);
+        merged.translate(Math.sin(a) * shopR, 0, Math.cos(a) * shopR);
+        // barely darker than the light behind them: a patisserie window is not
+        // a silhouette study, it is a bright blur with shapes suggested in it
+        far.push(tintGeometry(merged, 0xbfa9d6));
+      }
     }
   }
 
@@ -1260,7 +1691,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   if (rich) {
     const vh = 0.66;
     const vSeg = envSeg(q, 96, 64, 40);
-    const band = new THREE.CylinderGeometry(SHELF_R - 0.08, SHELF_R - 0.08, vh, vSeg, 1, true);
+    const band = new THREE.CylinderGeometry(CASE_FRONT - 0.06, CASE_FRONT - 0.06, vh, vSeg, 1, true);
     const pos = band.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const y = pos.getY(i);
@@ -1270,7 +1701,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     }
     pos.needsUpdate = true;
     band.computeVertexNormals();
-    band.translate(0, wallHigh - vh * 0.5, 0);
+    band.translate(0, CORNICE_Y - vh * 0.5, 0);
     valance.push(band);
   }
 
@@ -1301,7 +1732,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         segments: lo ? 10 : 18,
       },
     );
-    if (line) flags.push(line);
+    if (line) flagsOut.push(line);
   }
 
   // --- assemble: one mesh per material ------------------------------------
@@ -1326,17 +1757,25 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     clearcoat: 0.9,
     clearcoatRoughness: 0.08,
   });
-  // The low tier zeroes transmission and falls back to opacity, so the base
-  // colour has to carry the glass on its own.
+  // The low tier zeroes transmission and falls back to alpha, so everything
+  // that says "glass" there has to be in the base tint, the opacity and the
+  // specular. A near-white was tried and reads as porcelain: what a pale
+  // interior needs is glass slightly DARKER and cooler than the room behind
+  // it, held up by a hard clearcoat highlight and the flute ribs.
   const glassMat = ctx.materials.physical('candy.env.glass', {
-    color: 0xe6f1fb,
-    roughness: 0.05,
+    color: 0xc9dcea,
+    roughness: 0.045,
     metalness: 0,
-    transmission: 0.92,
-    thickness: 0.3,
-    ior: 1.46,
+    transmission: 0.94,
+    thickness: 0.34,
+    ior: 1.48,
+    attenuationColor: 0xdff0ff,
+    attenuationDistance: 1.6,
     clearcoat: 1,
     clearcoatRoughness: 0.03,
+    specularIntensity: 1,
+    opacity: 0.62,
+    side: THREE.DoubleSide,
   });
   const sweetsMat = ctx.materials.physical('candy.env.sweets', {
     color: 0xffffff,
@@ -1372,6 +1811,24 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     metalness: 0,
     side: THREE.DoubleSide,
   });
+  // Light, not a thing: the cove above the cornice, the daylight in the shop
+  // window, and the pools under the jars all wear the same soft alpha disc.
+  const glowMat = ctx.materials.standard('candy.env.glow', {
+    color: 0x000000,
+    emissive: 0xfff0f8,
+    emissiveIntensity: 1.35,
+    map: ctx.materials.texture(
+      'candy.env.glow.sprite',
+      (c, sz) => radialGlow(c, sz, '#FFF4FA', 0.2, 2.1),
+      { size: 128, wrap: THREE.ClampToEdgeWrapping },
+    ),
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
   const flagMat = ctx.materials.standard('candy.env.bunting', {
     color: 0xffffff,
     vertexColors: true,
@@ -1398,6 +1855,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   add(far, farMat, false, false);
   add(valance, valanceMat, false, false);
   add(flags, flagMat, false, false);
+  const glowGeo = mergeEnv(glow);
+  if (glowGeo) {
+    const m = mesh(glowGeo, glowMat, { cast: false, receive: false });
+    m.renderOrder = 3;
+    g.add(m);
+  }
 
   return g;
 }

@@ -84,6 +84,17 @@ export { PALETTE_FADE } from './constants';
  * palette is the same mistake as too much exposure on one. The dark theme
  * (Sushi) takes the most: the tightest glow, the only stars, and the only
  * cloud deck whose shadow side is darker than the sky behind it.
+ *
+ * **No cloud is pure white, and that is a bloom constraint, not taste.** The
+ * backdrop pre-divides by the inverse ACES curve, which runs away as a colour
+ * approaches display white — so `backdropPeakLuma` climbs steeply and takes
+ * the bloom threshold with it, and every real specular highlight in the frame
+ * needs to clear that threshold to glow. Measured: Breakfast's first cloud
+ * colour of #fffdf6 pushed its threshold from 3.09 to 6.91, i.e. more than
+ * doubled what a syrup highlight had to beat. Backing off to #faf3e4 — six
+ * steps, invisible against a cream sky — put it back to 3.07. If you retune a
+ * `cloudColor`, `horizonColor` or `glowColor` upward, check what it did to
+ * `bloomThresholdFor` before shipping it.
  */
 export const SKY_PRESETS: Record<ThemeId, SkyConfig> = {
   /**
@@ -101,7 +112,7 @@ export const SKY_PRESETS: Record<ThemeId, SkyConfig> = {
     glowColor: 0xffdca6,
     glowSpread: 0.95,
     cloudCover: 0.34,
-    cloudColor: 0xfff6e6,
+    cloudColor: 0xfbf0dc,
     cloudShadow: 0.45,
     cloudDrift: 0.022,
     horizonColor: 0xffd5a8,
@@ -124,7 +135,7 @@ export const SKY_PRESETS: Record<ThemeId, SkyConfig> = {
     glowColor: 0xfff3dc,
     glowSpread: 1.25,
     cloudCover: 0.3,
-    cloudColor: 0xfffdf6,
+    cloudColor: 0xfaf3e4,
     cloudShadow: 0.2,
     cloudDrift: 0.014,
     horizonColor: 0xffe9c6,
@@ -170,7 +181,7 @@ export const SKY_PRESETS: Record<ThemeId, SkyConfig> = {
     glowColor: 0xffe6be,
     glowSpread: 1.1,
     cloudCover: 0.35,
-    cloudColor: 0xfff4e4,
+    cloudColor: 0xfaeeda,
     cloudShadow: 0.32,
     cloudDrift: 0.016,
     horizonColor: 0xf0cfa6,

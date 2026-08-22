@@ -5,14 +5,13 @@ import type {
   MaterialLibrary,
   RenderQualitySettings,
   SceneKit,
-  SkyConfig,
   ThemePaletteLike,
 } from './api';
 import { Backdrop, createBackdrop } from './backdrop';
 import { createEnvironment, EnvironmentRig } from './environment';
 import { createLightRig, LightRig, shadowMapSizeFor } from './lighting';
 import { createMaterialLibrary, MaterialLib } from './MaterialLibrary';
-import { copyPalette, DEFAULT_PALETTE, PALETTE_FADE, SKY_PRESETS } from './palette';
+import { copyPalette, DEFAULT_PALETTE, PALETTE_FADE } from './palette';
 import { createPostChain, PostChain } from './post';
 import { CameraShake } from './shake';
 import { cssHex, makeSurface } from './surface';
@@ -44,43 +43,6 @@ const DPR_CAP: Record<QualityTier, number> = { high: 2, medium: 1.75, low: 1.35 
 function clampDpr(tier: QualityTier, requested: number): number {
   const wanted = Number.isFinite(requested) && requested > 0 ? requested : 1;
   return Math.max(1, Math.min(wanted, DPR_CAP[tier]));
-}
-
-/**
- * TEMPORARY — REMOVE. Content owns `palette.sky` and has not wired it yet, so
- * this stands the presets up against the real themes long enough to measure
- * them. Keyed on bgTop because that is unique per palette, and off by default
- * unless the probe harness seeds the flag.
- */
-const TEMP_SKY_BY_BGTOP: Record<number, keyof typeof SKY_PRESETS> = {
-  0xffe7c4: 'diner',
-  0x22384a: 'sushi',
-  0xffe3f5: 'candy',
-  0xffc46b: 'taco',
-  0xfff3d6: 'breakfast',
-  0xffe9c7: 'pizza',
-};
-let TEMP_skyFlag: string | null | undefined;
-let TEMP_skyOverride: Partial<SkyConfig> | null | undefined;
-function TEMP_injectSky(p: ThemePaletteLike): ThemePaletteLike {
-  if (TEMP_skyFlag === undefined) {
-    try {
-      TEMP_skyFlag = localStorage.getItem('snackery.sky');
-      const raw = localStorage.getItem('snackery.sky.override');
-      TEMP_skyOverride = raw ? (JSON.parse(raw) as Partial<SkyConfig>) : null;
-    } catch {
-      TEMP_skyFlag = null;
-      TEMP_skyOverride = null;
-    }
-  }
-  let sky = p.sky;
-  if (!sky && TEMP_skyFlag === 'on') {
-    const id = TEMP_SKY_BY_BGTOP[p.bgTop];
-    if (id) sky = SKY_PRESETS[id];
-  }
-  if (!sky) return p;
-  if (TEMP_skyOverride) sky = { ...sky, ...TEMP_skyOverride };
-  return sky === p.sky ? p : { ...p, sky };
 }
 
 function nextTierDown(tier: QualityTier): QualityTier {
@@ -219,7 +181,6 @@ class Kit implements SceneKit {
   // ------------------------------------------------------------- palette
 
   applyPalette(p: ThemePaletteLike, duration = PALETTE_FADE): void {
-    p = TEMP_injectSky(p);
     copyPalette(p, this.palette);
 
     this.fromFog.copy(this.fog.color);

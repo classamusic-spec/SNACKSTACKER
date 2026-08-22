@@ -70,6 +70,24 @@ import {
  *
  * The sun's bearing is `KEY_AZIMUTH` from lighting.ts in every preset — see
  * the note there for why the bearing must match and the altitude need not.
+ *
+ * ## What the two paths are allowed to disagree about
+ *
+ * Everything the sky draws is a `mix` between authored colours, in the same
+ * display-referred space the sweep already used, and it happens BEFORE the
+ * uDirect branch. So it inherits the existing deal with the tone mapper for
+ * free and cannot drift from it. Verified by flooding the sky with a known
+ * colour (`tools/sky-probe.mjs` with a cover-1 / shadow-0 override) and
+ * comparing against the value computed on the CPU: both paths land within 3
+ * of 255 on a mid-tone, on a clamped near-white and on a near-black, and
+ * against each other the low and medium tiers are bit-identical over the whole
+ * sky band — 0 of 39,300 pixels differ.
+ *
+ * The one exception is deliberate. The sun disc is ADDED, after the inverse,
+ * in scene-linear units, because it is the only thing here that needs HDR
+ * headroom to bloom. The direct path has no headroom and no bloom, so it gets
+ * a clamped white disc instead. Both read as a white core; only the halo
+ * differs, and the halo is a tier feature.
  */
 
 const SKY_RADIUS = 100;
@@ -412,7 +430,6 @@ ${open ? skyBody(octaves, warp, lit) : ''}
 `;
 }
 
-/** Noise budget per pixel, per tier. Measured, not guessed — see the report. */
 interface SkyTier {
   octaves: number;
   /** Domain-warp samples. 0 drops the warp and the field reads as noise. */
@@ -421,13 +438,35 @@ interface SkyTier {
   lit: boolean;
 }
 
+/**
+ * Cloud budget per tier. Measured with `tools/sky-cost.mjs`, which compiles
+ * these exact generated shaders and times fullscreen passes over 530x1150 —
+ * a phone at the low tier's DPR cap. Frame-time A/B against the running game
+ * cannot do this job: SwiftShader holds the 60fps rAF cap at phone size and
+ * collapses to a quarter of a frame per second by the time the viewport is
+ * large enough to escape it.
+ *
+ *   variant                value-noise    ns/px    x studio sweep
+ *   studio (no sky)                  0    43-45              1.00
+ *   low     2 oct, no warp           2   118-142         2.6-3.3
+ *   medium  3 oct + 1 warp + lit     5   164-168         3.6-3.9
+ *   high    5 oct + 2 warp + lit     8   180-189         4.0-4.4
+ *
+ * The shape of that is worth more than the absolute numbers, which are CPU
+ * raster and do not transfer to a phone GPU: roughly 55 ns/px of fixed sky
+ * overhead — two exps for the glow, one for the haze, an asin, the disc and
+ * a dozen mixes — plus about 10 ns/px per value-noise fetch. Octaves are the
+ * cheap axis; simply having a sky is the expensive one. Which is why 'studio'
+ * is a separate program rather than this one with the terms zeroed.
+ *
+ * Stars sit behind a `uStars > 0.0` uniform branch (one atan, three hashes),
+ * so only Sushi Tower pays for them.
+ */
 const SKY_TIERS: Record<QualityTier, SkyTier> = {
-  // 5 + 2 + 1 = 8 value-noise fetches (32 hashes) a pixel.
   high: { octaves: 5, warp: 2, lit: true },
-  // 3 + 1 + 1 = 5 fetches (20 hashes).
   medium: { octaves: 3, warp: 1, lit: true },
-  // 2 + 0 + 0 = 2 fetches (8 hashes). No warp, no directional sample; the
-  // density term alone still gives the deck a lit fringe and a grey core.
+  // No warp and no directional sample. The density term alone still gives the
+  // deck a lit fringe and a grey core, which is most of the volume read.
   low: { octaves: 2, warp: 0, lit: false },
 };
 
@@ -672,6 +711,13 @@ export class Backdrop {
     if (this.skyOpen) this.compileVariant(true);
   }
 
+  /**
+   * three keys its program cache on the shader source, so this costs a compile
+   * only the first time a given variant is asked for. The studio program is
+   * built at construction, which means going back to a studio theme is always
+   * free; only the first switch into an open sky pays, and that lands behind
+   * the store's transition.
+   */
   private compileVariant(open: boolean): void {
     const t = SKY_TIERS[this.tier];
     this.skyMat.fragmentShader = buildFrag(open, t.octaves, t.warp, t.lit);
@@ -793,9 +839,9 @@ export class Backdrop {
     // White is the only value with anywhere to go. The hue survives in the
     // glow, which is where it was doing the work anyway.
     out.sunTint.setHex(s.sunColor, THREE.SRGBColorSpace).lerp(WHITE, 0.85);
-    out.sunLin
-      .setHex(s.sunColor, THREE.SRGBColorSpace)
-      .multiplyScalar(sunLinearScale(p) * intensity);
+    // sunLinearScale already folds intensity in, on a curve that keeps a soft
+    // sun above the bloom threshold instead of falling off a cliff below it.
+    out.sunLin.setHex(s.sunColor, THREE.SRGBColorSpace).multiplyScalar(sunLinearScale(p));
 
     out.glow.setHex(s.glowColor, THREE.SRGBColorSpace);
     out.glowSpread = Math.max(0.05, s.glowSpread);

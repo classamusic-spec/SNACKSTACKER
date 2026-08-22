@@ -128,15 +128,22 @@ function lumaOfHex(hex: number, exposure: number, gain: number): number {
   return tmpVec.x * REC709.r + tmpVec.y * REC709.g + tmpVec.z * REC709.b;
 }
 
-/** Same, for a colour that is already a linear display-referred triple. */
-function lumaOfLinear(v: number, exposure: number, gain: number): number {
-  tmpColor.setRGB(v, v, v);
+/**
+ * Brightest a star can make a pixel, in display-referred linear.
+ *
+ * Mirrors backdrop.ts exactly: the star colour is the glow lerped 0.75 toward
+ * white, and it is mixed in at 0.85. Estimating it as a flat 0.85 grey instead
+ * cost Sushi Tower half a stop of bloom threshold for nothing — on a palette
+ * whose whole backdrop sits at 0.06, an over-estimate here is the difference
+ * between the wasabi highlight blooming and not.
+ */
+function starPeakLuma(glowHex: number, exposure: number, gain: number): number {
+  tmpColor.setHex(glowHex, THREE.SRGBColorSpace).lerp(WHITE, 0.75).multiplyScalar(0.85);
   acesInverse(tmpColor, exposure, tmpVec).multiplyScalar(gain);
   return tmpVec.x * REC709.r + tmpVec.y * REC709.g + tmpVec.z * REC709.b;
 }
 
-/** Matches the star mix in backdrop.ts: `mix( col, uStarColor, 0.85 )`. */
-const STAR_PEAK = 0.85;
+const WHITE = /* @__PURE__ */ new THREE.Color(0xffffff);
 
 /**
  * Brightest luminance the cyclorama can reach for this palette, in the linear
@@ -173,7 +180,7 @@ export function backdropPeakLuma(
       peak = Math.max(peak, lumaOfHex(sky.cloudColor, exposure, glowGain));
     }
     if (sky.stars > 0.001) {
-      peak = Math.max(peak, lumaOfLinear(STAR_PEAK, exposure, glowGain));
+      peak = Math.max(peak, starPeakLuma(sky.glowColor, exposure, glowGain));
     }
   }
   return peak;
@@ -209,8 +216,16 @@ const SUN_BLOOM_HEADROOM = 2.6;
 export function sunLinearScale(p: ThemePaletteLike): number {
   const sky = p.sky;
   if (!sky || sky.kind !== 'open') return 0;
+  const intensity = Math.max(0, sky.sunIntensity);
+  if (intensity <= 0) return 0;
   tmpColor.setHex(sky.sunColor, THREE.SRGBColorSpace);
   const luma = tmpColor.r * REC709.r + tmpColor.g * REC709.g + tmpColor.b * REC709.b;
   if (luma <= 0.0001) return 0;
-  return (bloomThresholdFor(p) * SUN_BLOOM_HEADROOM) / luma;
+  // Intensity compresses rather than scales. Scaling it straight through put
+  // Breakfast Rush's deliberately soft 0.55 sun at 1.4x the threshold and
+  // anything under 0.39 below it entirely — a cliff where the disc silently
+  // stops blooming. This keeps every non-zero sun clear of the high-pass
+  // while still making a hot sun hotter.
+  const boost = 0.55 + 0.45 * Math.min(intensity, 1.6);
+  return (bloomThresholdFor(p) * SUN_BLOOM_HEADROOM * boost) / luma;
 }

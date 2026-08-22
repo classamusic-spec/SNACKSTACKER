@@ -1055,14 +1055,15 @@ function shadeAdobe(
   if (!pos) return geo;
   const { floorY, crestY, lamps } = opts;
   const gain = opts.lampGain ?? 1;
-  const reach = Math.max(opts.lampReach ?? 1.9, 0.2);
+  const reach = Math.max(opts.lampReach ?? 1.5, 0.2);
   const coping = opts.coping ?? true;
 
-  const shadeLow = new THREE.Color(0x3d2445).convertSRGBToLinear();
-  const shadeHigh = new THREE.Color(0x9a7290).convertSRGBToLinear();
-  const sunLow = new THREE.Color(0x8f5340).convertSRGBToLinear();
-  const sunHigh = new THREE.Color(0xe0a276).convertSRGBToLinear();
-  const lampColor = new THREE.Color(0xffa447).convertSRGBToLinear();
+  const shadeLow = new THREE.Color(0x4c3a62).convertSRGBToLinear();
+  const shadeHigh = new THREE.Color(0xab93ba).convertSRGBToLinear();
+  const sunLow = new THREE.Color(0x9c6a52).convertSRGBToLinear();
+  const sunHigh = new THREE.Color(0xecb289).convertSRGBToLinear();
+  const lampColor = new THREE.Color(0xffbe7c).convertSRGBToLinear();
+  const glowRim = new THREE.Color(0xe8a271).convertSRGBToLinear();
 
   const span = Math.max(crestY - floorY, 1e-3);
   const arr = new Float32Array(pos.count * 3);
@@ -1095,10 +1096,19 @@ function shadeAdobe(
       warm,
     );
 
+    // The crest sees the whole sunset half of the sky whichever way its face
+    // points, so it catches the horizon glow even on the shadow side. This is
+    // the line that stops the wall reading as a violet stripe pasted under an
+    // orange town.
+    const rim = Math.pow(clamp01((y - (crestY - 0.75)) / 0.75), 1.7) * 0.55;
+    r = lerp(r, glowRim.r, rim);
+    g = lerp(g, glowRim.g, rim);
+    b = lerp(b, glowRim.b, rim);
+
     if (coping) {
       // a soft band of shadow thrown down the wall by the lip on top of it
       const under = clamp01((y - (crestY - 0.42)) / 0.42) * clamp01((crestY - y) / 0.1);
-      const k = 1 - 0.42 * under;
+      const k = 1 - 0.5 * under;
       r *= k;
       g *= k;
       b *= k;
@@ -1113,7 +1123,7 @@ function shadeAdobe(
       const d2 = (dx * dx + dy * dy + dz * dz) / (reach * reach);
       lit += 1 / (1 + d2 * d2);
     }
-    lit = Math.min(lit * gain, 1.5);
+    lit = Math.min(lit * gain, 0.55);
     r += lampColor.r * lit;
     g += lampColor.g * lit;
     b += lampColor.b * lit;
@@ -1528,19 +1538,24 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     );
     if (shade) {
       shade.translate(x, top + 0.11, z);
-      glass.push(shade);
+      // low tier has no glass pass; the chimney rides with the wet food, whose
+      // clearcoat is the closest thing to a highlight available there
+      if (lo) food.push(tintGeometry(shade, 0xd8e4d4));
+      else glass.push(shade);
     }
     const collar = new THREE.TorusGeometry(0.205, 0.022, 4, envSeg(q, 12, 10, 7));
     collar.rotateX(Math.PI / 2);
     collar.translate(x, top + 0.9, z);
     clay.push(tintGeometry(collar, 0x4a3226));
     // the flame, and the pool of light it puts on the cloth
-    const flame = new THREE.SphereGeometry(0.075, envSeg(q, 8, 7, 6), envSeg(q, 7, 6, 5));
-    flame.scale(0.8, 1.9, 0.8);
-    flame.translate(x, top + 0.36, z);
-    bulbs.push(flame);
-    glow.push(facingQuad(x, top + 0.38, z, 1.5, 1.5));
-    const pool = new THREE.PlaneGeometry(3.1, 3.1);
+    if (!lo) {
+      const flame = new THREE.SphereGeometry(0.075, envSeg(q, 7, 6, 5), envSeg(q, 6, 5, 4));
+      flame.scale(0.8, 1.9, 0.8);
+      flame.translate(x, top + 0.36, z);
+      bulbs.push(flame);
+    }
+    glow.push(facingQuad(x, top + 0.42, z, 2.1, 2.1));
+    const pool = new THREE.PlaneGeometry(4.2, 4.2);
     pool.rotateX(-Math.PI / 2);
     pool.translate(x, top + 0.008, z);
     glow.push(pool);
@@ -1554,7 +1569,6 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   if (!lo) salsaBowl(2.95, 3.7);
   if (q === 'high') limeDish(3.05, 4.5);
   if (q === 'high') clayJug(-2.35, 4.6);
-  if (lo) coldBottle(0.73, 4.95);
 
   // Limes and a chilli rolled across the near edge of the table. The near arc
   // lands low in the frame, which is otherwise bare cloth and paint.
@@ -1671,12 +1685,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const p = path[Math.floor(path.length / 2)];
       lamps.push(p.clone());
       if (!lo) {
-        const bulb = new THREE.SphereGeometry(0.105, envSeg(q, 8, 7, 5), envSeg(q, 6, 5, 4));
+        const bulb = new THREE.SphereGeometry(0.105, envSeg(q, 6, 6, 5), envSeg(q, 4, 4, 3));
         bulb.scale(1, 1.3, 1);
         bulb.translate(p.x, p.y - 0.06, p.z);
         bulbs.push(bulb);
       }
-      glow.push(facingQuad(p.x * 0.985, p.y - 0.06, p.z * 0.985, 1.15, 1.15));
+      glow.push(facingQuad(p.x * 0.985, p.y - 0.06, p.z * 0.985, 0.92, 0.92));
     }
   }
 
@@ -1694,7 +1708,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       true,
     );
     wall.translate(0, (wallLow + wallHigh) * 0.5, 0);
-    stucco.push(shadeAdobe(wall, { floorY: floor - 0.4, crestY: wallHigh, lamps, lampGain: 0.62 }));
+    stucco.push(shadeAdobe(wall, { floorY: floor - 0.4, crestY: wallHigh, lamps, lampGain: 0.17 }));
 
     // Piers: eight buttresses standing 0.24 proud of the face. They are what
     // give the wall a shadow of its own from the key, which is the difference
@@ -1715,7 +1729,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
           floorY: floor - 0.4,
           crestY: wallHigh,
           lamps,
-          lampGain: 0.5,
+          lampGain: 0.13,
           coping: false,
         }),
       );
@@ -1736,7 +1750,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
           floorY: wallHigh - 1.6,
           crestY: wallHigh + 0.3,
           lamps,
-          lampGain: 0.34,
+          lampGain: 0.11,
           coping: false,
         }),
       );
@@ -1766,16 +1780,20 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const r = ROOF_R + rng.range(-2.2, 2.4);
       const x = Math.sin(a) * r;
       const z = Math.cos(a) * r;
-      const roofY = top + rng.range(0.75, ROOF_TOP);
-      const w = rng.range(0.85, 1.55);
-      const d = rng.range(0.75, 1.35);
+      // A town is a low mass with occasional punctuation, not a row of
+      // columns. Two thirds of these are wide and short and overlap their
+      // neighbours into a continuous block; the rest stand up out of it.
+      const tall = i % 3 === 0;
+      const roofY = top + (tall ? rng.range(1.35, ROOF_TOP) : rng.range(0.35, 1.0));
+      const w = tall ? rng.range(0.85, 1.4) : rng.range(1.9, 3.2);
+      const d = tall ? rng.range(0.75, 1.25) : rng.range(1.4, 2.3);
       const body = new THREE.BoxGeometry(w, roofY - (top - 1.78), d);
       body.rotateY(a + rng.signed() * 0.25);
       body.translate(x, (roofY + top - 1.78) * 0.5, z);
       // sunward faces warm, the rest fall away into the violet
       const face = clamp01(-Math.cos(a - SUN_AZ));
       roofParts.push(tintGeometry(body, face > 0.35 ? 0x9e5341 : 0x6b3a40));
-      if (i % 3 === 0) {
+      if (!tall && i % 2 === 0) {
         // a pitched tile roof: a four-sided cone, squashed onto the footprint
         const pitch = new THREE.CylinderGeometry(0.02, Math.max(w, d) * 0.78, 0.44, 4, 1);
         pitch.rotateY(a + Math.PI / 4);
@@ -1788,7 +1806,7 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         parapet.translate(x, roofY + 0.06, z);
         roofParts.push(tintGeometry(parapet, 0xc07a58));
       }
-      if (!lo && i % 4 === 1) {
+      if (!lo && tall && i % 6 === 1) {
         // a roof water tank on stilts, the shape that says "town" fastest
         const tankH = Math.min(0.5, top + ROOF_TOP - roofY - 0.24);
         if (tankH > 0.12) {
@@ -1997,12 +2015,12 @@ function buildEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       const t = (b + 0.5) / perLine;
       const p = path[Math.min(path.length - 1, Math.round(t * (path.length - 1)))];
       if (!lo) {
-        const bulb = new THREE.SphereGeometry(0.15, envSeg(q, 8, 7, 5), envSeg(q, 6, 5, 4));
+        const bulb = new THREE.SphereGeometry(0.15, envSeg(q, 7, 6, 5), envSeg(q, 5, 4, 3));
         bulb.scale(1, 1.28, 1);
         bulb.translate(p.x, p.y - 0.18, p.z);
         bulbs.push(bulb);
       }
-      glow.push(facingQuad(p.x * 0.99, p.y - 0.18, p.z * 0.99, 1.3, 1.3));
+      glow.push(facingQuad(p.x * 0.99, p.y - 0.18, p.z * 0.99, 1.05, 1.05));
       const collar = new THREE.CylinderGeometry(0.04, 0.055, 0.06, 5, 1);
       collar.translate(p.x, p.y - 0.05, p.z);
       papelOut.push(tintGeometry(collar, 0x3d2a20));

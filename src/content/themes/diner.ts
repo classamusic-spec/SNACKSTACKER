@@ -29,6 +29,7 @@ import {
   cutRadius,
   cutSquare,
   discFace,
+  frameRule,
   finishLayer,
   fitGeoY,
   glazePainter,
@@ -51,6 +52,7 @@ import {
   ringTorus,
   roughAmt,
   safe,
+  skyCap,
   specklePainter,
   tintEach,
   turfPainter,
@@ -619,50 +621,14 @@ const SHADOW_Z = -Math.cos(DINER_SKY.sunAzimuth);
 const SHADOW_LEN = 1 / Math.tan(Math.max(DINER_SKY.sunElevation, 0.08));
 const SHADOW_MAX = 9.5;
 
-// --- the skyline -----------------------------------------------------------
-const CAM_DIST = 11.5;
-/** Camera height above the tower top, and its horizontal setback. */
-const CAM_EYE = Math.sin(0.5) * CAM_DIST;
-const CAM_BACK = Math.cos(0.5) * CAM_DIST;
-/**
- * Angle below the horizon the skyline may not cross, in radians. The top of
- * the frame is 0.079 rad (4.55 deg) below the horizon, so 0.152 leaves about
- * 0.073 rad of clean sky — a sixth of the frame at the tightest moment, which
- * is layer 0. Every layer after that lifts the camera and gives back more.
- */
-const SKYLINE = 0.152;
-
-/** The highest a prop standing at radius `r` may reach and still leave sky. */
-function skyCap(r: number): number {
-  return CAM_EYE - (CAM_BACK + Math.max(r, 0)) * Math.tan(SKYLINE);
-}
-
-// --- hidden or clear: the OTHER half of the clearance rule ------------------
+// --- the skyline, and hidden-or-clear ---------------------------------------
 //
-// The cylinder says where a prop may stand. It says nothing about whether the
-// tower will hide its FEET, and that is the failure the kettle grill shipped
-// with: a grill obeying the cylinder at r 12, parked on the opening bearing,
-// had its legs behind the bun crown and its lid above it, and read as a black
-// balloon floating over the fence.
-//
-// The mechanism is the same "the camera pitches down" note as `skyCap`, run
-// the other way. A prop's base projects HIGHER on screen the further away it
-// is, so at some radius the base crosses the tower's apex — and a prop whose
-// base is below the apex while its top is above it has no visible contact with
-// the ground.
-//
-// There are exactly two safe states, and the gap between them is the trap:
-//
-//   HIDDEN  the prop's whole silhouette sits below the apex, inside the
-//           tower's own outline. It simply vanishes for the few degrees of
-//           orbit that put it back there.
-//   CLEAR   the prop's base is above the apex, so it reads as standing in the
-//           far lawn with grass all round its feet.
-//
-// Both bounds are evaluated at the HOME framing, because the home screen is
-// the only camera that walks every prop through the dead-behind bearing. In a
-// run the camera never orbits, so only the handful of props near the opening
-// bearing can be caught — and those are placed off it deliberately.
+// Both live in shared-savory now: `skyCap` keeps a strip of sky along the top
+// of the frame, and `frameRule` answers the other half of the bible's "the
+// cylinder is necessary, not sufficient" note — whether a prop's FEET will be
+// visible when the home turntable carries it directly behind the tower. See
+// the block above `frameRule` for why the middle state is a bug and this file
+// is where it shipped.
 
 /** Total height of the six `hero` foods: the tower the turntable orbits. */
 const HERO_H =
@@ -672,20 +638,7 @@ const HERO_H =
   tomatoRound.thickness +
   lettuceRuffle.thickness +
   bunCrown.thickness;
-/** Camera Y on the home screen. The rig targets HALF the hero stack. */
-const HOME_EYE = HERO_H / 2 + CAM_EYE;
-/** Drop from the camera to the tower's apex — the thing feet must not cross. */
-const HOME_APEX_DROP = CAM_EYE - HERO_H / 2;
-
-/** Tallest a prop at radius `r` may be and still hide entirely behind the tower. */
-function hiddenCap(r: number, groundY: number): number {
-  return HOME_EYE - groundY - HOME_APEX_DROP * (1 + Math.max(r, 0) / CAM_BACK);
-}
-
-/** Radius past which a prop's feet clear the tower's apex and read as ground. */
-function clearRadius(groundY: number): number {
-  return CAM_BACK * ((HOME_EYE - groundY) / HOME_APEX_DROP - 1);
-}
+const FRAME = frameRule(HERO_H);
 
 /** A caster whose shadow is painted into the lawn's vertex colours. */
 interface Caster {
@@ -1127,6 +1080,19 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   };
 
   // --- yard props, placed first: the lawn needs their shadows ---------------
+  /**
+   * Ceiling on the height of an ISOLATED prop standing at distance `d`.
+   *
+   * Past `clearRadius` the prop's feet are above the tower's apex and it may
+   * be any height the skyline allows; inside it, the prop has to fit entirely
+   * behind the tower or it spends part of the orbit with its feet hidden and
+   * its head showing. Continuous rings — the fence, the hedge run, the
+   * treeline — are exempt: the eye joins them up with the parts either side,
+   * which is the whole reason an isolated object is the one that floats.
+   */
+  const grounded = (d: number): number =>
+    d >= FRAME.clearRadius(yardY) ? Infinity : FRAME.hiddenCap(d, yardY);
+
   const props = new PropBatch();
   // Radii are set by `hiddenCap` (see above), not by taste: every one of these
   // is an isolated object with legs, and every one of them passes behind the
@@ -1189,12 +1155,22 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   // with an affordable ring count samples the stripe pattern about once per
   // period and the bands turn into a crawling moire. So the LAWN is a dense
   // disc out to 21 — every stripe, every shadow, every daisy lives here — and
-  // beyond it an APRON of two flat rings carries the ground out to 36 in pure
-  // haze. The apron is free, it is the same colour as the sky's horizon band
-  // so it has no visible edge of its own, and it is the difference between a
-  // distant roofline standing on the ground and hanging in the air.
+  // beyond it an APRON of two flat rings carries the ground out to 30 in pure
+  // haze. The apron is free, and it is the difference between a distant
+  // roofline standing on the ground and hanging in the air.
+  //
+  // Its rim used to be at 36 and tinted to the sky's own `horizonColor`, on
+  // the theory that a shared value cannot seam. It seamed anyway, and hard: a
+  // LIT surface tinted exactly the backdrop's colour still comes out a few
+  // percent off it, and at 36 the rim lands a third of the way down the sky
+  // where there is nothing to hide it — a peach band with a ruled edge across
+  // the top of the yard. Two changes: the rim comes in to 30, where the
+  // treeline and the rooflines straddle it, and the last third of the apron
+  // OVERSHOOTS past the haze into near-white, the same trick the pendant
+  // flexes use, so the ground runs out of colour before it runs out of
+  // geometry.
   const LAWN_R = 21;
-  const APRON_R = 36;
+  const APRON_R = 30;
   // Stripe pitch is set by the FRAME, not by the lawn. The visible strip of
   // grass between the table and the fence is only about ten units wide and
   // sits 24 units from the camera, so a 4-unit stripe filled it end to end and
@@ -1251,10 +1227,17 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
       // Picks up exactly where the lawn's own fade left off (half hazed) and
       // finishes the job over the next nine units, so the two discs read as one
       // continuous field receding rather than as a lawn and a mat.
-      const t = clamp01((r - LAWN_R + 0.4) / 13.4);
+      const t = clamp01((r - LAWN_R + 0.4) / (APRON_R - LAWN_R + 0.4));
       const far = mix(0x93ad6a, HAZE, 0.5 + 0.5 * t);
       // a little large-scale mottle: hedgerows and field edges, not a wash
-      return mix(far, HAZE, clamp01(0.4 + fbm2(x * 0.05 - 2.2, z * 0.05 + 5.4, 2) * 0.5) * 0.18);
+      const mottled = mix(
+        far,
+        HAZE,
+        clamp01(0.4 + fbm2(x * 0.05 - 2.2, z * 0.05 + 5.4, 2) * 0.5) * 0.18,
+      );
+      // ...and then past the haze entirely. The rim has to stop being a colour
+      // before it stops being geometry.
+      return mix(mottled, 0xfff3e2, clamp01((t - 0.5) / 0.5) ** 1.25 * 0.82);
     });
     turf.keep(apron, { y: yardY - 0.05 });
   }
@@ -1436,7 +1419,7 @@ function dinerEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     const w = rng.range(0.75, 1.5);
     far.dome(
       w,
-      Math.min(w * rng.range(0.55, 0.85), skyCap(d) - yardY),
+      Math.min(w * rng.range(0.55, 0.85), skyCap(d) - yardY, grounded(d)),
       mix(mix(0x6f9a44, 0x8bab52, rng.next()), HAZE, 0.28),
       { x: Math.sin(a) * d, z: Math.cos(a) * d, y: yardY },
       q === 'low' ? 6 : 8,

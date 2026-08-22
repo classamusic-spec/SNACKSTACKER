@@ -11,8 +11,12 @@
  *   SN_TIER=high node tools/sky-probe.mjs diner
  *   SN_FPS=1 SN_WAIT=9000 node tools/sky-probe.mjs diner
  *
- * SN_SKY=off  seeds the "sky disabled" flag the temporary dev injection reads,
- * so the same theme can be measured with and without the sky for cost.
+ * To re-run the flood test that verifies the two colour paths against a
+ * computed target, add a temporary override in Kit.applyPalette that merges a
+ * partial SkyConfig into `p.sky` (cover 1 / shadow 0 / one known cloudColor,
+ * everything else off) and compare with scratch verify.mjs. There is no
+ * permanent hook for it on purpose: it is a measurement scaffold, not a
+ * feature.
  */
 import { chromium } from 'playwright';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
@@ -132,7 +136,7 @@ for (const id of THEMES) {
     if (m.type() === 'error') errors.push(`${id}: ${m.text()}`);
   });
   await page.addInitScript(
-    ({ id, tier, sky, ovr }) => {
+    ({ id, tier, sky }) => {
       try {
         localStorage.setItem(
           'snackery.save.v1',
@@ -144,13 +148,11 @@ for (const id of THEMES) {
           }),
         );
         localStorage.setItem('snackery.sky', sky);
-        if (ovr) localStorage.setItem('snackery.sky.override', ovr);
-        else localStorage.removeItem('snackery.sky.override');
       } catch {
         /* private mode */
       }
     },
-    { id, tier: TIER, sky: SKY, ovr: process.env.SN_SKY_OVERRIDE ?? '' },
+    { id, tier: TIER, sky: SKY },
   );
   await page.goto(process.env.SNACKERY_URL ?? 'http://localhost:4173/', {
     waitUntil: 'load',

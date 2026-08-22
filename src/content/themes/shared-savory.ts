@@ -975,6 +975,93 @@ export function pickE<T>(quality: QualityTier, low: T, med: T, high: T): T {
 export const num = (v: number | undefined, fallback = 0): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 
+// --------------------------------------------------------------- the frame
+//
+// The bible's clearance cylinder is necessary and NOT sufficient, and this is
+// the arithmetic for the part it does not cover. Both halves come from the
+// same fact: the camera pitches down 0.5 rad, so a thing that is further away
+// projects HIGHER on screen than a near thing at the same height.
+//
+//   `skyCap`      how tall a prop at radius r may be before it eats the strip
+//                 of sky along the top of the frame.
+//   `frameRule`   whether a prop's FEET will be visible when the home screen's
+//                 turntable carries it directly behind the tower.
+//
+// The second one is the trap that shipped a kettle grill floating in mid-air
+// over the diner's fence: it obeyed the cylinder perfectly, but at r 12 on the
+// opening bearing its legs projected behind the bun crown while its lid
+// projected above it, so nothing in the frame said it was standing on grass.
+
+/** Authored camera: FOV 46, pitch 0.5 rad, ~11.5 units back at 393x852. */
+export const CAM_DIST = 11.5;
+/** Camera height above the tower top it is tracking, and its horizontal setback. */
+export const CAM_EYE = Math.sin(0.5) * CAM_DIST;
+export const CAM_BACK = Math.cos(0.5) * CAM_DIST;
+/**
+ * Angle below the horizon the skyline may not cross, in radians. The top of
+ * the frame is 0.079 rad (4.55 deg) below the horizon, so 0.152 leaves about
+ * 0.073 rad of clean sky — a sixth of the frame at the tightest moment, which
+ * is layer 0. Every layer after that lifts the camera and gives back more.
+ */
+export const SKYLINE = 0.152;
+
+/**
+ * The highest a prop standing at radius `r` may reach and still leave sky
+ * above it, in world Y. Assumes the camera is tracking y = 0, which is the
+ * tightest case any run reaches (layer 0); every taller tower lifts the camera
+ * and hands back more sky.
+ */
+export function skyCap(r: number): number {
+  return CAM_EYE - (CAM_BACK + Math.max(r, 0)) * Math.tan(SKYLINE);
+}
+
+/**
+ * Hidden-or-clear, evaluated at the home screen's framing.
+ *
+ * A prop directly behind the tower is in one of three states, and only two of
+ * them are safe:
+ *
+ *   HIDDEN   its whole silhouette sits below the tower's apex, inside the
+ *            tower's own outline. It vanishes for the few degrees of orbit
+ *            that put it back there, which nobody notices.
+ *   FLOATING its base is below the apex and its top above it. Its feet are
+ *            hidden and its head is not. This is the bug.
+ *   CLEAR    its base is above the apex, so it reads as standing in the far
+ *            ground with room all round its feet.
+ *
+ * The home screen is what these are measured against, because it is the only
+ * camera that walks every prop through the dead-behind bearing — the rig
+ * targets half the hero stack and turns a full circle. During a run the camera
+ * never orbits, so only props near the opening bearing can be caught, and
+ * those want placing off it by hand anyway.
+ */
+export interface FrameRule {
+  /** Tallest a prop at radius `r` may be and still hide behind the tower. */
+  hiddenCap(r: number, groundY: number): number;
+  /** Radius past which a prop's feet clear the tower's apex. */
+  clearRadius(groundY: number): number;
+  /** True when a prop of height `h` at radius `r` is in neither safe state. */
+  floats(r: number, h: number, groundY: number): boolean;
+}
+
+/** Build the rule for a theme, given the total height of its six `hero` foods. */
+export function frameRule(heroHeight: number): FrameRule {
+  const hero = Math.max(num(heroHeight, 2.4), 0.2);
+  /** Camera Y on the home screen: the rig targets HALF the hero stack. */
+  const eye = hero / 2 + CAM_EYE;
+  /** Drop from the camera down to the tower's apex — the line feet must not cross. */
+  const drop = Math.max(CAM_EYE - hero / 2, 0.1);
+  const hiddenCap = (r: number, groundY: number): number =>
+    eye - groundY - drop * (1 + Math.max(r, 0) / CAM_BACK);
+  const clearRadius = (groundY: number): number =>
+    CAM_BACK * ((eye - groundY) / drop - 1);
+  return {
+    hiddenCap,
+    clearRadius,
+    floats: (r, h, groundY) => h > hiddenCap(r, groundY) && r < clearRadius(groundY),
+  };
+}
+
 export interface PlaceOpts {
   x?: number;
   y?: number;

@@ -872,7 +872,22 @@ function buildPlate(ctx: FoodBuildCtx): THREE.Object3D {
  *     camera yaw, since the home screen orbits a full turn.
  *  3. The garden floor is `FLOOR_DROP` below the counter and is a real
  *     karesansui: raked gravel whose furrows ring the tower and bend around
- *     five stone groups, with moss islands between them.
+ *     five stone groups, with moss islands between them. Everything in it is
+ *     placed by SCREEN band, not by garden logic — see below.
+ *
+ * ## The counter hides the near garden, and that decides every radius
+ *
+ * The floor sits 3.1 below a slab that is nearly four units deep, and the
+ * camera looks down the length of it. Sight past the counter's far edge
+ * therefore does not reach the floor again until roughly r 15, and the ground
+ * has faded out by r 30 — so the ENTIRE visible karesansui is the annulus
+ * r 15..28, which is about seven per cent of frame height.
+ *
+ * Everything mid-ground was originally authored at r 8-13, which is a garden
+ * you can describe and cannot see: the stones, the moss, the basin and the
+ * lanterns were all behind the bar. They now start at 15 and the stones are
+ * roughly twice the size, because at three times the distance they have to be
+ * to read at all.
  *  4. The horizon is three layers deep — two hazed ridgelines and Mount Fuji
  *     behind them — built as vertex-alpha silhouettes that dissolve into the
  *     sky instead of ending on a line.
@@ -1232,6 +1247,14 @@ interface StoneGroup {
  * Ryoan-ji's grammar: fifteen stones in five groups of 5-2-3-2-3, never
  * centred, never evenly spaced, never on a grid — the asymmetry IS the form.
  *
+ * Heights rise with radius on purpose. Screen size is height over distance,
+ * so a stone authored at one size everywhere gives a near group that towers
+ * over the tower's shoulder and a far group you cannot find — the first pass
+ * put a two-metre standing stone at r 15 and it read as a black monolith
+ * parked directly behind the food. The cylinder rule does not catch this: it
+ * is the same "distance projects things higher" trap as the horizon, and the
+ * only test is the frame.
+ *
  * Authored as constants rather than drawn from ctx.rng because the rake
  * texture is baked once and cached across runs: the furrows have to ring the
  * stones that are actually standing there, so both have to read the same
@@ -1239,11 +1262,11 @@ interface StoneGroup {
  * that should not be re-rolled.
  */
 const STONE_GROUPS: readonly StoneGroup[] = [
-  { a: 3.49, r: 8.4, n: 5, spread: 1.45, tall: 1.2, seed: 0x51a1 },
-  { a: 4.97, r: 12.6, n: 2, spread: 0.85, tall: 0.72, seed: 0x51a2 },
-  { a: 0.44, r: 9.9, n: 3, spread: 1.1, tall: 0.9, seed: 0x51a3 },
-  { a: 1.66, r: 13.4, n: 2, spread: 0.9, tall: 0.66, seed: 0x51a4 },
-  { a: 2.53, r: 7.5, n: 3, spread: 1.0, tall: 0.98, seed: 0x51a5 },
+  { a: 3.49, r: 16.4, n: 5, spread: 1.7, tall: 0.95, seed: 0x51a1 },
+  { a: 4.97, r: 21.4, n: 2, spread: 1.5, tall: 1.2, seed: 0x51a2 },
+  { a: 0.44, r: 18.2, n: 3, spread: 1.6, tall: 1.05, seed: 0x51a3 },
+  { a: 1.66, r: 22.6, n: 2, spread: 1.6, tall: 1.25, seed: 0x51a4 },
+  { a: 2.53, r: 15.2, n: 3, spread: 1.4, tall: 0.88, seed: 0x51a5 },
 ];
 
 interface Patch {
@@ -1261,9 +1284,9 @@ const MOSS: readonly Patch[] = [
     r: g.spread * 1.55 + 0.5,
     seed: 3.7 + i * 2.3,
   })),
-  { x: -4.1, z: -11.6, r: 1.9, seed: 17.2 },
-  { x: 10.8, z: 4.4, r: 1.35, seed: 21.9 },
-  { x: 1.6, z: 15.2, r: 2.3, seed: 26.4 },
+  { x: -7.4, z: -18.9, r: 3.2, seed: 17.2 },
+  { x: 19.1, z: 7.8, r: 2.4, seed: 21.9 },
+  { x: 2.4, z: 23.1, r: 3.9, seed: 26.4 },
 ];
 
 interface RakeIsland {
@@ -1279,7 +1302,7 @@ const RAKE_ISLANDS: readonly RakeIsland[] = STONE_GROUPS.map((g) => ({
 }));
 
 /** Influence length of the open field, in world units. */
-const RAKE_OPEN = 5.6;
+const RAKE_OPEN = 7.5;
 
 /**
  * The potential whose contour lines the rake follows.
@@ -1425,7 +1448,7 @@ function rakeSpacing(size: number): number {
 const RAKE_DEPTH = 0.065;
 
 /** Where the gravel gives out and the fog takes over. */
-const rakeFalloff = (rc: number): number => 1 - smooth01((rc - 21) / 9);
+const rakeFalloff = (rc: number): number => 1 - smooth01((rc - 25) / 8);
 
 /**
  * The garden floor, painted once in world space.
@@ -1476,9 +1499,9 @@ function paintKaresansui(c: CanvasRenderingContext2D, size: number): void {
         // Moss is the only warm-ish green in the frame; it wants to read as
         // velvet, so it gets its own grain and a darker torn rim.
         const rim = 0.72 + 0.28 * smooth01((moss - 0.06) / 0.34);
-        const mr = (32 + grain * 13 + mot * 8) * rim;
-        const mg = (58 + grain * 19 + mot * 12) * rim;
-        const mb = (36 + grain * 12 + mot * 7) * rim;
+        const mr = (35 + grain * 13 + mot * 8) * rim;
+        const mg = (52 + grain * 17 + mot * 11) * rim;
+        const mb = (39 + grain * 12 + mot * 8) * rim;
         r += (mr - r) * moss;
         g += (mg - g) * moss;
         b += (mb - b) * moss;
@@ -1658,8 +1681,8 @@ function buildPetals(count: number, deck: number, rng: Rng, mat: THREE.Material)
       spin: rng.range(0.45, 1.5) * (rng.bool() ? 1 : -1),
       // Half the first pass: at 0.14 a petal crossing the lens read as a pink
       // playing card, which is a very expensive way to break the illusion.
-      w: rng.range(0.04, 0.075),
-      h: rng.range(0.028, 0.05),
+      w: rng.range(0.05, 0.082),
+      h: rng.range(0.034, 0.056),
     });
   }
 
@@ -1768,7 +1791,19 @@ function stoneLantern(stone: EnvBucket, glow: EnvBucket, s: number, x: number, y
   stone.add(at(cap, x, y + h + 0.1 * s, z), tone);
 }
 
-/** A weathered garden stone: rolled, bedded, never a ball on the ground. */
+/**
+ * A weathered garden stone: rolled, bedded, never a ball on the ground.
+ *
+ * Coloured per vertex rather than flat, because twenty facets of one tone
+ * under a 2.6 key means one facet square to the light goes white and the rest
+ * go black, and the result reads as obsidian rather than as granite. Grading
+ * up-facing vertices toward a pale moonlit grey and down-facing ones into the
+ * ground's own colour does the opposite: it holds the whole stone inside a
+ * narrow band of value and lets its SHAPE do the reading.
+ */
+const STONE_LIT = new THREE.Color(0x6d7783);
+const STONE_DARK = new THREE.Color(0x353d45);
+const STONE_TMP = new THREE.Color();
 function gardenStone(
   rock: EnvBucket,
   rng: Rng,
@@ -1779,39 +1814,57 @@ function gardenStone(
   tone: number,
 ): void {
   const g = envBlob(size, detail);
-  if (standing) g.scale(rng.range(0.6, 0.82), rng.range(1.25, 1.7), rng.range(0.62, 0.86));
-  else g.scale(rng.range(1.1, 1.6), rng.range(0.42, 0.66), rng.range(1.0, 1.45));
+  if (standing) g.scale(rng.range(0.66, 0.84), rng.range(0.95, 1.25), rng.range(0.7, 0.9));
+  else g.scale(rng.range(1.1, 1.6), rng.range(0.4, 0.62), rng.range(1.0, 1.45));
   roughen(g, size * 0.16, 3.2, rng.int(0, 64));
   g.rotateX(rng.signed() * 0.16);
   g.rotateZ(rng.signed() * 0.16);
   // bedded: a stone is buried to a third of its depth, never balanced on top
-  rock.add(at(g, x, y + size * (standing ? 0.5 : 0.24), z, rng.range(0, TAU)), tone);
+  const lift = y + size * (standing ? 0.44 : 0.2);
+  const base = new THREE.Color(tone);
+  rock.addColored(at(g, x, lift, z, rng.range(0, TAU)), (_vx, vy) => {
+    const t = clamp01((vy - lift) / (size * 1.1) + 0.5);
+    STONE_TMP.copy(STONE_DARK).lerp(STONE_LIT, smooth01(t));
+    return STONE_TMP.lerp(base, 0.25).getHex();
+  });
 }
 
-/** Posts and three rails, built straight then swung out to a bearing. */
-function bambooFence(
-  wood: EnvBucket,
+/**
+ * The garden's back edge: a low earth wall under a tiled cap, run all the way
+ * round as short straight bays.
+ *
+ * It replaced a bamboo fence, which was the right object in the wrong place —
+ * at this camera a see-through fence standing in the middle of the visible
+ * gravel read as a comb of loose diagonal sticks, and it cut the karesansui in
+ * half. A `dobei` does the opposite job: it closes the garden with one clean
+ * horizontal, gives the raked field somewhere to stop instead of dissolving
+ * into fog, and the pale capstone is the only light line in the lower half of
+ * the frame.
+ */
+function gardenWall(
+  wall: EnvBucket,
   rng: Rng,
+  bays: number,
   radius: number,
-  bearing: number,
-  span: number,
   y: number,
-  tone: number,
 ): void {
-  const h = 1.2;
-  const bays = Math.max(2, Math.round(span / 1.5));
-  const cx = Math.cos(bearing) * radius;
-  const cz = Math.sin(bearing) * radius;
-  const yaw = -bearing;
-  for (let i = 0; i <= bays; i++) {
-    const u = (i / bays - 0.5) * span;
-    const post = envCyl(0.055, 0.065, h * rng.range(0.95, 1.05), 5);
-    wood.add(at(post, cx + Math.cos(yaw) * u, y, cz - Math.sin(yaw) * u), tone);
-  }
-  for (let r = 0; r < 3; r++) {
-    const rail = envRodX(0.045, 0.045, span, 5);
-    rail.rotateY(yaw);
-    wood.add(at(rail, cx, y + 0.26 + r * 0.38, cz), tone);
+  // Low. At 1.05 the ring came out as a heavy black bar right across the
+  // horizon, over Fuji's skirt and under the ridges, and it read as a letterbox
+  // matte rather than as a wall. Half that height and it is what it should be:
+  // one thin line closing the bottom of the distance.
+  const h = 0.55;
+  for (let i = 0; i < bays; i++) {
+    const a = (i / bays) * TAU;
+    const r = radius + rng.range(-0.4, 0.4);
+    const cx = Math.cos(a) * r;
+    const cz = Math.sin(a) * r;
+    const yaw = -a + Math.PI / 2;
+    // over-long bays, so consecutive ones overlap at the corners and the ring
+    // never opens a seam whichever way the camera turns
+    const span = (TAU * radius) / bays + 1.4;
+    wall.add(at(envBox(span, h * rng.range(0.92, 1.06), 0.6), cx, y, cz, yaw), 0x2b3239);
+    wall.add(at(envBox(span, 0.1, 0.92), cx, y + h, cz, yaw), 0x49525b);
+    wall.add(at(envBox(span, 0.07, 0.66), cx, y + h + 0.09, cz, yaw), 0x5a636c);
   }
 }
 
@@ -1838,8 +1891,8 @@ function shojiWall(
   // bar across the horizon and the brightest thing in the theme after the
   // salmon; a shoji screen is a GRID of small lit panels, and reading it as
   // one takes both a shorter band and enough joinery to divide it.
-  const h = 0.76;
-  const sill = 0.52;
+  const h = 0.52;
+  const sill = 0.44;
   const cx = Math.cos(bearing) * radius;
   const cz = Math.sin(bearing) * radius;
   const yaw = -bearing + Math.PI / 2;
@@ -1847,26 +1900,24 @@ function shojiWall(
   const nz = -Math.sin(yaw);
 
   // a stone plinth, so the lit paper is not hovering over the gravel
-  wood.add(at(envBox(span + 0.9, sill, 1.5), cx, y, cz, yaw), 0x1e242a);
+  wood.add(at(envBox(span + 0.9, sill, 1.5), cx, y, cz, yaw), 0x2c2a28);
   glow.add(at(envBox(span, h, 0.1), cx, y + sill, cz, yaw), 0xffb877);
   // dark boarding above the paper, so the wall has mass without more light
-  wood.add(at(envBox(span + 0.2, 0.62, 0.34), cx, y + sill + h, cz, yaw), 0x171310);
+  wood.add(at(envBox(span + 0.2, 0.5, 0.34), cx, y + sill + h, cz, yaw), 0x2a241f);
   // lattice: sits a few centimetres proud of the paper on the camera side
   const px = -Math.cos(bearing) * 0.09;
   const pz = -Math.sin(bearing) * 0.09;
   for (let i = 0; i <= bars; i++) {
     const u = (i / bars - 0.5) * span;
-    wood.add(at(envBox(0.06, h, 0.05), cx + nx * u + px, y + sill, cz + nz * u + pz, yaw), 0x140f0d);
+    wood.add(at(envBox(0.06, h, 0.05), cx + nx * u + px, y + sill, cz + nz * u + pz, yaw), 0x241f1b);
   }
-  for (const f of [0.34, 0.68]) {
-    wood.add(at(envBox(span, 0.045, 0.05), cx + px, y + sill + h * f, cz + pz, yaw), 0x140f0d);
-  }
+  wood.add(at(envBox(span, 0.045, 0.05), cx + px, y + sill + h * 0.5, cz + pz, yaw), 0x241f1b);
   // eave: a deep dark overhang, which is what reads as a roof at this size
-  wood.add(at(envBox(span + 1.15, 0.14, 1.15), cx, y + sill + h + 0.62, cz, yaw), 0x0e0b0a);
-  wood.add(at(envBox(span + 0.8, 0.16, 0.7), cx, y + sill + h + 0.74, cz, yaw), 0x181310);
+  wood.add(at(envBox(span + 0.7, 0.12, 0.95), cx, y + sill + h + 0.5, cz, yaw), 0x1e1a17);
+  wood.add(at(envBox(span + 0.45, 0.13, 0.6), cx, y + sill + h + 0.6, cz, yaw), 0x2b2520);
   // posts down to the ground
   for (const s of [-1, 1]) {
-    wood.add(at(envBox(0.14, sill + h + 0.62, 0.14), cx + nx * (span / 2) * s, y, cz + nz * (span / 2) * s, yaw), 0x140f0d);
+    wood.add(at(envBox(0.14, sill + h + 0.5, 0.14), cx + nx * (span / 2) * s, y, cz + nz * (span / 2) * s, yaw), 0x241f1b);
   }
 }
 
@@ -2037,8 +2088,8 @@ function cherryTree(
   // a root mound, so the trunk is visibly planted instead of stopping in the
   // dark. Without it the tree reads as a lollipop pasted onto the sky.
   const mound = envBlob(0.44 * scale, 0);
-  mound.scale(1.6, 0.34, 1.6);
-  wood.add(at(mound, x, y + 0.02 * scale, z, rng.range(0, TAU)), 0x241d22);
+  mound.scale(1.7, 0.26, 1.7);
+  wood.add(at(mound, x, y + 0.01 * scale, z, rng.range(0, TAU)), 0x2b3038);
   // flare, then the shaft: a cherry swells hard at the ground
   wood.add(at(envCyl(0.15 * scale, 0.29 * scale, 0.34 * scale, sides), x, y, z), 0x3d3038);
   const trunk = envCyl(0.085 * scale, 0.16 * scale, trunkH, sides);
@@ -2262,7 +2313,7 @@ const FUJI_ROCK_DARK = new THREE.Color(0x070b11);
  * are a straight linear multiplier and three does not clamp them, so the cap
  * is pushed past 1 and the fog brings it back to white.
  */
-const FUJI_SNOW = new THREE.Color(0xcfe2f5).multiplyScalar(2.8);
+const FUJI_SNOW = new THREE.Color(0xcfe2f5).multiplyScalar(2.45);
 const FUJI_TMP = new THREE.Color();
 
 /**
@@ -2516,20 +2567,20 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
     metalness: 0,
     vertexColors: true,
   });
-  const petalMat = m.physical('sushi.env.petal2', {
+  const petalMat = m.physical('sushi.env.petal3', {
     // Lit, not emissive. A real albedo plus sheen means a petal turning
     // through the rim light flashes warm and then falls back to cool, which is
     // the whole reason to have them.
-    color: 0xffdbe6,
+    color: 0xefbfd0,
     roughness: 0.72,
     metalness: 0,
     sheen: 1,
-    sheenColor: 0xffffff,
+    sheenColor: 0xffe6ef,
     sheenRoughness: 0.35,
-    emissive: 0x2a161e,
-    emissiveIntensity: 0.3,
+    emissive: 0x1c0e14,
+    emissiveIntensity: 0.22,
     transparent: true,
-    opacity: 0.93,
+    opacity: 0.88,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
@@ -2686,7 +2737,7 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   );
   // The fade has to start BEYOND the treeline or the trunks stand on nothing.
   const ground = envGround(radii, gseg, (r) => {
-    const fade = 1 - smooth01((r - 19) / 11);
+    const fade = 1 - smooth01((r - 23) / 8);
     const dark = 1 - 0.34 * smooth01((r - 3) / 21);
     return [dark, dark * 0.99, dark * 1.02, fade];
   });
@@ -2716,71 +2767,67 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
         gz + Math.sin(a) * rr,
         size,
         i === 0 && grp.n > 2,
-        detail,
-        grng.bool(0.6) ? 0x424a52 : 0x333b42,
+        // Eighty faces, not twenty. A garden stone is a rounded, weathered
+        // thing and a twenty-face icosahedron under a hard key reads as a
+        // lump of coal with one white crystal face; the extra subdivision is
+        // what turns the facets into a surface.
+        i === 0 ? 1 : Math.max(detail, size > 0.7 ? 1 : 0),
+        grng.bool(0.6) ? 0x59636e : 0x47515b,
       );
     }
-    // a low moss swell under the group, so the stones sit in something
-    const mound = envBlob(grp.spread * 1.5, detail);
-    mound.scale(1.25, 0.16, 1.15);
-    matte.add(
-      at(mound, gx + Math.cos(grp.a + 1.9) * grp.spread * 0.5, floorY, gz + Math.sin(grp.a + 1.9) * grp.spread * 0.5, grng.range(0, TAU)),
-      0x2c4630,
-    );
   }
-  // the three free moss islands get a swell too
-  for (let i = 5; i < MOSS.length; i++) {
-    const p = MOSS[i];
-    const mound = envBlob(p.r * 0.92, detail);
-    mound.scale(1.3, 0.13, 1.1);
-    matte.add(at(mound, p.x, floorY, p.z, p.seed), 0x2c4630);
-  }
+  // No geometry for the moss. It used to get a flattened icosahedron under
+  // each group, and a squashed twenty-face blob has a hard hexagonal outline
+  // that a three-metre-wide dark green pancake shows off perfectly. The
+  // karesansui texture already paints the islands with a torn, warped edge and
+  // the correct relief; the geometry only ever fought it.
 
   // ---- mid ground --------------------------------------------------------
   // tsukubai: a squat stone basin, a bamboo spout, a black disc of water
   const basinA = rng.range(2.5, 3.1);
-  const bx = Math.cos(basinA) * 9.2;
-  const bz = Math.sin(basinA) * 9.2;
-  matte.add(at(envBlob(0.85, detail), bx, floorY + 0.18, bz), 0x2b3138);
-  matte.add(at(envCyl(0.76, 0.7, 0.62, 10), bx, floorY + 0.4, bz), 0x39414a);
-  satin.add(at(envCyl(0.62, 0.62, 0.03, 12), bx, floorY + 0.99, bz), 0x0a1116);
-  const spoutBase = envCyl(0.075, 0.09, 1.5, 6);
-  wood.add(at(spoutBase, bx - 1.0, floorY, bz + 0.5), 0x6f6b47);
+  const bs = 1.6;
+  const bx = Math.cos(basinA) * 17.4;
+  const bz = Math.sin(basinA) * 17.4;
+  matte.add(at(envBlob(0.85 * bs, detail), bx, floorY + 0.18 * bs, bz), 0x39424c);
+  matte.add(at(envCyl(0.76 * bs, 0.7 * bs, 0.62 * bs, 10), bx, floorY + 0.4 * bs, bz), 0x4b5560);
+  satin.add(at(envCyl(0.62 * bs, 0.62 * bs, 0.03, 12), bx, floorY + 0.99 * bs, bz), 0x0a1116);
+  const spoutBase = envCyl(0.075 * bs, 0.09 * bs, 1.5 * bs, 6);
+  wood.add(at(spoutBase, bx - 1.0 * bs, floorY, bz + 0.5 * bs), 0x6f6b47);
   // reaches from the post out over the basin, tipped down at the mouth
-  const spout = envRodX(0.06, 0.07, 1.15, 6);
+  const spout = envRodX(0.06 * bs, 0.07 * bs, 1.15 * bs, 6);
   spout.rotateZ(-0.26);
-  wood.add(at(spout, bx - 0.42, floorY + 1.46, bz + 0.24), 0x7d7850);
+  wood.add(at(spout, bx - 0.42 * bs, floorY + 1.46 * bs, bz + 0.24 * bs), 0x7d7850);
   // the thread of water, hung from the spout's mouth down to the basin
-  satin.add(at(envCyl(0.013, 0.011, 0.33, 4), bx + 0.13, floorY + 0.99, bz + 0.24), 0x8fb6c4);
+  satin.add(at(envCyl(0.02, 0.017, 0.53, 4), bx + 0.13 * bs, floorY + 0.99 * bs, bz + 0.24 * bs), 0x8fb6c4);
 
   // ---- background --------------------------------------------------------
-  const fences = envPick(q, 4, 6, 8);
-  for (let i = 0; i < fences; i++) {
-    const bearing = (i / fences) * TAU + rng.range(-0.16, 0.16);
-    bambooFence(wood, rng, rng.range(9.6, 10.8), bearing, rng.range(5.5, 7.5), floorY, 0x8d8a5c);
-  }
+  gardenWall(matte, rng, envPick(q, 14, 20, 26), 22.5, floorY);
 
   const lanterns = envPick(q, 3, 4, 5);
   for (let i = 0; i < lanterns; i++) {
     const a = (i / lanterns) * TAU + rng.range(-0.5, 0.5);
-    const r = rng.range(FAR_R + 0.3, 12.5);
-    stoneLantern(matte, glow, rng.range(0.85, 1.15), Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0, TAU), 0x424a52);
+    const r = rng.range(15.5, 19.5);
+    stoneLantern(matte, glow, rng.range(1.35, 1.8), Math.cos(a) * r, floorY, Math.sin(a) * r, rng.range(0, TAU), 0x39424b);
   }
 
   // A near-continuous run of lit paper: the warm light behind the dark garden
   // is the only warm note in the theme and it has to be on screen at every
   // yaw — but low, so it sits under the ridgelines rather than through them.
-  const walls = envPick(q, 4, 6, 7);
+  // Four, five, six — not the seven that used to ring the garden. At that
+  // count and this span the dark boarding above the paper joined up into one
+  // continuous black bar across the horizon, and the lit paper read as a slot
+  // cut in it rather than as windows in buildings.
+  const walls = envPick(q, 4, 5, 6);
   for (let i = 0; i < walls; i++) {
     const bearing = (i / walls) * TAU + rng.range(-0.12, 0.12) + 0.6;
-    shojiWall(wood, glow, rng.range(15.5, 17.5), bearing, rng.range(6.5, 8.5), floorY, envPick(q, 4, 6, 7));
+    shojiWall(wood, glow, rng.range(19, 21), bearing, rng.range(6, 8.5), floorY, envPick(q, 5, 7, 9));
   }
 
   // A treeline, not a lollipop: many small trees rather than a few big ones,
   // all planted inside the solid part of the ground so a trunk always has
   // earth under it, and with crowns topping out just above the counter plane
   // so the blossom bands beside the tower instead of massing behind its top.
-  const trees = envPick(q, 14, 16, 18);
+  const trees = envPick(q, 17, 18, 19);
   const fringe = envPick(q, 6, 9, 12);
   for (let i = 0; i < trees; i++) {
     const a = (i / trees) * TAU + rng.range(-0.2, 0.2);
@@ -2860,7 +2907,7 @@ function sushiEnvironment(ctx: EnvBuildCtx): THREE.Object3D {
   add(wood, woodMat, false, false);
   add(blossom, blossomMat, false, false);
   add(glow, glowMat, false, false);
-  const petals = buildPetals(envPick(q, 12, 34, 56), deck, rng, petalMat);
+  const petals = buildPetals(envPick(q, 20, 40, 60), deck, rng, petalMat);
   if (petals) root.add(petals);
   envStats('sushi', root);
   return root;
