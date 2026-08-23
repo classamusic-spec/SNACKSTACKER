@@ -175,3 +175,62 @@ Fully procedural WebAudio — zero downloads, instant start, tiny bundle.
 | `src/meta/**` | meta agent | everything else |
 
 Contracts live in each directory's `api.ts` and are **frozen**. Implement against them exactly.
+
+---
+
+## 8. Snack-material UI — the second pass
+
+The first UI pass was Apple glass: premium, correct, and generic. It could
+belong to any game. This pass makes the chrome belong to *this* one — the
+interface is made of the stuff a snack arrives on. Napkins, greaseproof paper,
+order tickets, bottle caps, a ketchup splat.
+
+**The line between bespoke and kitsch is craft, not concept.** A ketchup splat
+drawn as a smooth cartoon blob is clipart. A ketchup splat with an uneven rim,
+three flung satellite droplets and a slightly darker settled edge is a splat.
+Every material below has to survive being looked at closely.
+
+### The materials
+
+| Element | Material | Notes |
+|---|---|---|
+| Mode cards | **Napkin** — soft paper, deckled edge, slight rotation | Per-theme paper: gingham (Diner), washi (Sushi), pastel scallop (Candy), serape weave (Taco), linen (Breakfast), checked trattoria (Pizza) |
+| Primary button | **Ketchup splat** — organic, irregular, with drips | Never a smooth blob. Asymmetric, with satellites. |
+| Sheets (store, settings) | **Greaseproof paper** on a metal tray | Translucent where it overlaps, slightly oil-spotted |
+| Score / HUD | **Order pad** — perforated, printed | Tear-line at the top edge |
+| Chips (coins, theme) | **Bottle cap** or **price sticker** | Crimped rim, or peeling corner |
+| Toggles | **Condiment sachet** or a flipped **beer mat** | |
+| Dividers | **Perforated tear-line** | Dotted, with a slight paper shadow |
+| Focus ring | **Ink underline** — hand-drawn, not geometric | |
+
+### Rules that keep it premium rather than novelty
+
+- **Paper is a surface, not a picture.** Fibre and grain are procedural and
+  subtle: visible at 100% zoom, almost subliminal at arm's length. If the
+  texture reads as a JPEG of a napkin, it is wrong.
+- **One material per role, used consistently.** Cards are always napkins;
+  sheets are always greaseproof. Mixing five materials on one screen is a
+  jumble sale.
+- **Irregularity must be seeded, not random per render.** A napkin that
+  reshuffles its deckle on every re-render is nauseating. Seed from a stable
+  key so a card looks identical every time it mounts.
+- **Type stays clean.** The paper is textured; the words on it are not. No
+  distressed fonts, no letterpress-effect text, no drop shadows on type beyond
+  what legibility requires.
+- **Legibility outranks the material.** A napkin over a pale patisserie must
+  still carry 4.5:1 text. If a texture costs contrast, the texture loses.
+- **Every custom shape keeps its hit target.** A splat button is a splat with a
+  44px-minimum rectangular hit area behind it — never a hit region that follows
+  the splat outline.
+- **Reduced motion still applies.** Paper can settle when it mounts; it must
+  not flutter continuously.
+- **It must cost nothing per frame.** Textures are painted once to canvas and
+  cached by key; shapes are static SVG paths. No per-frame canvas work, no
+  filters animating in a loop.
+
+### Per-theme identity
+
+The six worlds already have palettes; the paper should follow them, so the same
+mode card is a gingham napkin in Classic Diner and a washi slip in Sushi Tower.
+That single move is what makes the UI feel authored per theme rather than
+skinned.
