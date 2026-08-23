@@ -21,16 +21,14 @@
  *   the themed print the material class owns:
  *   `background-image: var(--sn-paper, none), <themed print>`.
  * - Generated silhouettes arrive as real inline SVG inside a component-owned
- *   layer element (`.sn-btn__splat`, `.sn-sheet__tear`, `.sn-mode__underline`)
- *   rather than as a data URL, because a data URL cannot inherit `currentColor`
- *   and ketchup has to be one red across the app.
+ *   layer element (`.sn-sheet__tear`, `.sn-mode__underline`) rather than as a
+ *   data URL, because a data URL cannot inherit `currentColor`.
  */
 
-import { paperTexture, splatPath, tearLinePath, inkUnderlinePath } from '../snack/api';
-import type { PaperOpts, SplatOpts } from '../snack/api';
+import { paperTexture, tearLinePath, inkUnderlinePath } from '../snack/api';
+import type { PaperOpts } from '../snack/api';
 import { h, s } from '../dom';
 import { INK, PART } from '../snack/classes';
-import { svg as svgUrl } from '../snack/svg';
 
 let warned = false;
 
@@ -58,46 +56,6 @@ function kit<T>(what: string, fn: () => T): T | null {
 export function applyPaper(el: HTMLElement, opts: PaperOpts): void {
   const tex = kit('paperTexture', () => paperTexture(opts));
   if (tex) el.style.setProperty('--sn-paper', tex);
-}
-
-/**
- * The ketchup splat layer for a primary button.
- *
- * Returns `null` until the kit can draw one, and the caller then keeps its
- * existing filled pill — a bare `sn-m-splat` box with nothing in it would be a
- * primary action with no visible surface. The layer is `aria-hidden` and sits
- * *behind* the button's own rectangular hit area; it never becomes the hit
- * region itself.
- */
-export function splatLayer(opts: SplatOpts): HTMLElement | null {
-  const d = kit('splatPath', () => splatPath(opts));
-  if (!d) return null;
-  const svg = s(
-    'svg',
-    {
-      viewBox: '0 0 100 100',
-      preserveAspectRatio: 'none',
-      width: '100%',
-      height: '100%',
-      'aria-hidden': 'true',
-      focusable: 'false',
-    },
-    s('path', { d, fill: 'currentColor' }),
-  );
-  const layer = h(
-    'span',
-    { class: 'sn-btn__splat sn-m-splat', aria: { hidden: 'true' } },
-    svg,
-  );
-  // The wet highlight and the settled rim live on `.sn-btn__splat::before`,
-  // masked by `--sn-splat`. Without this it fell back to a *baked* splat in
-  // snack.css — a different silhouette from the one just drawn, so the shading
-  // sat off the shape and the sauce read flat. One shape, both layers.
-  layer.style.setProperty(
-    '--sn-splat',
-    svgUrl(`<path d='${d}' fill='#000'/>`, { viewBox: '0 0 100 100' }),
-  );
-  return layer;
 }
 
 /**

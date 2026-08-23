@@ -195,7 +195,7 @@ Every material below has to survive being looked at closely.
 | Element | Material | Notes |
 |---|---|---|
 | Mode cards | **Napkin** — soft paper, deckled edge, slight rotation | Per-theme paper: gingham (Diner), washi (Sushi), pastel scallop (Candy), serape weave (Taco), linen (Breakfast), checked trattoria (Pizza) |
-| Primary button | **Ketchup splat** — organic, irregular, with drips | Never a smooth blob. Asymmetric, with satellites. |
+| Primary button | **Plain accent pill** — no material at all | See the note below: the splat was built, shipped and pulled. |
 | Sheets (store, settings) | **Greaseproof paper** on a metal tray | Translucent where it overlaps, slightly oil-spotted |
 | Score / HUD | **Order pad** — perforated, printed | Tear-line at the top edge |
 | Chips (coins, theme) | **Bottle cap** or **price sticker** | Crimped rim, or peeling corner |
@@ -234,6 +234,26 @@ The six worlds already have palettes; the paper should follow them, so the same
 mode card is a gingham napkin in Classic Diner and a washi slip in Sushi Tower.
 That single move is what makes the UI feel authored per theme rather than
 skinned.
+
+**The primary button is the one control that gets no material, and that was
+learned the expensive way.**
+
+It was built as a ketchup splat, and the splat itself was good — uneven rim,
+flung satellites, real drips, per-world sauce. It still failed, for a reason no
+amount of craft fixes: a dark red irregular blob with runs coming off it reads
+as blood before it reads as sauce. Every other surface here can afford to be
+ambiguous for a moment. The primary action cannot; it is the one thing on
+screen that must be instantly and only itself.
+
+So `primary` is a plain filled pill in the theme's accent. The kit still draws
+splats and `snack/apply.ts` still exposes them — the capability is fine and the
+dev harness exercises it. Nothing on a button asks for one.
+
+The rule this leaves behind: **material is for surfaces you look at, not for
+controls you have to read in a quarter of a second.** Paper, tickets, caps and
+sachets all pass that test because their shape is still a rectangle or a
+circle. A splat changes the silhouette, and silhouette is how a control is
+recognised before the label is read.
 
 **The condiment is per world too, and this took two wrong answers to find.**
 

@@ -1,7 +1,6 @@
 import type { PressKind, UiCtx } from '../ctx';
 import { h } from '../dom';
 import { CONDIMENT, INK } from '../snack/classes';
-import { splatLayer } from './material';
 
 export type ButtonKind = 'primary' | 'secondary' | 'ghost' | 'text' | 'icon';
 
@@ -9,7 +8,11 @@ export type ButtonKind = 'primary' | 'secondary' | 'ghost' | 'text' | 'icon';
  * One condiment per role, and only one — a screen that is splat *and* sachet
  * *and* cap on the same tier of control is a jumble sale.
  *
- * - `primary`   the ketchup splat. Exactly one per screen.
+ * - `primary`   a plain filled pill in the theme's accent. Deliberately NOT a
+ *               condiment: a splat here read as blood rather than sauce, and a
+ *               primary action is the one control that can never be ambiguous.
+ *               The kit still draws splats (see `snack/apply.ts`); nothing on a
+ *               button asks for one.
  * - `secondary` a condiment sachet.
  * - `icon`      an enamel bottle cap; round controls are already cap-shaped.
  * - `text`      no material at all, just ink on whatever paper it sits on.
@@ -20,36 +23,6 @@ const MATERIAL: Partial<Record<ButtonKind, string>> = {
   icon: CONDIMENT.cap,
   text: INK.print,
 };
-
-/** The class home.ts puts on PLAY. Its box is wider than a sheet button's. */
-const PLAY_CLASS = 'sn-btn--play';
-
-/**
- * How wide the splat's 0..100 box gets stretched, per shape of primary.
- *
- * A button is not laid out at construction time, so this cannot be measured —
- * and it must not be, because measuring would mean a reflow per button and a
- * different splat every time the viewport changed. It is derived from the only
- * thing the button knows about itself up front: which primary it is.
- *
- * The numbers are the *layer's* aspect, not the button's. `.sn-btn__splat` is
- * inset negatively past the button (see snack.css §4), so the box the viewBox
- * is stretched into is `width * 1.20` by `height * 1.80`:
- *
- *   PLAY    320x60 -> 384x108 -> 3.6
- *   wide    350x56 -> 420x101 -> 4.2
- *   inline  ~135x56 -> 162x101 -> 1.6
- *
- * Without this every splat was built for 3.2 and stretched to whatever it
- * landed in, which flattened the droplets and the drips into a smear.
- */
-const SPLAT_ASPECT = { play: 3.6, wide: 4.2, inline: 1.6 } as const;
-
-function splatAspect(opts: ButtonOpts): number {
-  if (opts.className?.split(/\s+/).includes(PLAY_CLASS)) return SPLAT_ASPECT.play;
-  if (opts.wide) return SPLAT_ASPECT.wide;
-  return SPLAT_ASPECT.inline;
-}
 
 export interface ButtonOpts {
   label?: string;
@@ -81,40 +54,11 @@ export function createButton(ctx: UiCtx, opts: ButtonOpts): HTMLButtonElement {
   const material = MATERIAL[kind];
   if (material) classes.push(material);
 
-  // The splat is drawn, not styled, so the material class and the shape go on
-  // together: a `sn-m-splat` with no splat in it is a primary action with no
-  // surface. Until the kit can draw one the button keeps its accent pill.
-  // Seeded off the button's own name so PLAY and Resume are different splats
-  // and each is the same splat on every mount.
-  const splat =
-    kind === 'primary'
-      ? splatLayer({
-          seed: `splat:${opts.ariaLabel ?? opts.label ?? opts.className ?? 'primary'}`,
-          droplets: 3,
-          irregularity: 0.68,
-          drips: 2,
-          aspect: splatAspect(opts),
-        })
-      : null;
-  if (splat) classes.push(CONDIMENT.splat);
-
   const btn = h('button', {
     class: classes.join(' '),
     type: 'button',
     aria: { label: opts.ariaLabel },
   });
-
-  // First child, so it paints under the icon and label. It is `aria-hidden`
-  // and the button itself stays the rectangular >= 44px hit target — the hit
-  // region never follows the splat outline.
-  if (splat) {
-    btn.appendChild(splat);
-    // The silhouette is generated once, on the layer. Hoisting it to the
-    // button lets the press dim — a sibling, not a child, of the layer —
-    // inherit the same shape and be cut to the sauce rather than to a pill.
-    const shape = splat.style.getPropertyValue('--sn-splat');
-    if (shape) btn.style.setProperty('--sn-splat', shape);
-  }
 
   if (opts.icon) {
     btn.appendChild(h('span', { class: 'sn-btn__icon' }, opts.icon));
