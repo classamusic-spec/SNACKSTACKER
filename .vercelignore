@@ -1,5 +1,7 @@
 # QA artefacts and alternate build outputs — none of this belongs in a deploy.
 shots
+*shots
+.*shots
 dist
 dist-single
 dist-audit
