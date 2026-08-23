@@ -223,7 +223,7 @@
 .sn-btn--play {
   height: 60px;
   min-height: 60px;
-  width: min(300px, 76vw);
+  width: min(340px, 82vw);
   font-size: var(--t-22);
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -412,7 +412,7 @@
 }
 
 .sn-wm--hero .sn-wm__word {
-  font-size: clamp(42px, 13vw, 64px);
+  font-size: clamp(34px, 10.5vw, 50px);
 }
 
 .sn-wm--boot .sn-wm__word {
@@ -432,49 +432,370 @@
 
 /* ------------------------------------------------------------------- home */
 
+/* Three thin bands with the live hero scene showing through between them:
+   utility bar, wordmark, and the command deck pinned to the bottom. Nothing
+   here is an opaque panel — the world is the best thing in the app. */
 .sn-home {
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: calc(var(--safe-t) + var(--gutter)) calc(var(--safe-r) + var(--gutter))
-    calc(var(--safe-b) + 22px) calc(var(--safe-l) + var(--gutter));
+    calc(var(--safe-b) + 18px) calc(var(--safe-l) + var(--gutter));
 }
 
-.sn-home__top {
+.sn-home__bar {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 100%;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.sn-home__bar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* Coins sit next to the shop that spends them, and borrow the one accent
+   already on screen rather than introducing a second. */
+.sn-home .sn-chip__icon {
+  color: var(--accent);
 }
 
 .sn-home__lockup {
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
-  margin-top: clamp(18px, 7vh, 56px);
+  margin-top: clamp(8px, 4vh, 32px);
 }
 
 .sn-home__cluster {
   position: relative;
   z-index: 1;
+  width: 100%;
   margin-top: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--s-4);
-  padding-bottom: var(--s-2);
+  padding-top: var(--s-4);
 }
 
-.sn-home__row {
+/* The theme swatch must stay the *theme's* colour: --accent inside home is the
+   focused mode's, which would make this dot lie about what it opens. */
+.sn-home .sn-chip--theme .sn-chip__dot {
+  width: 11px;
+  height: 11px;
+  background: linear-gradient(135deg, var(--bg-top) 0%, var(--ground) 100%);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.45),
+    0 1px 3px rgba(0, 0, 0, 0.34);
+}
+
+/* -------------------------------------------------------------- mode deck */
+
+.sn-deck {
+  --card-w: clamp(150px, 53vw, 212px);
+  --card-h: 148px;
+  --gap: 12px;
+  align-self: stretch;
+  /* Full bleed past the home gutters so the peeked cards run off both edges. */
+  margin-left: calc(-1 * (var(--gutter) + var(--safe-l)));
+  margin-right: calc(-1 * (var(--gutter) + var(--safe-r)));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+}
+
+/* Native scroll snapping, because platform fling physics cannot be faked.
+   `touch-action: pan-x` hands vertical gestures straight back to the page, so
+   the rail never becomes a dead zone over the canvas. */
+.sn-deck__rail {
+  /* Load-bearing: makes the rail the cards' offsetParent, so `offsetLeft` is
+     measured from the scroll origin. Without it the nearest positioned
+     ancestor is .sn-home__cluster and every measurement — the falloff, the
+     nearest-card test, the snap target — is out by the deck's bleed margin. */
+  position: relative;
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: var(--s-5);
+  gap: var(--gap);
+  padding-inline: calc(50% - var(--card-w) / 2);
+  padding-block: 14px 20px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: none;
+  touch-action: pan-x;
+  pointer-events: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
 
-.sn-home__row .sn-icon {
-  width: 24px;
-  height: 24px;
+.sn-deck__rail::-webkit-scrollbar {
+  display: none;
+}
+
+.sn-mode {
+  /* Distance from the rail centre in card-strides, written by modeDeck.ts. */
+  --d: 1;
+  --press: 1;
+  --m-rgb: 255, 255, 255;
+  position: relative;
+  flex: 0 0 var(--card-w);
+  width: var(--card-w);
+  min-height: var(--card-h);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  /* Tile pinned top, name + tagline pinned bottom: a card whose tagline runs to
+     one line then reads as composed rather than as top-packed with a hole. */
+  justify-content: space-between;
+  gap: 11px;
+  padding: 14px 14px 16px;
+  border-radius: var(--r-card);
+  text-align: left;
+  color: var(--ink);
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  pointer-events: auto;
+  /* Deliberately thinner than --glass-bg: four dark slabs over a near-white
+     patisserie turn the whole lower third to mud, and the scene is the best
+     thing in the app. Legibility comes from the accent wash and the halos. */
+  background-color: rgba(14, 11, 10, 0.32);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0.5px solid var(--hairline);
+  box-shadow:
+    inset 0 0.5px 0 var(--highlight),
+    0 10px 26px rgba(0, 0, 0, 0.24);
+  /* The falloff rides the individual `scale`/`translate` properties so the
+     press spring can keep `transform` to itself — a transition on `transform`
+     would otherwise lag a frame behind every scroll event. */
+  transform-origin: 50% 52%;
+  scale: calc(1 - 0.17 * var(--d));
+  translate: 0 calc(var(--d) * 5px);
+  transform: scale(var(--press));
+  opacity: calc(1 - 0.46 * var(--d));
+  will-change: transform, scale, opacity;
+  transition:
+    transform 300ms var(--ease-spring),
+    background-image var(--dur-tint) var(--ease-ios),
+    border-color var(--dur-tint) var(--ease-ios),
+    box-shadow var(--dur-tint) var(--ease-ios);
+}
+
+.sn-root .sn-mode:focus-visible {
+  border-radius: var(--r-card);
+  outline-offset: 4px;
+}
+
+.sn-mode.is-pressed {
+  --press: 0.965;
+  transition-duration: var(--dur-press);
+  transition-timing-function: var(--ease-out);
+}
+
+.sn-mode.is-pressed .sn-btn__dim {
+  opacity: 0.12;
+}
+
+/* The focus card is *lit*, not merely outlined: the accent carries the material
+   so it reads as colour rather than as tinted smoke. */
+.sn-mode.is-focused {
+  background-color: rgba(12, 10, 9, 0.36);
+  background-image: linear-gradient(
+    158deg,
+    rgba(var(--m-rgb), 0.46) 0%,
+    rgba(var(--m-rgb), 0.18) 56%,
+    rgba(var(--m-rgb), 0.06) 100%
+  );
+  border-color: rgba(var(--m-rgb), 0.7);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.36),
+    0 0 0 1px rgba(var(--m-rgb), 0.32),
+    0 16px 38px rgba(0, 0, 0, 0.32),
+    0 10px 28px rgba(var(--m-rgb), 0.22);
+}
+
+.sn-mode.is-locked {
+  cursor: default;
+  filter: saturate(0.2);
+}
+
+/* Reserved modes: a desaturated card with no explanation is a mystery, so say
+   so plainly rather than leaving the player to guess. */
+.sn-mode__lock {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.14);
+  border: 0.5px solid var(--hairline-soft);
+  font-size: var(--t-12);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-indent: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.sn-mode__tile {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: linear-gradient(
+    148deg,
+    rgba(var(--m-rgb), 0.46) 0%,
+    rgba(var(--m-rgb), 0.15) 100%
+  );
+  box-shadow:
+    inset 0 0 0 0.5px rgba(var(--m-rgb), 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.sn-mode__glyph {
+  font-size: 27px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.42));
+}
+
+.sn-mode__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+
+.sn-mode__name {
+  font-size: var(--t-17);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sn-mode__tag {
+  font-size: 12.5px;
+  line-height: 1.32;
+  min-height: 2.64em;
+  color: var(--ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: color var(--dur-tint) var(--ease-ios);
+}
+
+.sn-mode.is-focused .sn-mode__tag {
+  color: var(--ink);
+  opacity: 0.82;
+}
+
+/* ---- position dots ----------------------------------------------------- */
+
+.sn-deck__dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 6px;
+}
+
+.sn-deck__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.32);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition:
+    width 340ms var(--ease-ios),
+    background-color var(--dur-tint) var(--ease-ios);
+}
+
+.sn-deck__dot.is-on {
+  width: 18px;
+  background: var(--accent);
+}
+
+/* ---- focused mode: rules + personal best -------------------------------- */
+
+.sn-deck__detail {
+  width: 100%;
+  min-height: 60px;
+  padding-inline: calc(var(--gutter) + var(--s-2));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+  will-change: transform, opacity;
+}
+
+.sn-deck__how {
+  max-width: 100%;
+  font-size: var(--t-14);
+  line-height: 1.32;
+  font-weight: 500;
+  color: var(--ink);
+  opacity: 0.92;
+  text-shadow: var(--ink-halo);
+  text-wrap: balance;
+}
+
+.sn-deck__best {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--t-12);
+  /* A step brighter than --ink-2: this line sits on bare scene, and on the two
+     high-key palettes 62% white with a halo is right on the edge. */
+  color: rgba(255, 255, 255, 0.78);
+  text-shadow: var(--ink-halo);
+}
+
+.sn-deck__k {
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  text-indent: 0.1em;
+  opacity: 0.74;
+}
+
+.sn-deck__v {
+  font-size: var(--t-14);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.sn-deck__sep {
+  opacity: 0.42;
+}
+
+.sn-deck__c {
+  font-weight: 600;
+}
+
+.sn-deck__best.is-empty {
+  align-items: center;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  opacity: 0.72;
 }
 
 /* -------------------------------------------------------------- game HUD */
@@ -506,6 +827,9 @@
   );
 }
 
+/* The only thing standing between white chrome and a near-white patisserie.
+   Tall enough to cover the whole command deck, and shaped so it never reads as
+   a bar over the dark themes. */
 .sn-home::after {
   content: "";
   position: absolute;
@@ -513,13 +837,14 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: calc(var(--safe-b) + 360px);
+  height: calc(var(--safe-b) + 52%);
   pointer-events: none;
   background: linear-gradient(
     0deg,
-    rgba(0, 0, 0, 0.32) 0%,
-    rgba(0, 0, 0, 0.18) 34%,
-    rgba(0, 0, 0, 0.06) 68%,
+    rgba(0, 0, 0, 0.34) 0%,
+    rgba(0, 0, 0, 0.23) 24%,
+    rgba(0, 0, 0, 0.11) 52%,
+    rgba(0, 0, 0, 0.03) 78%,
     rgba(0, 0, 0, 0) 100%
   );
 }
@@ -1629,19 +1954,87 @@
 
 /* ------------------------------------------------------------ short screens */
 
-@media (max-height: 620px) {
+/* 320x568 is the floor. The deck keeps its peek and its 44px hit targets; what
+   gives is the wordmark, the card body and the vertical rhythm. */
+@media (max-height: 700px) {
   .sn-home__lockup {
-    margin-top: clamp(8px, 3vh, 24px);
+    margin-top: clamp(4px, 2vh, 16px);
   }
   .sn-home__cluster {
     gap: var(--s-3);
+    padding-top: var(--s-2);
   }
   .sn-wm--hero .sn-wm__word {
-    font-size: clamp(38px, 11vw, 52px);
+    font-size: clamp(30px, 9.5vw, 44px);
   }
-  .sn-wm__tagline {
-    margin-top: 10px;
+  .sn-deck {
+    --card-h: 130px;
+    gap: 7px;
   }
+  .sn-deck__rail {
+    padding-block: 10px 16px;
+  }
+  .sn-mode {
+    gap: 9px;
+    padding: 12px 12px 13px;
+  }
+  .sn-mode__tile {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+  .sn-mode__glyph {
+    font-size: 23px;
+  }
+  .sn-deck__detail {
+    min-height: 54px;
+  }
+  .sn-btn--play {
+    height: 54px;
+    min-height: 54px;
+    font-size: var(--t-17);
+  }
+}
+
+@media (max-height: 580px) {
+  .sn-deck {
+    --card-h: 112px;
+  }
+  .sn-mode__tag {
+    -webkit-line-clamp: 1;
+    min-height: 1.32em;
+  }
+  .sn-deck__how {
+    font-size: 13px;
+  }
+}
+
+/* Roomy phones get a bigger stage; the deck grows rather than the gaps. */
+@media (min-height: 880px) {
+  .sn-deck {
+    --card-h: 154px;
+  }
+  .sn-mode {
+    padding: 16px 15px 18px;
+  }
+  .sn-mode__tile {
+    width: 56px;
+    height: 56px;
+    border-radius: 17px;
+  }
+  .sn-mode__glyph {
+    font-size: 29px;
+  }
+  .sn-home__cluster {
+    gap: var(--s-5);
+  }
+}
+
+/* ------------------------------------------------------------ deck, reduced */
+
+.sn-root[data-reduced-motion="1"] .sn-deck__rail,
+.sn-root[data-reduced-motion="1"] .sn-mode {
+  scroll-behavior: auto;
 }
 
 /* Coin-progress line under a locked card's action. */

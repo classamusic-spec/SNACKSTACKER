@@ -69,6 +69,12 @@ export function createStackMode(ctx: ModeCtx): GameMode {
     update: (dt, elapsed) => game.update(dt, elapsed),
     // The stacker is a tap-anywhere game; the coordinates are irrelevant to it.
     tap: () => game.drop(),
+    get aimHint() {
+      return game.dropOffset;
+    },
+    get debrisCount() {
+      return game.debrisCount;
+    },
     setTheme: (t: ThemeDef) => game.setTheme(t),
     dispose: () => {
       game.dispose();

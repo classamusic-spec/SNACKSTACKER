@@ -13,6 +13,37 @@ export const EASE_OUT = 'cubic-bezier(0.16, 1, 0.3, 1)';
 export const EASE_SPRING = 'cubic-bezier(0.34, 1.42, 0.52, 1)';
 
 /**
+ * `EASE_IOS` evaluated in JS, for the few things the Web Animations API cannot
+ * drive — `scrollLeft` above all. Solves x(u) = t by Newton-Raphson, then
+ * returns y(u), so a hand-rolled animation lands on exactly the same curve as
+ * every CSS transition in the app.
+ */
+const CX = 3 * 0.32;
+const BX = 3 * (0 - 0.32) - CX;
+const AX = 1 - CX - BX;
+const CY = 3 * 0.72;
+const BY = 3 * (1 - 0.72) - CY;
+const AY = 1 - CY - BY;
+
+const bezX = (u: number): number => ((AX * u + BX) * u + CX) * u;
+const bezXd = (u: number): number => (3 * AX * u + 2 * BX) * u + CX;
+const bezY = (u: number): number => ((AY * u + BY) * u + CY) * u;
+
+export function easeIos(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  let u = t;
+  for (let i = 0; i < 6; i += 1) {
+    const err = bezX(u) - t;
+    if (Math.abs(err) < 1e-5) break;
+    const d = bezXd(u);
+    if (Math.abs(d) < 1e-6) break;
+    u -= err / d;
+  }
+  return bezY(Math.max(0, Math.min(1, u)));
+}
+
+/**
  * `essential` — collapses to a short cross-fade under reduced motion.
  * `timed`     — keeps its duration (the player has to *read* it) but loses transforms.
  * `flourish`  — dropped entirely under reduced motion.

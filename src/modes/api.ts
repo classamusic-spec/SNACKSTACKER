@@ -98,6 +98,19 @@ export interface GameMode {
 
   /** Release every GPU resource this mode created. */
   dispose(): void;
+
+  /**
+   * Optional automation hooks. The QA harnesses drive real runs by reading an
+   * aiming hint each frame — without one, a headless player can only tap
+   * blindly, which under software rendering exercises almost nothing. Modes
+   * that have no meaningful "how close am I" signal simply omit it.
+   *
+   * @returns signed distance from the ideal input right now, or null when
+   * there is nothing to aim at.
+   */
+  readonly aimHint?: number | null;
+  /** Live count of transient objects, for leak detection. */
+  readonly debrisCount?: number;
 }
 
 /** How a mode presents itself in the mode picker. */

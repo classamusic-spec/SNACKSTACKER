@@ -20,6 +20,7 @@ export class CameraRig {
   private orbit = 0;
   private orbitSpeed = 0;
   private lift = 0;
+  private frameBias = 0;
   /** Effective travel, recomputed on resize; never exceeds what fits. */
   travel = TUNING.TRAVEL;
 
@@ -87,9 +88,23 @@ export class CameraRig {
     this.lift = lift;
   }
 
+  /**
+   * Vertical composition nudge. Lowering the look point raises the subject on
+   * screen, which is how the home screen keeps the hero tower clear of the
+   * mode deck occupying the bottom 40% of the frame.
+   */
+  setFrameBias(bias: number): void {
+    this.frameBias = bias;
+  }
+
   update(dt: number, lambda = TUNING.CAM_FOLLOW_LAMBDA): void {
     this.currentY = damp(this.currentY, this.targetY, lambda, dt);
-    this.lookY = damp(this.lookY, this.targetY + TUNING.CAM_LOOK_LIFT, lambda * 0.85, dt);
+    this.lookY = damp(
+      this.lookY,
+      this.targetY + TUNING.CAM_LOOK_LIFT + this.frameBias,
+      lambda * 0.85,
+      dt,
+    );
     this.orbit += this.orbitSpeed * dt;
 
     const yaw = TUNING.CAM_YAW + this.orbit;
@@ -110,7 +125,7 @@ export class CameraRig {
   /** Snap instantly to the current target (used on reset). */
   snap(): void {
     this.currentY = this.targetY;
-    this.lookY = this.targetY + TUNING.CAM_LOOK_LIFT;
+    this.lookY = this.targetY + TUNING.CAM_LOOK_LIFT + this.frameBias;
     this.update(1 / 60, 1e6);
   }
 

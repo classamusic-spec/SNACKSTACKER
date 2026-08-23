@@ -5,11 +5,14 @@ import type { ThemeDef } from './content/api';
 import { device } from './core/device';
 import { haptic, initHaptics, setHapticsEnabled } from './core/haptics';
 import { clamp01 } from './core/math';
+import { Rng } from './core/rng';
 import { Ticker } from './core/ticker';
 import type { QualityTier, RunResult, Settings, SkuId, ThemeId } from './core/types';
 import { CameraRig } from './game/CameraRig';
 import { TUNING } from './game/constants';
-import { StackGame } from './game/StackGame';
+import type { GameMode, ModeCtx, ModeId } from './modes/api';
+import { MODE_INFO } from './modes/api';
+import { ALL_MODES, MODE_ACCENT, modeFactory } from './modes/registry';
 import { createMeta } from './meta';
 import { createSceneKit } from './render';
 import type { SceneKit } from './render/api';
@@ -90,25 +93,47 @@ async function boot(): Promise<void> {
   let kit!: SceneKit;
   let rig!: CameraRig;
   let vfx!: VfxSystem;
-  let game!: StackGame;
+  /** The mode currently loaded. Swapped by the picker; never null after boot. */
+  let game!: GameMode;
+  let modeId: ModeId = 'stack';
   const audio = createAudioEngine();
 
   let state: AppState = 'boot';
   let lastResult: RunResult | null = null;
   /** Mirrors the run's live HUD numbers so a partial refresh never blanks them. */
   const hud = { score: 0, layers: 0, combo: 0 };
+  /** True from the moment a run starts dying until its result is shown. */
+  let endingRun = false;
 
-  const makeGame = (): StackGame =>
-    new StackGame({
-      scene: kit.scene,
-      rig,
-      materials: kit.materials,
-      vfx,
-      audio,
-      quality: kit.quality.tier,
-      shake: (m, d) => kit.shake(m, d),
-      flash: (a) => kit.flash(a),
-    });
+  const modeCtx = (): ModeCtx => ({
+    scene: kit.scene,
+    camera: kit.camera,
+    rig,
+    materials: kit.materials,
+    vfx,
+    audio,
+    quality: kit.quality.tier,
+    theme,
+    rng: new Rng((Date.now() ^ 0x5bf03635) >>> 0),
+    shake: (m, d) => kit.shake(m, d),
+    flash: (a) => kit.flash(a),
+    viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
+  });
+
+  /**
+   * Build a mode and take ownership of it. Modes are constructed lazily and
+   * disposed on the way out, so an unplayed mode costs nothing and a swap
+   * cannot leave two modes' geometry in the scene at once.
+   */
+  function loadMode(id: ModeId): void {
+    if (game) {
+      game.stop();
+      game.dispose();
+    }
+    modeId = id;
+    game = modeFactory(id)(modeCtx());
+    wireGameEvents();
+  }
 
   // ---------------------------------------------------------------------------
   // UI wiring
@@ -144,6 +169,26 @@ async function boot(): Promise<void> {
     return { items, coins: meta.data.coins };
   };
 
+  const buildModeCards = () =>
+    ALL_MODES.map((id) => {
+      const info = MODE_INFO[id];
+      const rec = meta.modeRecord(id);
+      return {
+        id,
+        name: info.name,
+        tagline: info.tagline,
+        how: info.how,
+        glyph: info.glyph,
+        best: rec.best,
+        countLabel: info.countLabel,
+        bestCount: rec.bestCount,
+        accent: MODE_ACCENT[id],
+        locked: false,
+      };
+    });
+
+  const refreshModes = (): void => ui.setModes(buildModeCards(), modeId);
+
   const applyTheme = (next: ThemeDef, rebuild: boolean): void => {
     theme = next;
     // Reachable from the store before the renderer exists; the palette is
@@ -153,6 +198,7 @@ async function boot(): Promise<void> {
     ui.applyTheme(next);
     audio.setTheme(next);
     game.setTheme(next);
+    game.setTheme(next);
     if (rebuild && (state === 'home' || state === 'boot')) game.attract();
   };
 
@@ -161,6 +207,14 @@ async function boot(): Promise<void> {
       void audio.unlock();
       audio.play(kind === 'back' ? 'ui_back' : kind === 'toggle' ? 'ui_toggle' : 'ui_tap');
       haptic('selection');
+    },
+    onSelectMode: (id: ModeId) => {
+      if (!game || id === modeId) return;
+      meta.selectMode(id);
+      loadMode(id);
+      game.setTheme(theme);
+      game.attract();
+      refreshModes();
     },
     onPlay: () => startRun(),
     onRestart: () => startRun(),
@@ -282,10 +336,15 @@ async function boot(): Promise<void> {
 
   function goHome(): void {
     state = 'home';
+    // The mode deck owns the bottom ~40% of the frame, so lift the hero tower
+    // clear of it. Without this the picker card sits on top of the food, which
+    // is the one thing the home screen exists to show off.
+    rig.setFrameBias(-1.45);
     game.attract();
     audio.setIntensity(0.15);
-    ui.setBest(meta.data.best);
+    ui.setBest(meta.modeRecord(modeId).best);
     ui.setCoins(meta.data.coins);
+    refreshModes();
     ui.goHome();
   }
 
@@ -296,8 +355,11 @@ async function boot(): Promise<void> {
     // game and every subsequent Space throws.
     if (!game) return;
     void audio.unlock();
+    // Gameplay has no deck; restore neutral framing.
+    rig.setFrameBias(0);
     state = 'playing';
     lastResult = null;
+    endingRun = false;
     hud.score = 0;
     hud.layers = 0;
     hud.combo = 0;
@@ -316,10 +378,10 @@ async function boot(): Promise<void> {
 
   function pause(): void {
     if (state !== 'playing' || !game) return;
-    // The death animation runs while state is still 'playing'. Pausing there
-    // would freeze game.update() before the gameover event fires, and a Home
-    // from that frozen state discarded the whole run. Let the topple finish.
-    if (game.phase === 'toppling' || game.phase === 'over') return;
+    // A mode's death animation runs while the app state is still 'playing'.
+    // Pausing there would freeze update() before the over event fires, and a
+    // Home from that frozen state discarded the whole run. Let it finish.
+    if (endingRun) return;
     state = 'paused';
     ui.goPause();
   }
@@ -345,7 +407,7 @@ async function boot(): Promise<void> {
         hud.combo = combo;
         ui.setCombo(combo);
       });
-      game.events.on('perfect', ({ label, tier }) => {
+      game.events.on('praise', ({ label, tier }) => {
         ui.showPerfect(label, tier);
         haptic(tier >= 2 ? 'heavy' : 'medium');
       });
@@ -353,7 +415,7 @@ async function boot(): Promise<void> {
         ui.showMilestone(title, sub);
         haptic('success');
       });
-      game.events.on('layer', ({ layers }) => {
+      game.events.on('progress', ({ primary: layers }) => {
         hud.layers = layers;
         ui.setHud({
           score: hud.score,
@@ -364,19 +426,21 @@ async function boot(): Promise<void> {
         });
       });
       game.events.on('intensity', (v) => audio.setIntensity(clamp01(v)));
-      game.events.on('firstDrop', () => {
+      game.events.on('firstAction', () => {
         meta.markTutorialSeen();
         ui.setCoach(false);
       });
-      game.events.on('gameover', (summary) => {
+      game.events.on('over', (summary) => {
         state = 'result';
+        endingRun = false;
         haptic('error');
+        meta.recordModeRun(modeId, summary.score, summary.count);
         const result = meta.recordRun({
           score: summary.score,
-          layers: summary.layers,
+          layers: summary.count,
           perfects: summary.perfects,
           bestCombo: summary.bestCombo,
-          heightCm: summary.heightCm,
+          heightCm: summary.heightCm ?? 0,
           themeId: theme.id,
         });
         lastResult = result;
@@ -399,12 +463,15 @@ async function boot(): Promise<void> {
   // input
   // ---------------------------------------------------------------------------
 
+  /** Last pointer position in CSS px, for modes that need to know what was hit. */
+  const lastPointer = { x: 0, y: 0 };
+
   const tryDrop = (): void => {
     if (state !== 'playing' || !game) return;
     void audio.unlock();
     // Only buzz if the drop was actually taken; during the spawn cooldown and
     // the topple `drop()` no-ops, and buzzing there feels like a lost input.
-    if (game.drop()) haptic('light');
+    if (game.tap(lastPointer.x, lastPointer.y)) haptic('light');
   };
 
   // The UI overlay is pointer-events:none except for its controls, so a tap on
@@ -413,6 +480,9 @@ async function boot(): Promise<void> {
     'pointerdown',
     (e) => {
       e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      lastPointer.x = e.clientX - rect.left;
+      lastPointer.y = e.clientY - rect.top;
       tryDrop();
     },
     { passive: false },
@@ -502,7 +572,7 @@ async function boot(): Promise<void> {
 
   rig = new CameraRig(kit.camera);
   vfx = createVfx(kit.scene, kit.camera, kit.materials, kit.quality.tier);
-  game = makeGame();
+  loadMode(meta.data.selectedMode);
   wireGameEvents();
   mark('systems');
 
@@ -558,7 +628,7 @@ async function boot(): Promise<void> {
     if (state !== 'paused') game.update(dt, elapsed);
 
     if (state === 'home' || state === 'boot') rig.update(dt, 2.2);
-    else if (game.phase === 'toppling' || game.phase === 'over') rig.update(dt, 1.8);
+    else if (endingRun) rig.update(dt, 1.8);
     else rig.update(dt);
 
     vfx.update(dt, elapsed);
@@ -569,16 +639,16 @@ async function boot(): Promise<void> {
     stats.drawCalls = kit.renderer.info.render.calls;
     stats.triangles = kit.renderer.info.render.triangles;
     stats.programs = kit.renderer.info.programs?.length ?? 0;
-    stats.layers = game.layerCount;
+    stats.layers = hud.layers;
     stats.tier = kit.quality.tier;
     stats.state = state;
-    stats.offcuts = game.debrisCount;
+    stats.offcuts = game.debrisCount ?? 0;
     stats.geometries = kit.renderer.info.memory.geometries;
     stats.textures = kit.renderer.info.memory.textures;
     stats.programs2 = kit.renderer.info.programs?.length ?? 0;
     const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
     stats.heapMb = mem ? Math.round(mem.usedJSHeapSize / 1048576) : 0;
-    stats.offset = game.dropOffset;
+    stats.offset = game.aimHint ?? null;
     kit.renderer.info.reset();
   });
 

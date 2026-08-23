@@ -12,7 +12,8 @@ import '../styles/ui.css';
 import type { ThemeDef } from '../content/api';
 import type { RunResult, Settings, SkuId } from '../core/types';
 import { DEFAULT_SETTINGS } from '../core/types';
-import type { HudState, ScreenId, StoreView, Ui, UiHooks } from './api';
+import type { ModeId } from '../modes/api';
+import type { HudState, ModeCardView, ScreenId, StoreView, Ui, UiHooks } from './api';
 import { createToastHost } from './components/toast';
 import type { PressKind, ToastKind, UiCtx } from './ctx';
 import { Bag, h } from './dom';
@@ -84,6 +85,7 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
   };
 
   const wrappedHooks: UiHooks = {
+    onSelectMode: (id) => hooks.onSelectMode(id),
     onPlay: () => hooks.onPlay(),
     onRestart: () => hooks.onRestart(),
     onHome: () => hooks.onHome(),
@@ -288,8 +290,12 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
 
   // ----------------------------------------------------------------- screens
   function mountBase(next: 'home' | 'game', instant: boolean): void {
+    // Home is already the base and already on screen — this is a sheet
+    // closing, not a navigation. Replaying `enter()` here re-ran the wordmark
+    // landing and the whole deck stagger every time the player dismissed the
+    // shop, which is the single most irritating thing the old home did.
     if (base === next && next === 'home' && home.el.isConnected) {
-      if (!instant && !bootVisible) home.enter(false);
+      home.wake();
       return;
     }
     if (base === next && next === 'game' && game.el.isConnected) return;
@@ -422,6 +428,10 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
       const animate = opts?.animate === true;
       home.setCoins(coins, animate);
       storeScreen?.setCoins(coins, animate);
+    },
+
+    setModes(cards: ModeCardView[], selectedId: ModeId): void {
+      home.setModes(cards, selectedId);
     },
 
     applyTheme(next: ThemeDef): void {

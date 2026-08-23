@@ -1,15 +1,23 @@
-import { createButton, createChip, createIconButton } from '../components/button';
+import type { ModeId } from '../../modes/api';
+import type { ModeCardView } from '../api';
+import { createButton, createIconButton } from '../components/button';
 import { createCounter } from '../components/counter';
+import { createModeDeck } from '../components/modeDeck';
 import { createWordmark } from '../components/wordmark';
 import type { UiCtx } from '../ctx';
-import { Bag, formatInt, h, setText, toggleClass } from '../dom';
+import { h } from '../dom';
 import { iconBag, iconCoin, iconGear } from '../icons';
+import { defaultModeCards } from '../modeCards';
 import { EASE_IOS, animate, resetAnimations, runExit } from '../motion';
+import { hexFromInt, inkFor, rgbTriplet } from '../theme';
 
 export interface HomeScreen {
   readonly el: HTMLElement;
   enter(instant: boolean): void;
+  /** Re-show an already-mounted home without replaying its entrance. */
+  wake(): void;
   exit(done?: () => void): void;
+  setModes(cards: readonly ModeCardView[], selectedId: ModeId): void;
   setBest(best: number): void;
   setCoins(coins: number, animate?: boolean): void;
   setThemeName(name: string): void;
@@ -17,13 +25,19 @@ export interface HomeScreen {
 }
 
 /**
- * Home is deliberately sparse: the live hero tower renders behind it, so the
- * chrome is a floating lockup at the top and one command cluster at the bottom.
+ * Home is a mode picker floating over a live 3D hero scene, so it is built as
+ * three thin bands with the world showing between them: a utility bar at the
+ * top, the wordmark under it, and a command deck at the bottom — swipeable
+ * mode cards, the focused mode's rules and record, then PLAY.
+ *
+ * The whole screen adopts the focused mode's accent (`--accent` is overridden
+ * on this element, not on the root), so there is still exactly one accent
+ * colour on screen and it belongs to the thing PLAY is about to start.
  */
 export function createHomeScreen(ctx: UiCtx): HomeScreen {
-  const bag = new Bag();
-  const wordmark = createWordmark({ size: 'hero', tagline: true });
+  const wordmark = createWordmark({ size: 'hero' });
 
+  // ------------------------------------------------------------- top bar
   const coins = createCounter({ value: 0, className: 'sn-chip__v' });
   const coinChip = h(
     'div',
@@ -32,25 +46,44 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
     coins.el,
   );
 
-  const best = createChip({ key: 'BEST', value: '0', className: 'sn-chip--best' });
-
-  const playBtn = createButton(ctx, {
-    label: 'PLAY',
-    kind: 'primary',
-    className: 'sn-btn--play',
-    onPress: () => ctx.hooks.onPlay(),
+  const settingsBtn = createIconButton(ctx, {
+    icon: iconGear(),
+    ariaLabel: 'Settings',
+    className: 'sn-btn--icon-sm',
+    onPress: () => ctx.hooks.onOpenSettings(),
   });
 
   const shopBtn = createIconButton(ctx, {
     icon: iconBag(),
     ariaLabel: 'Shop',
+    className: 'sn-btn--icon-sm',
     onPress: () => ctx.hooks.onOpenStore(),
   });
 
-  const settingsBtn = createIconButton(ctx, {
-    icon: iconGear(),
-    ariaLabel: 'Settings',
-    onPress: () => ctx.hooks.onOpenSettings(),
+  const bar = h(
+    'div',
+    { class: 'sn-home__bar' },
+    settingsBtn,
+    h('div', { class: 'sn-home__bar-right' }, coinChip, shopBtn),
+  );
+
+  // ---------------------------------------------------------------- picker
+  const deck = createModeDeck(ctx, {
+    onFocus: (card) => applyModeAccent(card),
+    onCommit: (id) => {
+      selectedId = id;
+      ctx.hooks.onSelectMode(id);
+    },
+    onActivate: () => ctx.hooks.onPlay(),
+  });
+
+  // ----------------------------------------------------------------- play
+  const playBtn = createButton(ctx, {
+    label: 'PLAY',
+    kind: 'primary',
+    className: 'sn-btn--play',
+    ariaLabel: 'Play',
+    onPress: () => ctx.hooks.onPlay(),
   });
 
   const themeName = h('span', { class: 'sn-chip__v', text: '—' });
@@ -68,22 +101,34 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
     ctx.hooks.onOpenStore();
   });
 
-  const top = h('div', { class: 'sn-home__top' }, coinChip);
+  const cluster = h('div', { class: 'sn-home__cluster' }, deck.el, playBtn, themeChip);
+
   const lockup = h('div', { class: 'sn-home__lockup' }, wordmark.el);
-  const cluster = h(
-    'div',
-    { class: 'sn-home__cluster' },
-    best.el,
-    playBtn,
-    h('div', { class: 'sn-home__row' }, shopBtn, settingsBtn),
-    themeChip,
-  );
+  const el = h('div', { class: 'sn-screen sn-home' }, bar, lockup, cluster);
 
-  const el = h('div', { class: 'sn-screen sn-home' }, top, lockup, cluster);
+  let selectedId: ModeId = 'stack';
 
-  const staggered: HTMLElement[] = [best.el, playBtn, cluster.children[2] as HTMLElement, themeChip];
+  /**
+   * Retint the screen to the focused mode. Custom properties do not animate,
+   * but every consumer already transitions `background-color` / `border-color`
+   * / `box-shadow` on `--dur-tint`, so the swap sweeps rather than snaps.
+   */
+  function applyModeAccent(card: ModeCardView): void {
+    selectedId = card.id;
+    el.style.setProperty('--accent', hexFromInt(card.accent));
+    el.style.setProperty('--accent-rgb', rgbTriplet(card.accent));
+    el.style.setProperty('--accent-ink', inkFor(card.accent));
+    // A reserved mode must not be startable, or PLAY would lie.
+    playBtn.disabled = card.locked;
+    playBtn.setAttribute(
+      'aria-label',
+      card.locked ? `${card.name} is not unlocked yet` : `Play ${card.name}`,
+    );
+  }
 
-  let bestValue = 0;
+  deck.setCards(defaultModeCards(), selectedId);
+
+  const staggered: HTMLElement[] = [playBtn, themeChip];
 
   return {
     el,
@@ -93,7 +138,12 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
       el.style.opacity = '';
       if (instant) return;
       wordmark.play();
-      animate(coinChip, [{ opacity: 0 }, { opacity: 1 }], { duration: 380, delay: 120, easing: EASE_IOS });
+      deck.play();
+      animate(bar, [{ opacity: 0 }, { opacity: 1 }], {
+        duration: 380,
+        delay: 120,
+        easing: EASE_IOS,
+      });
       staggered.forEach((node, i) => {
         animate(
           node,
@@ -101,10 +151,23 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
             { transform: 'translate3d(0, 22px, 0)', opacity: 0 },
             { transform: 'translate3d(0, 0, 0)', opacity: 1 },
           ],
-          { duration: 480, delay: 140 + i * 60, easing: EASE_IOS },
+          { duration: 480, delay: 440 + i * 70, easing: EASE_IOS },
         );
       });
     },
+
+    /**
+     * Closing a sheet used to re-run `enter()`, which replayed the wordmark
+     * landing and the whole deck stagger every single time — the most
+     * irritating thing on the screen. Home is already on screen at that point,
+     * so all it needs is to drop any leftover exit state.
+     */
+    wake(): void {
+      el.classList.remove('is-leaving');
+      el.style.opacity = '';
+      el.style.transform = '';
+    },
+
     exit(done?: () => void): void {
       el.classList.add('is-leaving');
       runExit(
@@ -120,21 +183,32 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
         },
       );
     },
-    setBest(value: number): void {
-      bestValue = Math.max(0, Math.round(value));
-      setText(best.value, formatInt(bestValue));
-      toggleClass(best.el, 'is-hidden', bestValue <= 0);
-      best.el.setAttribute('aria-label', `Best score ${formatInt(bestValue)}`);
+
+    setModes(cards: readonly ModeCardView[], id: ModeId): void {
+      if (cards.length === 0) return;
+      selectedId = cards.some((c) => c.id === id) ? id : cards[0].id;
+      deck.setCards(cards, selectedId);
     },
+
+    /**
+     * The shell's single "best" is the best for the mode the player is looking
+     * at — per-mode records otherwise arrive through `setModes`.
+     */
+    setBest(value: number): void {
+      deck.setBest(selectedId, value);
+    },
+
     setCoins(value: number, doAnimate = false): void {
       coins.set(Math.max(0, Math.round(value)), { animate: doAnimate, duration: 520 });
     },
+
     setThemeName(name: string): void {
-      setText(themeName, name);
+      themeName.textContent = name;
       themeChip.setAttribute('aria-label', `Theme: ${name}. Change theme.`);
     },
+
     destroy(): void {
-      bag.disposeAll();
+      deck.destroy();
       el.remove();
     },
   };
