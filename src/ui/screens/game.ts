@@ -79,11 +79,12 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
   );
 
   /**
-   * The pad itself. Deliberately no `sn-e-*` class: an edge silhouette is a
-   * `clip-path`, and `.sn-delta` deliberately flies out past the score's left
-   * edge, so a clipped pad would swallow every `+120`. The perforation is a
-   * real tear-line element across the top instead, which is also what §8 asks
-   * for ("tear-line at the top edge").
+   * The pad itself. No `sn-e-*` class: the silhouettes are authored against a
+   * card's proportions, so one scaled to a pad this shape bites into it rather
+   * than shaping its edge. The perforation is a real tear-line element across
+   * the top instead, which is what §8 asks for anyway ("tear-line at the top
+   * edge") — and it leaves `.sn-delta` free to fly out past the score's left
+   * edge, which is where a `+120` belongs.
    *
    * Nothing here opts back into pointer events: the whole screen is the drop
    * control and the pad must never eat a tap.

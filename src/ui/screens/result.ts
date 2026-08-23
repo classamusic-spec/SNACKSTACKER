@@ -52,13 +52,14 @@ function billLine(label: string, value: string): HTMLElement {
  * totalled. A personal record is not a ribbon, it is the thing the kitchen
  * stamps on your check on the way out.
  *
- * The paper is ticket stock. It deliberately carries no `sn-e-*` silhouette
- * yet: an edge class is a `clip-path`, and with `.sn-bill` having no horizontal
- * padding of its own a torn edge bit straight through the right-hand column —
- * "No. 1951" lost its 1, "15 cm" lost its m. Legibility outranks the material,
- * so the tear comes back the moment `.sn-bill` has an inset wide enough to
- * clear it; nothing else here is in its way, since the only focusable controls
- * are the buttons below, on the tray.
+ * The paper is ticket stock and carries no `sn-e-*` silhouette. That was
+ * originally because an edge was a `clip-path` that bit straight through the
+ * right-hand column — "No. 1951" lost its 1. It is now a mask on the stock's
+ * own paper layer, so content is safe, but the reason still holds in a second
+ * form: the silhouettes are authored against a card's proportions, and a bill
+ * runs some five hundred pixels tall, so a tear scaled to it would take a bite
+ * out of the sheet rather than an edge off it. The perforations this screen
+ * wants are the three drawn rules down its length, which is what a check has.
  */
 export function createResultScreen(
   ctx: UiCtx,
