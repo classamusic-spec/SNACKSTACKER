@@ -397,7 +397,16 @@ async function boot(): Promise<void> {
   // game events
   // ---------------------------------------------------------------------------
 
-  /** Attached once the game exists; the splash is already on screen by then. */
+  /**
+   * Attached by `loadMode`, and ONLY by `loadMode`, which is the single place a
+   * mode comes into existence. Each mode owns a fresh emitter, so re-wiring on
+   * every swap is correct and cheap — but calling this a second time against
+   * the same mode subscribes every handler twice. That is not a harmless
+   * double-render: `over` records the run twice, which double-credits coins and
+   * makes `isNewBest` false on the second pass because the first pass just set
+   * the best, so the celebration can never fire. Praise and milestone sounds
+   * double up audibly too.
+   */
   function wireGameEvents(): void {
       game.events.on('score', ({ score, pop, delta }) => {
         hud.score = score;
@@ -573,7 +582,6 @@ async function boot(): Promise<void> {
   rig = new CameraRig(kit.camera);
   vfx = createVfx(kit.scene, kit.camera, kit.materials, kit.quality.tier);
   loadMode(meta.data.selectedMode);
-  wireGameEvents();
   mark('systems');
 
   ui.setLoadProgress(0.7);
