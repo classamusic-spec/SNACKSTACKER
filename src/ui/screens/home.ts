@@ -1,6 +1,6 @@
 import type { ModeId } from '../../modes/api';
 import type { ModeCardView } from '../api';
-import { createButton, createIconButton } from '../components/button';
+import { createButton, createChip, createIconButton } from '../components/button';
 import { createCounter } from '../components/counter';
 import { createModeDeck } from '../components/modeDeck';
 import { createWordmark } from '../components/wordmark';
@@ -9,6 +9,7 @@ import { h } from '../dom';
 import { iconBag, iconCoin, iconGear } from '../icons';
 import { defaultModeCards } from '../modeCards';
 import { EASE_IOS, animate, resetAnimations, runExit } from '../motion';
+import { CONDIMENT, INK } from '../snack/classes';
 import { hexFromInt, inkFor, rgbTriplet } from '../theme';
 
 export interface HomeScreen {
@@ -38,13 +39,13 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
   const wordmark = createWordmark({ size: 'hero' });
 
   // ------------------------------------------------------------- top bar
+  // `createChip` owns the chip's material — one sticker across the app. The
+  // balance has to count up, so the static value span it builds is swapped for
+  // a live counter; the chip's own markup and material are untouched.
+  const coinChip = createChip({ icon: iconCoin(), className: 'sn-chip--coins' });
   const coins = createCounter({ value: 0, className: 'sn-chip__v' });
-  const coinChip = h(
-    'div',
-    { class: 'sn-chip sn-chip--coins', aria: { label: 'Coins' } },
-    h('span', { class: 'sn-chip__icon' }, iconCoin()),
-    coins.el,
-  );
+  coinChip.value.replaceWith(coins.el);
+  coinChip.el.setAttribute('aria-label', 'Coins');
 
   const settingsBtn = createIconButton(ctx, {
     icon: iconGear(),
@@ -64,7 +65,7 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
     'div',
     { class: 'sn-home__bar' },
     settingsBtn,
-    h('div', { class: 'sn-home__bar-right' }, coinChip, shopBtn),
+    h('div', { class: 'sn-home__bar-right' }, coinChip.el, shopBtn),
   );
 
   // ---------------------------------------------------------------- picker
@@ -86,9 +87,12 @@ export function createHomeScreen(ctx: UiCtx): HomeScreen {
     onPress: () => ctx.hooks.onPlay(),
   });
 
+  // The one chip `createChip` cannot build: this one is a real <button> — it
+  // opens the shop, so it has to be focusable and carry the 44px target. Same
+  // sticker, same print, by hand.
   const themeName = h('span', { class: 'sn-chip__v', text: '—' });
   const themeChip = h('button', {
-    class: 'sn-chip sn-chip--theme',
+    class: `sn-chip sn-chip--theme ${CONDIMENT.sticker} ${INK.print}`,
     type: 'button',
     aria: { label: 'Change theme' },
   });

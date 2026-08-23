@@ -1,8 +1,10 @@
 import type { QualityTier, Settings } from '../../core/types';
+import { applyPaper, tearLine } from '../components/material';
 import { createSheet } from '../components/sheet';
 import { createSegmented, createSwitch } from '../components/toggle';
 import type { UiCtx } from '../ctx';
 import { h } from '../dom';
+import { INK, PAPER } from '../snack/classes';
 
 export interface SettingsScreen {
   readonly el: HTMLElement;
@@ -21,7 +23,18 @@ const QUALITY_OPTIONS: ReadonlyArray<{ value: QualityValue; label: string }> = [
   { value: 'high', label: 'High' },
 ];
 
-/** Grouped rows, iOS switches, and one segmented control for quality. */
+const PAD_SEED = 'settings:pad';
+
+/**
+ * Settings is the order pad: one sheet of ticket paper on the tray, the
+ * preferences written down its length, and a perforated tear-line where one
+ * group of orders ends and the next begins.
+ *
+ * The rows are the toggle component's own — a switch is a condiment sachet and
+ * a segmented control is the other half of that same role. They sit *on* the
+ * pad rather than inside a rounded glass box, which is the one piece of the old
+ * Apple chrome this screen was still carrying.
+ */
 export function createSettingsScreen(
   ctx: UiCtx,
   opts: { onDismiss(): void },
@@ -74,21 +87,45 @@ export function createSettingsScreen(
     onChange: (v) => ctx.hooks.onSettingChange('leftHanded', v),
   });
 
-  const group = (title: string, ...rows: HTMLElement[]): HTMLElement =>
+  /**
+   * A block of the pad. Plain `<section>`s, so the rows stack flush and the
+   * `.sn-row + .sn-row` hairline reads as a ruled line rather than a gap.
+   */
+  const block = (key: string, title: string, rows: readonly HTMLElement[]): HTMLElement =>
     h(
       'section',
-      { class: 'sn-section' },
-      h('h3', { class: 'sn-section__title', text: title }),
-      h('div', { class: 'sn-group' }, ...rows),
+      { class: 'sn-settings__sect', data: { group: key } },
+      h('h3', { class: `sn-settings__head sn-section__title ${INK.thermal}`, text: title }),
+      ...rows,
     );
+
+  const GROUPS: ReadonlyArray<{ key: string; title: string; rows: HTMLElement[] }> = [
+    { key: 'audio', title: 'Audio', rows: [sfx.el, music.el, haptics.el] },
+    { key: 'display', title: 'Display', rows: [reduced.el, quality.el] },
+    { key: 'controls', title: 'Controls', rows: [leftHanded.el] },
+  ];
+
+  // No `sn-e-*` silhouette on the pad: an edge is a clip-path, and this pad
+  // holds every focusable control on the screen — a clipped edge would crop
+  // the focus ring on the first and last rows.
+  const pad = h('div', { class: `sn-settings__pad ${PAPER.ticket} ${INK.print}` });
+  applyPaper(pad, { kind: 'ticket', seed: PAD_SEED, edge: 'perforated', wear: 0.16 });
+
+  GROUPS.forEach((group, index) => {
+    if (index > 0) {
+      // Seeded off the group it precedes, never off the loop counter, so
+      // re-ordering the pad never reshuffles a perforation.
+      const tear = tearLine(`${PAD_SEED}:${group.key}`, 'sn-settings__tear');
+      if (tear) pad.appendChild(tear);
+    }
+    pad.appendChild(block(group.key, group.title, group.rows));
+  });
 
   sheet.body.appendChild(
     h(
       'div',
       { class: 'sn-stack' },
-      group('Audio', sfx.el, music.el, haptics.el),
-      group('Display', reduced.el, quality.el),
-      group('Controls', leftHanded.el),
+      pad,
       h('p', {
         class: 'sn-fineprint',
         text: 'Snackery — Stack the snack.',

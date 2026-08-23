@@ -8,6 +8,7 @@
  */
 
 import '../styles/ui.css';
+import '../styles/snack.css';
 
 import type { ThemeDef } from '../content/api';
 import type { RunResult, Settings, SkuId } from '../core/types';
@@ -18,6 +19,7 @@ import { createToastHost } from './components/toast';
 import type { PressKind, ToastKind, UiCtx } from './ctx';
 import { Bag, h } from './dom';
 import { prefersReducedMotion, setReducedMotion } from './motion';
+import { disposeSnackKit } from './snack/api';
 import { applyThemeVars } from './theme';
 import { createBootScreen } from './screens/boot';
 import { createGameScreen } from './screens/game';
@@ -85,7 +87,12 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
   };
 
   const wrappedHooks: UiHooks = {
-    onSelectMode: (id) => hooks.onSelectMode(id),
+    onSelectMode: (id) => {
+      // The HUD's coach prompt is per-mode ("Tap to drop" is a lie in Recipe
+      // Rush), and the shell is the only place that knows which mode is live.
+      game.setMode(id);
+      hooks.onSelectMode(id);
+    },
     onPlay: () => hooks.onPlay(),
     onRestart: () => hooks.onRestart(),
     onHome: () => hooks.onHome(),
@@ -432,10 +439,15 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
 
     setModes(cards: ModeCardView[], selectedId: ModeId): void {
       home.setModes(cards, selectedId);
+      game.setMode(selectedId);
     },
 
     applyTheme(next: ThemeDef): void {
       applyThemeVars(rootEl, next);
+      // The paper classes read this: gingham in Classic Diner, washi in Sushi
+      // Tower, serape in Taco Night. Without it every stock prints plain and
+      // the per-theme half of §8 never runs.
+      rootEl.dataset['theme'] = next.id;
       home.setThemeName(next.name);
     },
 
@@ -483,6 +495,10 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
       toasts.destroy();
       home.destroy();
       game.destroy();
+      // The kit caches every painted texture for the life of the module, so
+      // the UI shell is its leak boundary: the last thing to hold a paper is
+      // the last thing to let it go.
+      disposeSnackKit();
       rootEl.remove();
     },
   };

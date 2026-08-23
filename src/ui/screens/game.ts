@@ -1,9 +1,13 @@
+import type { ModeId } from '../../modes/api';
+import { MODE_INFO } from '../../modes/api';
 import type { HudState } from '../api';
 import { createIconButton } from '../components/button';
+import { applyPaper, tearLine } from '../components/material';
 import type { UiCtx } from '../ctx';
 import { Bag, formatInt, h, setText, toggleClass } from '../dom';
 import { iconPause } from '../icons';
 import { EASE_IOS, EASE_OUT, animate, isReduced, pop, resetAnimations, runExit } from '../motion';
+import { INK, PAPER, tiltFor } from '../snack/classes';
 
 export interface GameScreen {
   readonly el: HTMLElement;
@@ -16,13 +20,26 @@ export interface GameScreen {
   showPerfect(label: string, tier: number): void;
   showMilestone(text: string, sub?: string): void;
   setCoach(visible: boolean): void;
+  /** Which mode is running, so the coach prompt says what THIS mode wants. */
+  setMode(id: ModeId): void;
   setLeftHanded(left: boolean): void;
   destroy(): void;
 }
 
+/** Seeds the pad's fibre and its lean. One pad, one identity, every mount. */
+const PAD_SEED = 'hud:pad';
+
+const EXIT_MS = 220;
+
 /**
  * The in-game HUD. Everything here is `pointer-events: none` except the pause
  * button — the entire screen has to stay tappable as the drop control.
+ *
+ * The score is printed on an order pad clipped to the top of the screen. That
+ * is not only flavour: the pad is opaque, so the one surface the player reads
+ * sixty times a run carries its own contrast and stops depending on the
+ * backdrop behind it. Candy Stack is near-white and Sushi Tower is near-black;
+ * white type with a halo had to survive both, and print on paper simply does.
  */
 export function createGameScreen(ctx: UiCtx): GameScreen {
   const bag = new Bag();
@@ -35,8 +52,11 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
   });
   const corner = h('div', { class: 'sn-hud__corner' }, pauseBtn);
 
+  // The QA harness reads this element's textContent to tell whether a run is
+  // responding, so the digits stay plain text on `.sn-score` — never a canvas,
+  // a background image, or per-digit spans.
   const scoreEl = h('div', {
-    class: 'sn-score',
+    class: `sn-score ${INK.print}`,
     text: '0',
     role: 'status',
     aria: { live: 'polite', label: 'Score 0' },
@@ -52,13 +72,33 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
   const bestEl = h('span', { class: 'sn-hud__best', text: 'best 0' });
   const sub = h(
     'div',
-    { class: 'sn-hud__sub', aria: { hidden: 'true' } },
+    { class: `sn-hud__sub ${INK.thermal}`, aria: { hidden: 'true' } },
     layersEl,
     h('span', { class: 'sn-hud__dot' }),
     bestEl,
   );
 
-  const center = h('div', { class: 'sn-hud__center' }, scoreLine, sub);
+  /**
+   * The pad itself. Deliberately no `sn-e-*` class: an edge silhouette is a
+   * `clip-path`, and `.sn-delta` deliberately flies out past the score's left
+   * edge, so a clipped pad would swallow every `+120`. The perforation is a
+   * real tear-line element across the top instead, which is also what §8 asks
+   * for ("tear-line at the top edge").
+   *
+   * Nothing here opts back into pointer events: the whole screen is the drop
+   * control and the pad must never eat a tap.
+   */
+  const pad = h(
+    'div',
+    { class: `sn-hud__pad ${PAPER.ticket} ${INK.print} ${tiltFor(PAD_SEED)}`.trim() },
+    scoreLine,
+    sub,
+  );
+  applyPaper(pad, { kind: 'ticket', seed: PAD_SEED, edge: 'perforated', wear: 0.12 });
+  const padTear = tearLine(PAD_SEED, 'sn-hud__tear');
+  if (padTear) pad.insertBefore(padTear, pad.firstChild);
+
+  const center = h('div', { class: 'sn-hud__center' }, pad);
 
   const perfectText = h('span', { class: 'sn-perfect__text', text: '' });
   const perfect = h('div', { class: 'sn-perfect', aria: { hidden: 'true' } }, perfectText);
@@ -72,12 +112,15 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
     msSub,
   );
 
+  // The coach says what THIS mode wants. Recipe Rush has nothing to drop, so a
+  // hardcoded "Tap to drop" was a lie on three of the four modes.
+  const coachLabel = h('span', { class: 'sn-coach__label', text: MODE_INFO.stack.coach });
   const coach = h(
     'div',
     { class: 'sn-coach', aria: { hidden: 'true' } },
     h('span', { class: 'sn-coach__ring' }),
     h('span', { class: 'sn-coach__dot' }),
-    h('span', { class: 'sn-coach__label', text: 'Tap to drop' }),
+    coachLabel,
   );
 
   const el = h('div', { class: 'sn-screen sn-hud' }, corner, center, perfect, milestone, coach);
@@ -89,6 +132,8 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
   let milestoneTimer = 0;
   let perfectAnim: Animation | null = null;
   let milestoneAnim: Animation | null = null;
+  /** Bumped by every exit and every enter, so a stale safety net stands down. */
+  let exitSeq = 0;
 
   const paintScore = (value: number): void => {
     setText(scoreEl, formatInt(value));
@@ -148,6 +193,7 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
   return {
     el,
     enter(): void {
+      exitSeq += 1;
       resetAnimations(el);
       el.classList.remove('is-leaving');
       animate(
@@ -162,15 +208,39 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
     exit(done?: () => void): void {
       el.classList.add('is-leaving');
       coach.classList.remove('is-on');
-      runExit(
-        el,
-        [{ opacity: 1 }, { opacity: 0 }],
-        { duration: 220, easing: EASE_IOS },
-        () => {
-          el.remove();
-          done?.();
-        },
-      );
+
+      const token = (exitSeq += 1);
+      let dropped = false;
+      const drop = (): void => {
+        if (dropped) return;
+        dropped = true;
+        el.remove();
+        done?.();
+      };
+
+      runExit(el, [{ opacity: 1 }, { opacity: 0 }], { duration: EXIT_MS, easing: EASE_IOS }, drop);
+
+      /**
+       * Safety net, and it earns its keep now that the HUD is opaque.
+       *
+       * `runExit` deliberately never tears down on `cancel`, because a
+       * re-entering `enter()` is reusing this very element — see the note in
+       * motion.ts. The gap that leaves is an exit whose animation neither
+       * finishes nor is cancelled: a throttled or stalled timeline is enough,
+       * and headless software rendering reproduces it every time. The screen
+       * then stays parented at its resting opacity, and that is no longer a
+       * line of transparent type over the world — it is an order pad sitting
+       * on top of the home screen's hero tower.
+       *
+       * `is-leaving` is the discriminator. `enter()` clears it, so a screen
+       * that was genuinely re-entered no-ops here; `token` does the same for an
+       * exit that a later exit has already superseded.
+       */
+      bag.after(() => {
+        if (token !== exitSeq) return;
+        if (!el.isConnected || !el.classList.contains('is-leaving')) return;
+        drop();
+      }, EXIT_MS + 240);
     },
     setHud(state: HudState): void {
       score = state.score;
@@ -249,6 +319,10 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
     setCoach(visible: boolean): void {
       toggleClass(coach, 'is-on', visible);
       coach.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    },
+    setMode(id: ModeId): void {
+      const info = MODE_INFO[id];
+      if (info) setText(coachLabel, info.coach);
     },
     setLeftHanded(left: boolean): void {
       toggleClass(el, 'is-left', left);

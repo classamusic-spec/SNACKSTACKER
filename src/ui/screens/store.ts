@@ -1,13 +1,15 @@
 import type { SkuId } from '../../core/types';
 import type { StoreItemView, StoreView } from '../api';
-import { createButton } from '../components/button';
+import { createButton, createChip } from '../components/button';
 import { createStoreCard } from '../components/card';
 import { createCounter } from '../components/counter';
+import { applyPaper } from '../components/material';
 import { createSheet } from '../components/sheet';
 import type { UiCtx } from '../ctx';
 import { Bag, clear, h } from '../dom';
 import { iconCoin } from '../icons';
 import { EASE_IOS, animate } from '../motion';
+import { INK, PAPER } from '../snack/classes';
 
 export interface StoreScreen {
   readonly el: HTMLElement;
@@ -20,21 +22,30 @@ export interface StoreScreen {
 }
 
 const BUNDLE_SKU: SkuId = 'bundle_all';
+const BOARD_SEED = 'store:board';
 
-/** Full-height sheet of theme cards, with the bundle promoted to a hero card. */
+/**
+ * Full-height sheet of theme cards, with the bundle promoted to a hero card.
+ *
+ * The shop is a menu: a board at the top naming what is being served and how it
+ * is paid for, then the packs as its items. One material added here and only
+ * one — the board — because the sheet under it is already greaseproof and the
+ * cards on it are the card component's own stock. The price treatment lives on
+ * the card, where the price is.
+ */
 export function createStoreScreen(
   ctx: UiCtx,
   opts: { onDismiss(): void },
 ): StoreScreen {
   const bag = new Bag();
 
+  // Same chip as Home's, from the same factory, so the shop's balance and the
+  // menu's balance are one sticker rather than two near-misses. The static
+  // value span is swapped for a live counter; the material is the chip's own.
+  const coinChip = createChip({ icon: iconCoin(), className: 'sn-chip--coins' });
   const coins = createCounter({ value: 0, className: 'sn-chip__v' });
-  const coinChip = h(
-    'div',
-    { class: 'sn-chip sn-chip--coins', aria: { label: 'Coin balance' } },
-    h('span', { class: 'sn-chip__icon' }, iconCoin()),
-    coins.el,
-  );
+  coinChip.value.replaceWith(coins.el);
+  coinChip.el.setAttribute('aria-label', 'Coin balance');
 
   const sheet = createSheet(ctx, {
     name: 'store',
@@ -42,9 +53,23 @@ export function createStoreScreen(
     ariaLabel: 'Shop',
     variant: 'tall',
     dismissible: true,
-    headerExtras: [coinChip],
+    headerExtras: [coinChip.el],
     onDismiss: opts.onDismiss,
   });
+
+  // The board carries information, not decoration: coins are always the better
+  // deal when you can afford one, and this is the only place that says so
+  // before the player has scrolled to a card that offers it.
+  const board = h(
+    'div',
+    { class: `sn-store__board ${PAPER.board} ${INK.print}` },
+    h('h3', { class: 'sn-store__board-title sn-sheet__title', text: "Today's Menu" }),
+    h('p', {
+      class: `sn-store__board-sub ${INK.thermal}`,
+      text: 'Six kitchens. Buy one outright, or unlock it with coins you earn.',
+    }),
+  );
+  applyPaper(board, { kind: 'board', seed: BOARD_SEED, edge: 'clean', wear: 0.2 });
 
   const list = h('div', { class: 'sn-store__list' });
 
@@ -64,7 +89,7 @@ export function createStoreScreen(
     }),
   );
 
-  sheet.body.appendChild(h('div', { class: 'sn-stack sn-store' }, list, footer));
+  sheet.body.appendChild(h('div', { class: 'sn-stack sn-store' }, board, list, footer));
 
   let view: StoreView = { items: [], coins: 0 };
   let pending: SkuId | null = null;

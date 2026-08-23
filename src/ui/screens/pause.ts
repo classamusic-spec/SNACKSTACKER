@@ -1,5 +1,6 @@
 import type { Settings } from '../../core/types';
 import { createButton } from '../components/button';
+import { tearLine } from '../components/material';
 import { createSheet } from '../components/sheet';
 import { createSwitch } from '../components/toggle';
 import type { UiCtx } from '../ctx';
@@ -14,7 +15,15 @@ export interface PauseScreen {
   destroy(): void;
 }
 
-/** Bottom sheet: Resume / Restart / Home plus the three audio-ish toggles. */
+/**
+ * Bottom sheet: Resume / Restart / Home plus the three audio-ish toggles.
+ *
+ * Deliberately the plainest screen in the app. The sheet component already owns
+ * the material here — greaseproof on a tray — so pause adds no paper of its
+ * own; a pad on a sheet on a tray is the jumble sale §8 warns about. All it
+ * contributes is the composition: the three actions, a perforation, the
+ * switches laid straight onto the greaseproof rather than into a glass box.
+ */
 export function createPauseScreen(
   ctx: UiCtx,
   opts: { onDismiss(): void },
@@ -65,13 +74,20 @@ export function createPauseScreen(
     onChange: (v) => ctx.hooks.onSettingChange('haptics', v),
   });
 
+  // A plain block, so the rows stack flush and `.sn-row + .sn-row` gives the
+  // ruled line. The old `.sn-group` drew a rounded translucent card, which is
+  // exactly the generic glass this pass is retiring.
+  const rows = h('div', { class: 'sn-pause__rows' }, sfx.el, music.el, haptics.el);
+  const divider = tearLine('pause:toggles', 'sn-pause__tear');
+
   sheet.body.appendChild(
     h(
       'div',
       { class: 'sn-stack' },
       resume,
       h('div', { class: 'sn-duo' }, restart, home),
-      h('div', { class: 'sn-group' }, sfx.el, music.el, haptics.el),
+      divider,
+      rows,
     ),
   );
 

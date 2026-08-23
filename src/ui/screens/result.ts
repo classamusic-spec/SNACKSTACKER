@@ -1,11 +1,13 @@
 import type { RunResult } from '../../core/types';
 import { createButton } from '../components/button';
 import { createCounter } from '../components/counter';
+import { applyPaper, tearLine } from '../components/material';
 import { createSheet } from '../components/sheet';
 import type { UiCtx } from '../ctx';
 import { Bag, formatInt, h } from '../dom';
-import { iconCoin, iconHome, iconShare, iconSpark } from '../icons';
-import { EASE_IOS, EASE_SPRING, animate } from '../motion';
+import { iconHome, iconShare } from '../icons';
+import { EASE_IOS, EASE_OUT, animate } from '../motion';
+import { INK, PAPER } from '../snack/classes';
 
 export interface ResultScreen {
   readonly el: HTMLElement;
@@ -24,18 +26,39 @@ export function heightFlavour(cm: number): string {
   return 'a legend of the buffet';
 }
 
-function statCell(label: string, value: string): HTMLElement {
+/**
+ * The check number. Derived from the run, never random: the same run always
+ * prints the same bill, and two runs in a row never print the same number.
+ */
+function checkNumber(result: RunResult): string {
+  const n = (result.score * 31 + result.layers * 7 + result.perfects * 3) % 9000;
+  return `No. ${1000 + n}`;
+}
+
+/** One itemised line: what it was on the left, what it came to on the right. */
+function billLine(label: string, value: string): HTMLElement {
   return h(
     'div',
-    { class: 'sn-stat' },
-    h('span', { class: 'sn-stat__v', text: value }),
-    h('span', { class: 'sn-stat__k', text: label }),
+    { class: 'sn-bill__line sn-row' },
+    h('span', { class: 'sn-bill__k sn-row__label', text: label }),
+    h('span', { class: 'sn-bill__v sn-stat__v', text: value }),
   );
 }
 
 /**
- * The retention screen: count-up score, NEW BEST ribbon, the four stats worth
- * bragging about, coins ticking in, and one obvious way back into a run.
+ * The retention screen, and the one place in the app where the material and the
+ * content are the same thing: a run's result genuinely *is* a bill. The score is
+ * itemised like a check — layers, perfects, best combo, height — ruled off, and
+ * totalled. A personal record is not a ribbon, it is the thing the kitchen
+ * stamps on your check on the way out.
+ *
+ * The paper is ticket stock. It deliberately carries no `sn-e-*` silhouette
+ * yet: an edge class is a `clip-path`, and with `.sn-bill` having no horizontal
+ * padding of its own a torn edge bit straight through the right-hand column —
+ * "No. 1951" lost its 1, "15 cm" lost its m. Legibility outranks the material,
+ * so the tear comes back the moment `.sn-bill` has an inset wide enough to
+ * clear it; nothing else here is in its way, since the only focusable controls
+ * are the buttons below, on the tray.
  */
 export function createResultScreen(
   ctx: UiCtx,
@@ -43,6 +66,7 @@ export function createResultScreen(
   opts: { onDismiss(): void },
 ): ResultScreen {
   const bag = new Bag();
+  const seed = `bill:${result.themeId}`;
 
   const sheet = createSheet(ctx, {
     name: 'result',
@@ -58,48 +82,84 @@ export function createResultScreen(
   score.el.setAttribute('aria-live', 'polite');
   score.el.setAttribute('aria-label', `Final score ${formatInt(result.score)}`);
 
-  const ribbon = result.isNewBest
-    ? h(
-        'div',
-        { class: 'sn-ribbon' },
-        h('span', { class: 'sn-ribbon__spark' }, iconSpark()),
-        h('span', { class: 'sn-ribbon__text', text: 'NEW BEST' }),
-      )
+  const coins = createCounter({ value: 0, format: (v) => `+${formatInt(v)}` });
+
+  // The stamp carries its own rotation from `sn-i-stamp`, so the landing
+  // animation drives a wrapper. Animating the stamp itself would have to end on
+  // a transform that guessed the ink class's angle, and snap when it let go.
+  const stamp = result.isNewBest
+    ? h('span', { class: `sn-bill__stamp ${INK.stamp}`, text: 'NEW BEST' })
+    : null;
+  const stampSlot = stamp
+    ? h('div', { class: 'sn-bill__stampslot sn-row' }, stamp)
     : null;
 
-  const header = h(
+  const bill = h('div', { class: `sn-bill ${PAPER.ticket} ${INK.print}` });
+  applyPaper(bill, { kind: 'ticket', seed, edge: 'clean', wear: 0.22 });
+
+  const head = h(
     'div',
-    { class: 'sn-result__head' },
-    ribbon,
+    { class: 'sn-bill__head sn-row' },
+    h('span', { class: 'sn-bill__brand sn-card__name', text: 'SNACKERY' }),
+    h('span', { class: `sn-bill__no ${INK.thermal}`, text: checkNumber(result) }),
+  );
+
+  const items = [
+    billLine('Layers', formatInt(result.layers)),
+    billLine('Perfects', formatInt(result.perfects)),
+    billLine('Best combo', `×${formatInt(result.bestCombo)}`),
+    billLine('Height', `${formatInt(result.heightCm)} cm`),
+  ];
+
+  const total = h(
+    'div',
+    { class: 'sn-bill__total sn-row' },
+    h('span', { class: 'sn-bill__k sn-row__label', text: 'Total' }),
     score.el,
-    h('div', {
-      class: 'sn-result__flavour',
+  );
+
+  const coinLine = h(
+    'div',
+    {
+      class: 'sn-bill__line sn-row',
+      aria: { label: `${formatInt(result.coinsEarned)} coins earned` },
+    },
+    h('span', { class: 'sn-bill__k sn-row__label', text: 'Coins earned' }),
+    h('span', { class: 'sn-bill__v sn-stat__v' }, coins.el),
+  );
+
+  // The closing block, under the last rule: the standing record when this run
+  // did not beat it (when it did, the stamp has already said so), the flavour
+  // line players screenshot, and the sign-off.
+  const foot = h(
+    'div',
+    { class: 'sn-bill__foot sn-row sn-row--stack' },
+    result.isNewBest
+      ? null
+      : h('p', { class: `sn-bill__note ${INK.thermal}`, text: `Best ${formatInt(result.best)}` }),
+    h('p', {
+      class: `sn-bill__flavour ${INK.thermal}`,
       text: result.isNewBest
         ? `${heightFlavour(result.heightCm)} — and a personal record`
         : heightFlavour(result.heightCm),
     }),
-    result.isNewBest
-      ? null
-      : h('div', { class: 'sn-result__best', text: `Best ${formatInt(result.best)}` }),
+    h('p', { class: `sn-bill__thanks ${INK.thermal}`, text: 'Thank you — come hungry.' }),
   );
 
-  const stats = h(
-    'div',
-    { class: 'sn-stats' },
-    statCell('Layers', formatInt(result.layers)),
-    statCell('Perfects', formatInt(result.perfects)),
-    statCell('Best combo', `×${formatInt(result.bestCombo)}`),
-    statCell('Height', `${formatInt(result.heightCm)} cm`),
-  );
+  const rule = (key: string): void => {
+    const tear = tearLine(`${seed}:${key}`, 'sn-bill__tear');
+    if (tear) bill.appendChild(tear);
+  };
 
-  const coins = createCounter({ value: 0, format: (v) => `+${formatInt(v)}` });
-  const coinRow = h(
-    'div',
-    { class: 'sn-coinrow', aria: { label: `${formatInt(result.coinsEarned)} coins earned` } },
-    h('span', { class: 'sn-coinrow__icon' }, iconCoin()),
-    coins.el,
-    h('span', { class: 'sn-coinrow__label', text: 'coins earned' }),
-  );
+  bill.appendChild(head);
+  rule('items');
+  for (const item of items) bill.appendChild(item);
+  rule('total');
+  bill.appendChild(total);
+  if (stampSlot) bill.appendChild(stampSlot);
+  bill.appendChild(coinLine);
+  rule('foot');
+  bill.appendChild(foot);
 
   const again = createButton(ctx, {
     label: 'Play Again',
@@ -132,9 +192,7 @@ export function createResultScreen(
     h(
       'div',
       { class: 'sn-stack sn-result' },
-      header,
-      stats,
-      coinRow,
+      bill,
       again,
       h('div', { class: 'sn-duo' }, home, share),
       shopLink,
@@ -152,7 +210,10 @@ export function createResultScreen(
         coins.set(result.coinsEarned, { animate: true, duration: 620, pop: true });
       }, 420);
 
-      const rows: HTMLElement[] = [stats, coinRow, again];
+      // The bill is one piece of paper; it arrives as one piece of paper, then
+      // the action under it. No tilt on it — the sheet body clips horizontally,
+      // and a rotated full-width slip loses its corners.
+      const rows: HTMLElement[] = [bill, again];
       rows.forEach((node, i) => {
         animate(
           node,
@@ -164,14 +225,17 @@ export function createResultScreen(
         );
       });
 
-      if (ribbon) {
+      if (stampSlot) {
+        // A rubber stamp comes down big and stops dead. `fill: backwards` holds
+        // it off the paper through the delay instead of showing it, then
+        // stamping it; there is no overshoot because ink does not bounce.
         animate(
-          ribbon,
+          stampSlot,
           [
-            { transform: 'translate3d(0, -14px, 0) scale(0.6) rotate(-6deg)', opacity: 0 },
-            { transform: 'translate3d(0, 0, 0) scale(1) rotate(-2.5deg)', opacity: 1 },
+            { transform: 'scale(1.45) rotate(-9deg)', opacity: 0, easing: EASE_OUT },
+            { transform: 'scale(1) rotate(0deg)', opacity: 1 },
           ],
-          { duration: 620, delay: 300, easing: EASE_SPRING },
+          { duration: 240, delay: 640, easing: EASE_OUT, fill: 'backwards' },
         );
       }
     },
