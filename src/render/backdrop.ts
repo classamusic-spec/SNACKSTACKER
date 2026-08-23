@@ -77,7 +77,7 @@ import {
  * display-referred space the sweep already used, and it happens BEFORE the
  * uDirect branch. So it inherits the existing deal with the tone mapper for
  * free and cannot drift from it. Verified by flooding the sky with a known
- * colour (`tools/sky-probe.mjs` with a cover-1 / shadow-0 override) and
+ * colour (measured once with a cover-1 / shadow-0 override) and
  * comparing against the value computed on the CPU: both paths land within 3
  * of 255 on a mid-tone, on a clamped near-white and on a near-black, and
  * against each other the low and medium tiers are bit-identical over the whole
@@ -439,7 +439,7 @@ interface SkyTier {
 }
 
 /**
- * Cloud budget per tier. Measured with `tools/sky-cost.mjs`, which compiles
+ * Cloud budget per tier. Measured once by compiling
  * these exact generated shaders and times fullscreen passes over 530x1150 —
  * a phone at the low tier's DPR cap. Frame-time A/B against the running game
  * cannot do this job: SwiftShader holds the 60fps rAF cap at phone size and

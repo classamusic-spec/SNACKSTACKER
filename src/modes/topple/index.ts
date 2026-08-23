@@ -13,7 +13,7 @@
  *   sequential-impulse solver gives all three; a general engine gives none of
  *   them, and charges for spheres, capsules, joints and CCD that will never be
  *   used. Stability is proved headlessly, not by eye —
- *   `npx tsx src/dev/topple-stability.ts`.
+ *   `npm test` (tests/topple.test.mjs).
  *
  * DETERMINISM. The solver is bit-deterministic for a given body order and
  * timestep, and the game's whole simulation — swing phase included — advances
