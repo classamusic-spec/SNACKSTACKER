@@ -166,15 +166,23 @@ function render(size, { maskable = false } = {}) {
   return encodePng(S, S, buf);
 }
 
-const targets = [
-  ['icon-512.png', 512, {}],
-  ['icon-192.png', 192, {}],
-  ['icon-maskable.png', 512, { maskable: true }],
-  ['apple-touch-icon.png', 180, {}],
-  ['og.png', 512, {}],
-];
+// Exported so the native-asset pipeline (tools/make-native-assets.mjs) can
+// render the icon at the 1024px @capacitor/assets wants, from the same source
+// as the web icons — one drawing, every size.
+export { render, encodePng };
 
-for (const [name, size, opts] of targets) {
-  writeFileSync(resolve(OUT, name), render(size, opts));
-  console.log(`wrote public/${name} (${size}x${size})`);
+// Run as a CLI: emit the web PWA icons into public/.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const targets = [
+    ['icon-512.png', 512, {}],
+    ['icon-192.png', 192, {}],
+    ['icon-maskable.png', 512, { maskable: true }],
+    ['apple-touch-icon.png', 180, {}],
+    ['og.png', 512, {}],
+  ];
+
+  for (const [name, size, opts] of targets) {
+    writeFileSync(resolve(OUT, name), render(size, opts));
+    console.log(`wrote public/${name} (${size}x${size})`);
+  }
 }

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Snackery \u2014 a premium 3D food stacking game.",
+  "description": "Snackery — a premium 3D food stacking game.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -16,12 +16,23 @@
     "shots:themes": "node tools/shoot-themes.mjs",
     "shots:env": "node tools/shoot-env.mjs",
     "build:single": "tsc --noEmit && SNACKERY_SINGLE=1 vite build",
-    "deploy": "vercel deploy --prod"
+    "deploy": "vercel deploy --prod",
+    "native:assets": "node tools/make-native-assets.mjs && capacitor-assets generate --iconBackgroundColor #17101a --iconBackgroundColorDark #17101a --splashBackgroundColor #17101a --splashBackgroundColorDark #17101a",
+    "app:sync": "npm run build && cap sync",
+    "app:android": "npm run build && cap sync android && cap open android",
+    "app:ios": "npm run build && cap sync ios && cap open ios"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.0",
     "@types/three": "^0.185.0",
     "playwright": "^1.62.1",
     "typescript": "^5.9.3",

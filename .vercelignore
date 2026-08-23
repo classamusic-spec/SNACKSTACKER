@@ -12,3 +12,9 @@ tests
 docs
 snackery.html
 *.log
+
+# Native (Capacitor) — Vercel only serves the web build
+android
+ios
+assets
+capacitor.config.ts

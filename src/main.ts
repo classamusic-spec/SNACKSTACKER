@@ -5,6 +5,7 @@ import type { ThemeDef } from './content/api';
 import { device } from './core/device';
 import { haptic, initHaptics, setHapticsEnabled } from './core/haptics';
 import { clamp01 } from './core/math';
+import { initNativeShell } from './core/native';
 import { Rng } from './core/rng';
 import { Ticker } from './core/ticker';
 import type { QualityTier, RunResult, Settings, SkuId, ThemeId } from './core/types';
@@ -607,6 +608,11 @@ async function boot(): Promise<void> {
   kit.render();
   mark('first-render');
   ui.setLoadProgress(1);
+
+  // The first frame is on screen. If we are inside the native shell, dismiss
+  // its splash now so it hands straight over to the game's own boot animation.
+  // A no-op on the web.
+  void initNativeShell();
 
   // A small, always-on probe. The QA harness reads it; it costs one object
   // write per frame and makes "is it actually 60fps?" answerable.
