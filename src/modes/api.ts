@@ -123,6 +123,11 @@ export interface ModeInfo {
   glyph: string;
   /** Result-screen label for the headline count. */
   countLabel: string;
+  /**
+   * The two-or-three word prompt on the first-run coach ring. It sits over the
+   * play area and has to say what THIS mode wants, which is not always "drop".
+   */
+  coach: string;
 }
 
 export const MODE_INFO: Record<ModeId, ModeInfo> = {
@@ -133,6 +138,7 @@ export const MODE_INFO: Record<ModeId, ModeInfo> = {
     how: 'Tap to drop each layer. Land it centred for a perfect.',
     glyph: '🍔',
     countLabel: 'Layers',
+    coach: 'Tap to drop',
   },
   conveyor: {
     id: 'conveyor',
@@ -141,6 +147,7 @@ export const MODE_INFO: Record<ModeId, ModeInfo> = {
     how: 'Tap the ingredients on the belt that match the order. Let the rest pass.',
     glyph: '🥢',
     countLabel: 'Orders',
+    coach: 'Tap the match',
   },
   recipe: {
     id: 'recipe',
@@ -149,6 +156,7 @@ export const MODE_INFO: Record<ModeId, ModeInfo> = {
     how: 'Watch the recipe, then build it back from memory.',
     glyph: '📋',
     countLabel: 'Recipes',
+    coach: 'Watch, then repeat',
   },
   topple: {
     id: 'topple',
@@ -157,5 +165,6 @@ export const MODE_INFO: Record<ModeId, ModeInfo> = {
     how: 'Real weight, real balance. Place each item and hope.',
     glyph: '🗼',
     countLabel: 'Height',
+    coach: 'Tap to place',
   },
 };
