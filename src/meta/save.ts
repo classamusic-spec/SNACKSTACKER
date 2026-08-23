@@ -10,7 +10,7 @@
 import { readJson, removeKey, writeJson } from '../core/storage';
 import { DEFAULT_SETTINGS } from '../core/types';
 import type { Settings, SkuId, ThemeId } from '../core/types';
-import type { SaveData } from './api';
+import type { ModeRecord, SaveData } from './api';
 import { FREE_THEME, isSkuId, isThemeId, skuFor, sortSkus } from './catalog';
 
 export const SAVE_KEY = 'snackery.save.v1';
@@ -39,6 +39,11 @@ function isRecord(v: unknown): v is RawSave {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+const MODE_IDS = ['stack', 'conveyor', 'recipe', 'topple'] as const;
+type ModeIdLocal = (typeof MODE_IDS)[number];
+const isModeId = (v: unknown): v is ModeIdLocal =>
+  typeof v === 'string' && (MODE_IDS as readonly string[]).includes(v);
+
 function num(v: unknown, fallback: number, min: number, max: number): number {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   if (!Number.isFinite(n)) return fallback;
@@ -58,6 +63,8 @@ export function defaultSave(now: number = Date.now()): SaveData {
     runs: 0,
     totalLayers: 0,
     totalPerfects: 0,
+    byMode: {},
+    selectedMode: 'stack',
     longestCombo: 0,
     owned: [FREE_THEME],
     selectedTheme: FREE_THEME,
@@ -168,6 +175,22 @@ export function validateSave(input: unknown, now: number = Date.now()): SaveData
     }
   }
 
+  // Per-mode records. An unknown mode id is dropped rather than kept, so a
+  // save written by a future build with more modes degrades cleanly.
+  const byMode: Partial<Record<ModeIdLocal, ModeRecord>> = {};
+  if (isRecord(raw.byMode)) {
+    for (const [key, value] of Object.entries(raw.byMode)) {
+      if (!isModeId(key) || !isRecord(value)) continue;
+      byMode[key] = {
+        best: num(value.best, 0, 0, LIMITS.score),
+        bestCount: num(value.bestCount, 0, 0, LIMITS.layers * 100),
+        runs: num(value.runs, 0, 0, LIMITS.runs),
+        lastPlayedAt: num(value.lastPlayedAt, 0, 0, Number.MAX_SAFE_INTEGER),
+      };
+    }
+  }
+  const selectedMode: ModeIdLocal = isModeId(raw.selectedMode) ? raw.selectedMode : 'stack';
+
   const firstSeenAt = num(raw.firstSeenAt, now, 1, Number.MAX_SAFE_INTEGER);
   const lastPlayedAt = num(raw.lastPlayedAt, 0, 0, Number.MAX_SAFE_INTEGER);
 
@@ -183,6 +206,8 @@ export function validateSave(input: unknown, now: number = Date.now()): SaveData
     owned: sortSkus(owned),
     selectedTheme,
     bestByTheme,
+    byMode,
+    selectedMode,
     settings: validateSettings(raw.settings),
     seenTutorial: bool(raw.seenTutorial, false),
     // A clock that reads before the epoch or wildly in the future is a broken

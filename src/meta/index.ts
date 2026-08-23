@@ -13,8 +13,9 @@
  * Writes are debounced ~250ms and flushed automatically on `visibilitychange`
  * (hidden) and `pagehide`, so a long run does not touch storage 60 times.
  */
+import type { ModeId } from '../modes/api';
 import type { Settings, SkuId, ThemeId } from '../core/types';
-import type { Meta, PurchaseOutcome, SaveData, Sku } from './api';
+import type { Meta, PurchaseOutcome, SaveData, Sku, ModeRecord } from './api';
 import { SKUS, THEME_IDS, isThemeId, skuFor } from './catalog';
 import { applyRun } from './progression';
 import type { RunInput } from './progression';
@@ -116,6 +117,34 @@ export function createMeta(options: MetaOptions = {}): Meta {
     markTutorialSeen(): void {
       if (store.data.seenTutorial) return;
       store.data.seenTutorial = true;
+      store.commit();
+    },
+
+    /**
+     * Each mode scores on its own scale — layers, orders served, centimetres —
+     * so a single "best" would be meaningless across them and they each keep
+     * their own record.
+     */
+    recordModeRun(mode: ModeId, score: number, count: number): ModeRecord {
+      const prev = store.data.byMode[mode];
+      const next: ModeRecord = {
+        best: Math.max(prev?.best ?? 0, Math.max(0, Math.round(score))),
+        bestCount: Math.max(prev?.bestCount ?? 0, Math.max(0, Math.round(count))),
+        runs: (prev?.runs ?? 0) + 1,
+        lastPlayedAt: Date.now(),
+      };
+      store.data.byMode[mode] = next;
+      store.commit();
+      return next;
+    },
+
+    modeRecord(mode: ModeId): ModeRecord {
+      return store.data.byMode[mode] ?? { best: 0, bestCount: 0, runs: 0, lastPlayedAt: 0 };
+    },
+
+    selectMode(mode: ModeId): void {
+      if (store.data.selectedMode === mode) return;
+      store.data.selectedMode = mode;
       store.commit();
     },
 

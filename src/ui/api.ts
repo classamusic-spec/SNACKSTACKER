@@ -1,4 +1,5 @@
 import type { ThemeDef } from '../content/api';
+import type { ModeId } from '../modes/api';
 import type { RunResult, Settings, SkuId, ThemeId } from '../core/types';
 
 export type ScreenId =
@@ -42,7 +43,29 @@ export interface StoreView {
   coins: number;
 }
 
+/** One game mode as the home-screen picker shows it. */
+export interface ModeCardView {
+  id: ModeId;
+  name: string;
+  tagline: string;
+  /** One line of rules, shown on the focused card only. */
+  how: string;
+  glyph: string;
+  /** Personal best in this mode; 0 means never played. */
+  best: number;
+  /** Unit for the headline count, e.g. "Layers", "Orders", "cm". */
+  countLabel: string;
+  /** Best count achieved, paired with countLabel. */
+  bestCount: number;
+  /** Per-mode accent, so each card has its own identity inside the theme. */
+  accent: number;
+  /** Reserved: a mode the player has not unlocked yet. */
+  locked: boolean;
+}
+
 export interface UiHooks {
+  /** The player focused/chose a different mode in the picker. */
+  onSelectMode(id: ModeId): void;
   onPlay(): void;
   onRestart(): void;
   onHome(): void;
@@ -86,6 +109,8 @@ export interface Ui {
   setCoins(coins: number, opts?: { animate?: boolean }): void;
 
   applyTheme(theme: ThemeDef): void;
+  /** Populate the home-screen mode picker. Call before goHome(). */
+  setModes(cards: ModeCardView[], selectedId: ModeId): void;
   setStoreView(view: StoreView): void;
   setSettings(settings: Settings): void;
   setBest(best: number): void;

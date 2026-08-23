@@ -1,4 +1,14 @@
+import type { ModeId } from '../modes/api';
 import type { RunResult, Settings, SkuId, ThemeId } from '../core/types';
+
+/** Per-mode records. Each mode scores differently, so each keeps its own. */
+export interface ModeRecord {
+  best: number;
+  /** Best headline count — layers, orders, recipes, centimetres. */
+  bestCount: number;
+  runs: number;
+  lastPlayedAt: number;
+}
 
 export interface SaveData {
   version: number;
@@ -12,6 +22,10 @@ export interface SaveData {
   owned: SkuId[];
   selectedTheme: ThemeId;
   bestByTheme: Partial<Record<ThemeId, number>>;
+  /** Records per game mode; absent means never played. */
+  byMode: Partial<Record<ModeId, ModeRecord>>;
+  /** The mode the picker opens on. */
+  selectedMode: ModeId;
   settings: Settings;
   seenTutorial: boolean;
   firstSeenAt: number;
@@ -51,6 +65,10 @@ export interface Meta {
   /** Fold a finished run into lifetime stats. Returns coins earned. */
   recordRun(result: Omit<RunResult, 'coinsEarned' | 'best' | 'isNewBest'>): RunResult;
   markTutorialSeen(): void;
+  /** Record a finished run in a specific mode; returns the updated record. */
+  recordModeRun(mode: ModeId, score: number, count: number): ModeRecord;
+  modeRecord(mode: ModeId): ModeRecord;
+  selectMode(mode: ModeId): void;
   onChange(fn: (data: Readonly<SaveData>) => void): () => void;
   save(): void;
   reset(): void;

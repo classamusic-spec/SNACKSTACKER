@@ -58,6 +58,7 @@ const ui = createUi(appRoot, {
   onRestorePurchases: noop,
   onSettingChange: noop,
   onShare: noop,
+  onSelectMode: noop,
 });
 
 const game = new StackGame({
