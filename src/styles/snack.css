@@ -35,6 +35,22 @@
   /* Ink. Warm-dark, never pure black — printed ink on paper never is. */
   --sn-ink-rgb: 44, 35, 27;
 
+  /* ---- ketchup -----------------------------------------------------------
+     Deliberately NOT --accent. A condiment is a condiment in every kitchen:
+     the same bottle stands on the Diner counter and the Candy counter, and the
+     moment the splat borrows the theme's accent it stops being ketchup and
+     becomes "a red shape this world happens to like" — pastel strawberry syrup
+     under Candy Stack, salmon-pink under Sushi Tower. Oxblood, browner and
+     darker than any accent in the palette, so it reads as tomato rather than
+     as a themed blob, and so white sits on it at 11:1 in all six worlds. */
+  --sn-ketchup: #a4231a;
+  --sn-ketchup-rgb: 164, 35, 26;
+  /* Where the sauce has settled and dried at the rim. */
+  --sn-ketchup-deep: #63100b;
+  --sn-ketchup-deep-rgb: 99, 16, 11;
+  /* Type on top of it. Warm white, never pure — nothing else here is. */
+  --sn-ketchup-ink: #fff4ee;
+
   /* Fibre, for when no painted tile has been handed over. Three weights. */
   --sn-fibre-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='3' seed='5' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='150' height='150' filter='url(%23f)' opacity='0.13'/%3E%3C/svg%3E");
   --sn-fibre-mid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85 0.28' numOctaves='3' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='150' height='150' filter='url(%23f)' opacity='0.21'/%3E%3C/svg%3E");
@@ -81,11 +97,17 @@
   filter: var(--sn-lift);
   text-shadow: none;
 
-  /* Ink, re-tuned for dark type on light stock. Descendants inherit these. */
+  /* Ink, re-tuned for dark type on light stock. Descendants inherit these.
+     The alphas are not taste, they are measured: dark ink laid on a light
+     stock loses contrast far faster than white-on-glass does, and the old
+     ladder (0.76 / 0.58 / 0.40) put --ink-3 at 3.5:1 and --ink-4 at 2.1:1 on
+     greaseproof — which is how "Snackery — Stack the snack." ended up nearly
+     invisible at the foot of Settings. Against the five stocks here these
+     measure: --ink-2 >= 7.1:1, --ink-3 >= 4.9:1, --ink-4 >= 4.6:1. */
   --ink: rgb(var(--sn-ink-rgb));
-  --ink-2: rgba(var(--sn-ink-rgb), 0.76);
-  --ink-3: rgba(var(--sn-ink-rgb), 0.58);
-  --ink-4: rgba(var(--sn-ink-rgb), 0.4);
+  --ink-2: rgba(var(--sn-ink-rgb), 0.82);
+  --ink-3: rgba(var(--sn-ink-rgb), 0.72);
+  --ink-4: rgba(var(--sn-ink-rgb), 0.68);
   --ink-halo: none;
   --hairline: rgba(var(--sn-ink-rgb), 0.18);
   --hairline-soft: rgba(var(--sn-ink-rgb), 0.11);
@@ -107,7 +129,12 @@
   inset: -1px;
   z-index: -1;
   background-color: var(--sn-paper-base);
-  background-image: var(--sn-print, none), var(--sn-paper, none), var(--sn-fibre);
+  /* Weave above print above painted tile above fallback fibre. The weave sits
+     *over* the print because in real cloth the thread catches the light across
+     the dye, not under it — that ordering is most of the difference between a
+     gingham napkin and a pink rectangle. */
+  background-image: var(--sn-weave, none), var(--sn-print, none),
+    var(--sn-paper, none), var(--sn-fibre);
   background-repeat: repeat;
   background-position: center;
   opacity: var(--sn-paper-alpha, 1);
@@ -137,11 +164,35 @@
 
 /* ---- the stocks --------------------------------------------------------- */
 
-/* Soft, absorbent, cheap. The default surface of the whole interface. */
+/* Soft, absorbent, cheap — and woven. The default surface of the whole
+   interface, and the only stock with a thread grid: a napkin is cloth, and
+   without the weave the themed print lands on a flat wash and reads as a
+   printing error rather than as a check woven into a cloth. 4px threads:
+   plainly there at 100%, subliminal at arm's length. */
 .sn-m-napkin {
   --sn-paper-base: #faf6ee;
   --sn-fibre: var(--sn-fibre-mid);
   --sn-ink-rgb: 44, 35, 27;
+  /* The one stock that overrides the shared ladder, and upward. A woven check
+     is the darkest ground any type in the app sits on: on the square where
+     warp crosses weft the diner's gingham is (228,148,139), and 0.82 ink lands
+     at 4.4:1 there. 0.88 clears it at 5.0:1 and costs nothing on the plain
+     weave, where it measures 9.9:1. */
+  --ink-2: rgba(var(--sn-ink-rgb), 0.88);
+  --sn-weave: repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.17) 0 1px,
+      rgba(0, 0, 0, 0) 1px 2px,
+      rgba(96, 74, 52, 0.055) 2px 3px,
+      rgba(0, 0, 0, 0) 3px 4px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.14) 0 1px,
+      rgba(0, 0, 0, 0) 1px 2px,
+      rgba(96, 74, 52, 0.05) 2px 3px,
+      rgba(0, 0, 0, 0) 3px 4px
+    );
   --sn-lift: drop-shadow(0 1px 1px rgba(32, 18, 6, 0.26))
     drop-shadow(0 2px 3px rgba(32, 18, 6, 0.14));
 }
@@ -157,12 +208,16 @@
     drop-shadow(0 3px 5px rgba(20, 12, 4, 0.16));
 }
 
-/* Thermal receipt: smooth, thin, faintly blue-grey. */
+/* Thermal receipt: smooth, thin, and — the one change this pass — *warm*.
+   The old #f1f2ef was a cold blue-white, and a cold slab laid on a warm
+   greaseproof sheet reads as two unrelated papers rather than one pad on one
+   sheet. Real till roll yellows within a week anyway. The ink keeps its cool
+   cast so the stock still prints like thermal rather than like a napkin. */
 .sn-m-ticket {
-  --sn-paper-base: #f1f2ef;
+  --sn-paper-base: #f4efe3;
   --sn-fibre: var(--sn-fibre-soft);
   --sn-print: none;
-  --sn-ink-rgb: 42, 46, 52;
+  --sn-ink-rgb: 46, 44, 44;
   --sn-lift: drop-shadow(0 1px 1px rgba(14, 18, 24, 0.24))
     drop-shadow(0 2px 4px rgba(14, 18, 24, 0.16));
 }
@@ -177,9 +232,11 @@
     drop-shadow(0 4px 6px rgba(34, 20, 8, 0.16));
 }
 
-/* Kraft board, corrugation showing through the liner. */
+/* Kraft board, corrugation showing through the liner. A shade lighter than a
+   real kraft liner on purpose: this is the one dark stock, and at #c8a074 the
+   secondary line on the shop's menu board measured 3.1:1. */
 .sn-m-board {
-  --sn-paper-base: #c8a074;
+  --sn-paper-base: #cfae88;
   --sn-fibre: var(--sn-fibre-coarse);
   --sn-print: repeating-linear-gradient(
     0deg,
@@ -190,10 +247,10 @@
   );
   --sn-ink-rgb: 52, 34, 18;
   /* Kraft is the one dark stock, so secondary ink has to lean harder on it to
-     clear 4.5:1. */
-  --ink-2: rgba(var(--sn-ink-rgb), 0.88);
-  --ink-3: rgba(var(--sn-ink-rgb), 0.7);
-  --ink-4: rgba(var(--sn-ink-rgb), 0.5);
+     clear 4.5:1. Measured on #cfae88: 6.0 / 5.0 / 4.6. */
+  --ink-2: rgba(var(--sn-ink-rgb), 0.9);
+  --ink-3: rgba(var(--sn-ink-rgb), 0.82);
+  --ink-4: rgba(var(--sn-ink-rgb), 0.78);
   --sn-lift: drop-shadow(0 2px 1px rgba(30, 16, 4, 0.34))
     drop-shadow(0 6px 9px rgba(30, 16, 4, 0.2));
 }
@@ -245,67 +302,80 @@
    These rules cover the other case: a themed ancestor and an unthemed tile. */
 
 [data-theme="diner"] .sn-m-napkin:not([data-theme]) {
+  /* Real gingham is three tones, not one: the ground, a single dyed band, and
+     the darker square where warp crosses weft. Two 30% bands crossing give
+     exactly that (0 / 0.30 / 0.51). The old print was a pair of 7.5% stripes,
+     which is one tone plus a rumour — a pale pink wash, which is what the
+     integrated screenshot showed. 26px cells match the checked cloth under the
+     burger plate in the same frame. */
   --sn-print: repeating-linear-gradient(
       90deg,
-      rgba(217, 58, 76, 0.075) 0 18px,
-      rgba(0, 0, 0, 0) 18px 36px
+      rgba(206, 54, 44, 0.32) 0 26px,
+      rgba(0, 0, 0, 0) 26px 52px
     ),
-    repeating-linear-gradient(0deg, rgba(217, 58, 76, 0.075) 0 18px, rgba(0, 0, 0, 0) 18px 36px);
+    repeating-linear-gradient(0deg, rgba(206, 54, 44, 0.32) 0 26px, rgba(0, 0, 0, 0) 26px 52px);
 }
 
 [data-theme="sushi"] .sn-m-napkin:not([data-theme]) {
-  --sn-print: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.34) 5px 6px, rgba(0, 0, 0, 0) 6px),
-    linear-gradient(to top, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.34) 5px 6px, rgba(0, 0, 0, 0) 6px),
-    linear-gradient(to right, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.34) 5px 6px, rgba(0, 0, 0, 0) 6px),
-    linear-gradient(to left, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.34) 5px 6px, rgba(0, 0, 0, 0) 6px),
-    repeating-linear-gradient(97deg, rgba(150, 140, 118, 0.06) 0 1px, rgba(0, 0, 0, 0) 1px 17px);
+  /* Washi: a printed indigo rule set in from the edge, and long slub fibres. */
+  --sn-print: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.44) 5px 6px, rgba(0, 0, 0, 0) 6px),
+    linear-gradient(to top, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.44) 5px 6px, rgba(0, 0, 0, 0) 6px),
+    linear-gradient(to right, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.44) 5px 6px, rgba(0, 0, 0, 0) 6px),
+    linear-gradient(to left, rgba(0, 0, 0, 0) 0 5px, rgba(51, 69, 107, 0.44) 5px 6px, rgba(0, 0, 0, 0) 6px),
+    repeating-linear-gradient(97deg, rgba(126, 116, 96, 0.14) 0 1px, rgba(0, 0, 0, 0) 1px 15px);
 }
 
 [data-theme="candy"] .sn-m-napkin:not([data-theme]) {
+  /* Pastel candy-stripe: a wide sugar-pink band with a narrow mint thread
+     running beside it, the way a paper bag from a sweet shop is printed. */
   --sn-print: repeating-linear-gradient(
       90deg,
-      rgba(255, 143, 194, 0.1) 0 17px,
-      rgba(0, 0, 0, 0) 17px 43px
+      rgba(255, 116, 180, 0.22) 0 15px,
+      rgba(0, 0, 0, 0) 15px 40px
     ),
     repeating-linear-gradient(
       90deg,
-      rgba(0, 0, 0, 0) 0 27px,
-      rgba(143, 222, 221, 0.09) 27px 33px,
-      rgba(0, 0, 0, 0) 33px 43px
+      rgba(0, 0, 0, 0) 0 23px,
+      rgba(96, 208, 206, 0.22) 23px 29px,
+      rgba(0, 0, 0, 0) 29px 40px
     );
 }
 
 [data-theme="taco"] .sn-m-napkin:not([data-theme]) {
+  /* Serape: banded weave, warm to cool and back, with the warp showing. */
   --sn-print: repeating-linear-gradient(
       180deg,
-      rgba(217, 84, 43, 0.085) 0 11px,
+      rgba(217, 84, 43, 0.22) 0 11px,
       rgba(0, 0, 0, 0) 11px 13px,
-      rgba(233, 169, 58, 0.1) 13px 15px,
+      rgba(233, 169, 58, 0.26) 13px 15px,
       rgba(0, 0, 0, 0) 15px 17px,
-      rgba(62, 156, 134, 0.05) 17px 26px,
+      rgba(62, 156, 134, 0.15) 17px 26px,
       rgba(0, 0, 0, 0) 26px 28px,
-      rgba(123, 74, 143, 0.07) 28px 30px,
+      rgba(123, 74, 143, 0.18) 28px 30px,
       rgba(0, 0, 0, 0) 30px 39px
     ),
-    repeating-linear-gradient(90deg, rgba(90, 62, 40, 0.035) 0 1px, rgba(0, 0, 0, 0) 1px 3px);
+    repeating-linear-gradient(90deg, rgba(90, 62, 40, 0.07) 0 1px, rgba(0, 0, 0, 0) 1px 3px);
 }
 
 [data-theme="breakfast"] .sn-m-napkin:not([data-theme]) {
+  /* Linen: an even, slightly irregular open weave, no colour at all. */
   --sn-print: repeating-linear-gradient(
       0deg,
-      rgba(203, 183, 154, 0.11) 0 1.5px,
-      rgba(0, 0, 0, 0) 1.5px 4px
+      rgba(184, 158, 120, 0.24) 0 1.5px,
+      rgba(0, 0, 0, 0) 1.5px 5px
     ),
-    repeating-linear-gradient(90deg, rgba(203, 183, 154, 0.1) 0 1.5px, rgba(0, 0, 0, 0) 1.5px 4px);
+    repeating-linear-gradient(90deg, rgba(184, 158, 120, 0.22) 0 1.5px, rgba(0, 0, 0, 0) 1.5px 5px);
 }
 
 [data-theme="pizza"] .sn-m-napkin:not([data-theme]) {
+  /* Trattoria check: the same three-tone gingham as the diner, but bigger and
+     a touch cooler, the way an oilcloth tablecloth is printed. */
   --sn-print: repeating-linear-gradient(
       90deg,
-      rgba(196, 43, 47, 0.08) 0 32px,
+      rgba(186, 40, 44, 0.26) 0 32px,
       rgba(0, 0, 0, 0) 32px 64px
     ),
-    repeating-linear-gradient(0deg, rgba(196, 43, 47, 0.08) 0 32px, rgba(0, 0, 0, 0) 32px 64px);
+    repeating-linear-gradient(0deg, rgba(186, 40, 44, 0.26) 0 32px, rgba(0, 0, 0, 0) 32px 64px);
 }
 
 /* The ink follows the world too — Sushi prints cooler, Taco warmer. */
@@ -323,21 +393,46 @@
 /* ---- the ketchup splat -------------------------------------------------- */
 
 /* On the button: the splat is a layer behind a rectangular hit area, and the
-   filled accent pill underneath it has to go. */
+   filled accent pill underneath it has to go.
+
+   The margins are load-bearing, not spacing taste. `.sn-btn__splat` is inset
+   negatively past the button so the arms and the drips can leave it, and
+   without a matching margin that overflow lands on whatever is next in the
+   column: on Home the drips ran down into the "Classic Diner" chip, on Result
+   the Play Again splat sat on the bill above it and the Home/Share pair below.
+   A splat owns its vertical space. Values are the layer's overhang (38% / 42%
+   of a 56-60px button) rounded up. */
 .sn-btn.sn-m-splat {
   background-color: transparent;
   border-color: transparent;
   box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  color: var(--accent-ink);
+  color: var(--sn-ketchup-ink);
   min-height: 56px;
   min-width: 88px;
+  margin-block: 22px 26px;
 }
 
 .sn-btn--primary:has(> .sn-btn__splat) {
   background-color: transparent;
   box-shadow: none;
+}
+
+/* The press dim has to be cut to the sauce, not to a pill: a rounded slab
+   flashing over an organic shape is the tell that the shape is a picture.
+   `--sn-splat` is written onto the *button* by createButton precisely so this
+   sibling can inherit it. */
+.sn-btn.sn-m-splat > .sn-btn__dim {
+  inset: -38% -10% -42%;
+  border-radius: 0;
+  background: var(--sn-ketchup-deep);
+  -webkit-mask-image: var(--sn-splat, var(--sn-fb-splat-1));
+  mask-image: var(--sn-splat, var(--sn-fb-splat-1));
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 
 /* On the layer: absolutely positioned, oversized, and behind everything. The
@@ -350,14 +445,18 @@
 
 .sn-btn__splat {
   position: absolute;
-  left: -12%;
-  right: -12%;
-  top: -40%;
-  bottom: -52%;
-  color: var(--accent);
+  /* Kept in step with SPLAT_ASPECT in src/ui/components/button.ts: the layer
+     is the button's box scaled by 1.20 x 1.80, and that ratio is what the
+     splat's geometry is pre-compensated for. Changing these without changing
+     those numbers puts the droplets back on their side. */
+  left: -10%;
+  right: -10%;
+  top: -38%;
+  bottom: -42%;
+  color: var(--sn-ketchup);
   overflow: visible;
-  filter: drop-shadow(0 1px 1px rgba(48, 6, 8, 0.34))
-    drop-shadow(0 8px 13px rgba(var(--accent-rgb), 0.32));
+  filter: drop-shadow(0 1px 1px rgba(var(--sn-ketchup-deep-rgb), 0.42))
+    drop-shadow(0 7px 12px rgba(var(--sn-ketchup-deep-rgb), 0.3));
 }
 
 .sn-btn__splat > svg {
@@ -376,12 +475,20 @@
      is all it takes; a broad top-to-bottom gradient turns it into a plastic
      pill, which is the failure mode DESIGN §8 is warning about. */
   background-image: radial-gradient(
-      18% 15% at 31% 21%,
-      rgba(255, 255, 255, 0.26),
-      rgba(255, 255, 255, 0) 78%
+      16% 20% at 33% 24%,
+      rgba(255, 236, 228, 0.3),
+      rgba(255, 236, 228, 0) 76%
     ),
-    radial-gradient(64% 26% at 50% 100%, rgba(78, 4, 8, 0.2), rgba(78, 4, 8, 0) 62%),
-    radial-gradient(122% 128% at 50% 42%, rgba(0, 0, 0, 0) 78%, rgba(96, 10, 14, 0.3) 100%);
+    radial-gradient(
+      60% 30% at 50% 100%,
+      rgba(var(--sn-ketchup-deep-rgb), 0.34),
+      rgba(var(--sn-ketchup-deep-rgb), 0) 64%
+    ),
+    radial-gradient(
+      122% 128% at 50% 42%,
+      rgba(0, 0, 0, 0) 76%,
+      rgba(var(--sn-ketchup-deep-rgb), 0.42) 100%
+    );
   -webkit-mask-image: var(--sn-splat, var(--sn-fb-splat-1));
   mask-image: var(--sn-splat, var(--sn-fb-splat-1));
   -webkit-mask-size: 100% 100%;
@@ -394,8 +501,8 @@
 /* Used bare — no inline SVG handed over — the class still has to be a splat. */
 .sn-m-splat:not(.sn-btn):not(:has(> svg)) {
   position: relative;
-  background-color: var(--accent);
-  color: var(--accent-ink);
+  background-color: var(--sn-ketchup);
+  color: var(--sn-ketchup-ink);
   border-color: transparent;
   box-shadow: none;
   -webkit-mask-image: var(--sn-splat, var(--sn-fb-splat-2));
@@ -614,12 +721,19 @@
   mask-repeat: no-repeat;
 }
 
-/* Faded thermal print, for secondary metadata on a receipt. Still AA. */
+/* Faded thermal print, for secondary metadata on a receipt. Still AA — 6.2:1
+   to 7.3:1 on the four light stocks. */
 .sn-i-thermal {
   color: color-mix(in srgb, rgb(var(--sn-ink-rgb)) 52%, #7a8590);
   font-weight: 500;
   letter-spacing: 0.035em;
   text-shadow: none;
+}
+
+/* …but kraft is not a receipt. The same blend measures 3.7:1 on the board, so
+   on the one dark stock thermal falls back to weak ink instead of grey. */
+.sn-m-board .sn-i-thermal {
+  color: rgba(var(--sn-ink-rgb), 0.84);
 }
 
 /* ==========================================================================
@@ -657,9 +771,9 @@
 .sn-m-tray:has(> .sn-m-greaseproof) {
   --sn-ink-rgb: 52, 40, 26;
   --ink: rgb(var(--sn-ink-rgb));
-  --ink-2: rgba(var(--sn-ink-rgb), 0.76);
-  --ink-3: rgba(var(--sn-ink-rgb), 0.58);
-  --ink-4: rgba(var(--sn-ink-rgb), 0.4);
+  --ink-2: rgba(var(--sn-ink-rgb), 0.82);
+  --ink-3: rgba(var(--sn-ink-rgb), 0.72);
+  --ink-4: rgba(var(--sn-ink-rgb), 0.68);
   --ink-halo: none;
   --hairline: rgba(var(--sn-ink-rgb), 0.18);
   --hairline-soft: rgba(var(--sn-ink-rgb), 0.11);
@@ -795,6 +909,75 @@
   position: relative;
 }
 
+/* ---- the mode card, once it is a napkin ---------------------------------
+   `.sn-mode.is-focused` in ui.css was written for a glass card: it paints a
+   dark translucent slab plus an accent gradient, and at (0,2,0) it outranks
+   `.sn-m-napkin`'s (0,1,0) `background: transparent`. So the hero element of
+   the home screen was a napkin with a sheet of tinted smoke laid over it —
+   which is exactly the "pale flat pink wash" the integrated screenshot showed,
+   with the gingham drowned underneath. Cloth is not glass; take the glass off
+   and let the paper be the surface. */
+.sn-mode.sn-m-napkin,
+.sn-mode.sn-m-napkin.is-focused {
+  background-color: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Focus still has to read at a glance, so it arrives the way it would on real
+   cloth: the napkin is picked up. A wash of the mode's colour soaks into the
+   paper from the corner the tile sits in, and the contact shadow deepens and
+   takes a little of that colour with it. No slab, no ring. */
+.sn-mode.sn-m-napkin.is-focused::before {
+  background-image: radial-gradient(
+      118% 96% at 14% 4%,
+      rgba(var(--m-rgb), 0.26),
+      rgba(var(--m-rgb), 0.07) 52%,
+      rgba(var(--m-rgb), 0) 78%
+    ),
+    var(--sn-weave, none), var(--sn-print, none), var(--sn-paper, none), var(--sn-fibre);
+}
+
+.sn-mode.sn-m-napkin.is-focused {
+  --sn-lift: drop-shadow(0 2px 1px rgba(32, 18, 6, 0.3))
+    drop-shadow(0 8px 14px rgba(32, 18, 6, 0.22))
+    drop-shadow(0 5px 16px rgba(var(--m-rgb), 0.34));
+}
+
+/* The tile is the one piece of the card allowed to be saturated — it is the
+   printed emblem on the napkin, not a glass chip. */
+.sn-mode.sn-m-napkin .sn-mode__tile {
+  box-shadow:
+    inset 0 0 0 1px rgba(var(--m-rgb), 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.sn-mode.sn-m-napkin .sn-mode__glyph {
+  filter: drop-shadow(0 1px 1px rgba(60, 36, 16, 0.28));
+}
+
+.sn-mode.sn-m-napkin .sn-mode__name {
+  text-shadow: none;
+}
+
+/* ui.css fades the tagline to 82% on the focused card, which was the right
+   move over glass and is 0.4 short of AA over a woven check. The paper's own
+   --ink-2 already carries the hierarchy. */
+.sn-mode.sn-m-napkin .sn-mode__tag,
+.sn-mode.sn-m-napkin.is-focused .sn-mode__tag {
+  color: var(--ink-2);
+  opacity: 1;
+}
+
+.sn-mode.sn-m-napkin .sn-mode__lock {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(var(--sn-ink-rgb), 0.2);
+  color: var(--ink-2);
+}
+
 /* The focus underline under a mode card's name: out of flow so it never adds
    a row to the meta column, and only inked once the card is the focused one. */
 .sn-mode__underline {
@@ -828,7 +1011,268 @@
 }
 
 /* ==========================================================================
-   9. REDUCED MOTION
+   9. SCREEN SURFACES
+   ==========================================================================
+   The screens hand out class names for the specific pieces of paper they are
+   made of; this is where those become paper. Without these rules a hook like
+   `.sn-hud__pad` is a bare <div> wearing a material class: the material paints
+   a surface, but nothing gives the surface a size, an inset or a padding, so
+   the content sits flush on the edge of the sheet and the paper reads as a
+   floating rectangle. Layout only — every colour here is a token.
+
+   The rule that repeats down this section: PAPER NEEDS A MARGIN. Nobody writes
+   an order to the edge of the slip. */
+
+/* ---- the in-game order pad ---------------------------------------------- */
+
+/* The most-seen surface in the app, over six very different 3D worlds — Candy
+   Stack is near-white, Sushi Tower near-black. So it is opaque, small, and it
+   carries its own contrast; the material comes second. */
+.sn-hud__center {
+  /* Smaller pad, so it can sit up under the top edge like a slip clipped to a
+     rail rather than float in the middle of the sky. Still clears the 46px
+     pause button, which is out at the right gutter. */
+  padding-top: calc(var(--safe-t) + 14px);
+}
+
+.sn-hud__pad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Never wide enough to reach the pause button at any width. */
+  max-width: calc(100vw - 2 * (var(--gutter) + 62px));
+  padding: 6px 18px 9px;
+  /* A tighter, darker contact shadow than the stock's default: this one has to
+     separate from a bright patisserie as well as sit on a dark counter. */
+  --sn-lift: drop-shadow(0 1px 1px rgba(18, 12, 6, 0.36))
+    drop-shadow(0 5px 11px rgba(18, 12, 6, 0.3));
+}
+
+/* Perforation across the top edge, pulled out past the padding so it runs the
+   full width of the paper the way a real tear-off does. */
+.sn-hud__tear {
+  width: calc(100% + 24px);
+  margin: 0 -12px 4px;
+  color: rgba(var(--sn-ink-rgb), 0.5);
+}
+
+.sn-hud__pad .sn-hud__scoreline {
+  justify-content: center;
+}
+
+/* Smaller than it was, and centred in the paper rather than jammed to the left
+   of it — the scoreline is inline-flex, so in an unstyled block pad it sat on
+   the text line at the left edge with the sub-line setting the width. */
+.sn-hud__pad .sn-score {
+  font-size: clamp(38px, 11.5vw, 52px);
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Printed under the score, inside the paper. The 48px it used to reserve was
+   holding a slot for the combo pill, which now hangs below the pad instead —
+   that reserve was most of the pad's dead height. */
+.sn-hud__pad .sn-hud__sub {
+  margin-top: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  white-space: nowrap;
+}
+
+/* The combo is a filled accent pill; it does not belong printed on the pad, so
+   it clears the paper entirely and floats under it. */
+.sn-hud__pad .sn-combo {
+  top: calc(100% + 30px);
+}
+
+/* ---- the bill ------------------------------------------------------------ */
+
+/* The result slip. The rows carry their own padding, so the paper only needs
+   enough of its own to keep the ruled lines off the edge. */
+.sn-bill {
+  display: flex;
+  flex-direction: column;
+  padding: 0 6px 8px;
+}
+
+.sn-bill__head {
+  align-items: baseline;
+  min-height: 48px;
+  padding-top: 14px;
+}
+
+.sn-bill__brand {
+  font-weight: 750;
+  letter-spacing: 0.16em;
+  text-indent: 0.16em;
+}
+
+.sn-bill__no {
+  font-size: var(--t-14);
+  font-variant-numeric: tabular-nums;
+}
+
+.sn-bill__line {
+  min-height: 48px;
+}
+
+.sn-bill__k {
+  font-weight: 550;
+}
+
+.sn-bill__v {
+  font-variant-numeric: tabular-nums;
+}
+
+.sn-bill__total {
+  min-height: 66px;
+  align-items: center;
+}
+
+/* The kitchen writes the total in the same red pen it stamps with. It used to
+   take `--accent`, which is a different red in every world and a pale pastel
+   in two of them — 2.4:1 on the Candy till roll. */
+.sn-bill .sn-result__score.is-best {
+  color: var(--sn-stamp-ink, #b1362b);
+}
+
+/* The stamp sets its own width; the slot only has to give it room and keep it
+   from being stretched by the column. */
+.sn-bill__stampslot {
+  justify-content: flex-start;
+  min-height: 54px;
+  padding-top: 4px;
+}
+
+.sn-bill__foot {
+  gap: 5px;
+}
+
+.sn-bill__note,
+.sn-bill__flavour,
+.sn-bill__thanks {
+  font-size: var(--t-14);
+  line-height: 1.4;
+}
+
+/* Perforations are inset from the paper's edge; a rule that runs off the side
+   of a check reads as a mistake. */
+.sn-bill__tear {
+  width: auto;
+  margin: 1px 10px;
+}
+
+/* ---- the settings pad ---------------------------------------------------- */
+
+/* One slip laid on the greaseproof sheet — inset, so the sheet frames it, and
+   padded, so no row starts on the paper's edge. Both papers are warm now (see
+   `.sn-m-ticket`); before, a cold slab on a warm sheet read as two unrelated
+   pieces of paper stacked rather than as a pad on a sheet. */
+.sn-settings__pad {
+  display: flex;
+  flex-direction: column;
+  margin-inline: 6px;
+  padding: 4px 8px 12px;
+}
+
+/* The cut edge of the slip, drawn on the paper layer so it follows the paper
+   and not the box: a hair of shade inside the rim and a lit lower lip. */
+.sn-settings__pad::before {
+  box-shadow: inset 0 0 0 1px rgba(var(--sn-ink-rgb), 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.sn-settings__sect {
+  display: flex;
+  flex-direction: column;
+}
+
+.sn-settings__head {
+  padding: 15px 6px 3px;
+  letter-spacing: 0.14em;
+  text-indent: 0.14em;
+}
+
+.sn-settings__tear {
+  width: auto;
+  margin: 8px 6px 2px;
+}
+
+/* The perforation the pad was torn off along. Sits above the first heading,
+   pulled out past the pad's padding so it runs the width of the paper. */
+.sn-settings__tear--top {
+  width: calc(100% + 12px);
+  margin: 2px -6px 0;
+}
+
+/* ---- the shop's menu board ----------------------------------------------- */
+
+/* Kraft board pinned to the sheet. Inset and padded for the same reason as the
+   pad; the title used to start hard in the top-left corner of a bare brown
+   rectangle and the sub-line ran off the right edge. */
+.sn-store__board {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-inline: 4px;
+  padding: 14px 18px 16px;
+  border-radius: 3px;
+  /* Propped, not printed on the page. Small enough that the sheet body's
+     horizontal clip never reaches a corner. */
+  rotate: -0.5deg;
+  --sn-lift: drop-shadow(0 2px 1px rgba(30, 16, 4, 0.32))
+    drop-shadow(0 7px 12px rgba(30, 16, 4, 0.26));
+}
+
+/* Board edges are cut, not torn, and a cut kraft edge shows its pale core. */
+.sn-store__board::before {
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(255, 244, 224, 0.22),
+    inset 0 0 0 2px rgba(var(--sn-ink-rgb), 0.14);
+}
+
+.sn-store__board-title {
+  font-size: var(--t-22);
+  letter-spacing: -0.01em;
+}
+
+.sn-store__board-sub {
+  font-size: var(--t-14);
+  line-height: 1.35;
+}
+
+/* ---- pause ---------------------------------------------------------------- */
+
+/* No paper of its own: the sheet is already greaseproof on a tray. All this
+   needs is for the rows to stack flush and the perforation to be inset. */
+.sn-pause__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.sn-pause__tear {
+  width: auto;
+  margin: 4px 8px;
+}
+
+/* ---- type on paper, anywhere --------------------------------------------- */
+
+/* Fine print is still print. `--ink-4` on greaseproof measured 2.1:1, which is
+   how the sign-off at the foot of Settings ended up invisible. */
+.sn-fineprint {
+  color: var(--ink-3);
+}
+
+/* The empty-record line on Home sits on bare 3D — a wooden picnic table in
+   Classic Diner — with no paper under it at all, so it takes the full ink and
+   the halo rather than 72% of it. */
+.sn-deck__best.is-empty {
+  opacity: 1;
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   10. REDUCED MOTION
    ==========================================================================
    Paper may settle when it mounts; it must never flutter. There are no
    animations in this layer at all, so this only has to make sure nothing that
@@ -878,7 +1322,7 @@
 }
 
 /* ==========================================================================
-   10. NO MASK SUPPORT
+   11. NO MASK SUPPORT
    ==========================================================================
    Without masks the paper would be a plain rectangle and the splat would be a
    rectangle of solid accent, which is worse than the glass it replaced. Fall
@@ -896,9 +1340,10 @@
     display: none;
   }
   .sn-btn.sn-m-splat {
-    background-color: var(--accent);
+    background-color: var(--sn-ketchup);
     border-radius: var(--r-pill);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3),
-      0 10px 26px rgba(var(--accent-rgb), 0.34);
+    margin-block: 0;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      0 10px 26px rgba(var(--sn-ketchup-deep-rgb), 0.38);
   }
 }

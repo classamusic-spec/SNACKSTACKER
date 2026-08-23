@@ -105,11 +105,19 @@ export function createSettingsScreen(
     { key: 'controls', title: 'Controls', rows: [leftHanded.el] },
   ];
 
-  // No `sn-e-*` silhouette on the pad: an edge is a clip-path, and this pad
-  // holds every focusable control on the screen — a clipped edge would crop
-  // the focus ring on the first and last rows.
+  // No `sn-e-*` silhouette on the pad. Not for the reason it used to be — an
+  // edge is a mask on the paper layer now, so it would not touch a focus ring
+  // — but because every edge in shapes.ts is authored against a card's
+  // proportions, and this pad is nearly 500px tall: a perforation whose bite
+  // is 3.9 units deep would chew 20px out of a sheet this size. The
+  // perforation it does want is a real tear-line across the top instead.
   const pad = h('div', { class: `sn-settings__pad ${PAPER.ticket} ${INK.print}` });
   applyPaper(pad, { kind: 'ticket', seed: PAD_SEED, edge: 'perforated', wear: 0.16 });
+
+  // Torn off the top of the pad, which is what makes it a pad rather than a
+  // slab. Seeded off the pad, so it is the same perforation on every mount.
+  const topTear = tearLine(`${PAD_SEED}:top`, 'sn-settings__tear sn-settings__tear--top');
+  if (topTear) pad.appendChild(topTear);
 
   GROUPS.forEach((group, index) => {
     if (index > 0) {

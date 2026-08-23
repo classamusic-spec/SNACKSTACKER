@@ -70,7 +70,9 @@ export const STOCKS: Readonly<Record<PaperKind, StockDef>> = {
     themePull: 0.14,
   },
   ticket: {
-    base: fromHex(0xf1f2ef),
+    // Warm till roll, not cold copier white. See the note on `.sn-m-ticket` in
+    // snack.css: a cold slab on a warm sheet reads as two papers, not one pad.
+    base: fromHex(0xf4efe3),
     fibre: 0.2,
     fibreLen: [18, 54],
     fibreInk: 0.03,
@@ -100,7 +102,8 @@ export const STOCKS: Readonly<Record<PaperKind, StockDef>> = {
     themePull: 0.16,
   },
   board: {
-    base: fromHex(0xc8a074),
+    // A shade lighter than a real kraft liner, so secondary ink clears 4.5:1.
+    base: fromHex(0xcfae88),
     fibre: 1.3,
     fibreLen: [30, 120],
     fibreInk: 0.1,

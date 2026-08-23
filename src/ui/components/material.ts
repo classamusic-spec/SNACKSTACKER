@@ -30,6 +30,7 @@ import { paperTexture, splatPath, tearLinePath, inkUnderlinePath } from '../snac
 import type { PaperOpts, SplatOpts } from '../snack/api';
 import { h, s } from '../dom';
 import { INK, PART } from '../snack/classes';
+import { svg as svgUrl } from '../snack/svg';
 
 let warned = false;
 
@@ -83,7 +84,20 @@ export function splatLayer(opts: SplatOpts): HTMLElement | null {
     },
     s('path', { d, fill: 'currentColor' }),
   );
-  return h('span', { class: 'sn-btn__splat sn-m-splat', aria: { hidden: 'true' } }, svg);
+  const layer = h(
+    'span',
+    { class: 'sn-btn__splat sn-m-splat', aria: { hidden: 'true' } },
+    svg,
+  );
+  // The wet highlight and the settled rim live on `.sn-btn__splat::before`,
+  // masked by `--sn-splat`. Without this it fell back to a *baked* splat in
+  // snack.css — a different silhouette from the one just drawn, so the shading
+  // sat off the shape and the sauce read flat. One shape, both layers.
+  layer.style.setProperty(
+    '--sn-splat',
+    svgUrl(`<path d='${d}' fill='#000'/>`, { viewBox: '0 0 100 100' }),
+  );
+  return layer;
 }
 
 /**
