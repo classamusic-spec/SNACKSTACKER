@@ -234,3 +234,25 @@ The six worlds already have palettes; the paper should follow them, so the same
 mode card is a gingham napkin in Classic Diner and a washi slip in Sushi Tower.
 That single move is what makes the UI feel authored per theme rather than
 skinned.
+
+**The condiment is per world too, and this took two wrong answers to find.**
+
+The first attempt tinted the splat with `--accent`. That fails: the splat stops
+being sauce and becomes "a red shape this world happens to like" — salmon-pink
+in Sushi, pastel in Candy. So the second attempt fixed one oxblood ketchup for
+all six, on the reasoning that a condiment is a condiment in every kitchen.
+
+That fails differently, and you can only see it on screen: oxblood across the
+Candy Stack patisserie does not read as ketchup, it reads as a crime scene.
+
+The rule that survives both: **the splat is a real sauce from THAT kitchen, and
+never the accent.** Diner gets tomato ketchup, Sushi soy, Candy strawberry
+syrup, Taco salsa roja, Breakfast maple, Pizza passata. Each is mixed darker
+than the world's palette so it never collapses back into the accent by another
+route, and each carries white type at 4.9:1 or better. Breakfast's maple is the
+proof the rule is real rather than a red-shades excuse: it is not red at all.
+
+The general lesson, which applies past this one token: *consistency* and
+*belonging* are both real design goals and they pull in opposite directions.
+Neither wins by argument. Put the candidate on screen in the world where it is
+most likely to look wrong, and look at it.
