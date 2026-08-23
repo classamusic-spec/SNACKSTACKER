@@ -184,13 +184,17 @@ function flecks(ctx: Ctx, rng: Rng, base: Rgb, count: number, ink: number): void
 /** Tooth: the coarse stipple of a heavier, less-calendered sheet. */
 function tooth(ctx: Ctx, rng: Rng, base: Rgb, amount: number): void {
   const count = Math.round(1500 * amount);
+  // A fixed palette rather than a fresh colour string per speck: this loop is
+  // the hottest one in the painter and the difference is not visible.
+  const dark = shade(base, 0.9);
+  const light = shade(base, 1.07);
+  const swatches: string[] = [];
+  for (let i = 0; i < 12; i += 1) {
+    swatches.push(css(i % 2 === 0 ? dark : light, 0.02 + (i / 12) * 0.055));
+  }
   for (let i = 0; i < count; i += 1) {
-    const x = rng.next() * TILE;
-    const y = rng.next() * TILE;
-    const dark = rng.chance(0.55);
-    const col = dark ? shade(base, 0.9) : shade(base, 1.07);
-    ctx.fillStyle = css(col, rng.range(0.02, 0.075));
-    ctx.fillRect(x, y, rng.range(0.6, 1.5), rng.range(0.6, 1.5));
+    ctx.fillStyle = swatches[rng.int(0, 11)];
+    ctx.fillRect(rng.next() * TILE, rng.next() * TILE, rng.range(0.6, 1.5), rng.range(0.6, 1.5));
   }
 }
 
@@ -524,16 +528,23 @@ function stockCharacter(ctx: Ctx, rng: Rng, kind: PaperKind, base: Rgb): void {
  * Without it the sheet is convincing at arm's length and plastic at 100%,
  * which is the wrong way round — the whole point of §8 is that the material
  * survives being looked at closely.
+ *
+ * The noise field is built once for the whole session and reused at a seeded
+ * offset. Generating 65k pixels per texture cost more than every other layer
+ * put together, and no two sheets can tell the difference.
  */
-function grain(ctx: Ctx, seed: string, amount: number): void {
+let grainTile: HTMLCanvasElement | null = null;
+
+function grainSource(): HTMLCanvasElement | null {
+  if (grainTile) return grainTile;
   const canvas = document.createElement('canvas');
   canvas.width = TILE;
   canvas.height = TILE;
   const gc = canvas.getContext('2d');
-  if (!gc) return;
+  if (!gc) return null;
   const img = gc.createImageData(TILE, TILE);
   const data = img.data;
-  const rng = makeRng(`grain:${seed}`);
+  const rng = makeRng('snack-grain');
   for (let i = 0; i < data.length; i += 4) {
     // Two samples averaged: pure white noise is television static, this has
     // just enough correlation to read as fibre.
@@ -544,26 +555,44 @@ function grain(ctx: Ctx, seed: string, amount: number): void {
     data[i + 3] = 255;
   }
   gc.putImageData(img, 0, 0);
+  grainTile = canvas;
+  return canvas;
+}
+
+/** Drop the shared noise field. Called by disposeSnackKit via releasePaper(). */
+export function releasePaper(): void {
+  grainTile = null;
+}
+
+function grain(ctx: Ctx, rng: Rng, amount: number): void {
+  const src = grainSource();
+  if (!src || amount <= 0) return;
+  const dx = Math.floor(rng.next() * TILE);
+  const dy = Math.floor(rng.next() * TILE);
   ctx.save();
   ctx.globalCompositeOperation = 'overlay';
   ctx.globalAlpha = amount;
-  ctx.drawImage(canvas, 0, 0);
+  for (let ix = -1; ix <= 0; ix += 1) {
+    for (let iy = -1; iy <= 0; iy += 1) {
+      ctx.drawImage(src, dx + ix * TILE, dy + iy * TILE);
+    }
+  }
   ctx.restore();
 }
 
 /* -------------------------------------------------------------------- paint */
 
 function encode(canvas: HTMLCanvasElement): string {
-  // The paper is opaque, so JPEG is on the table and is usually a third of the
-  // size of the PNG. Take whichever is smaller — this ships to phones.
-  const png = canvas.toDataURL('image/png');
-  let jpeg = png;
+  // The paper is opaque and photographic, so JPEG always wins here — about a
+  // third of the PNG's bytes and a fraction of the encode time, which matters
+  // because this runs during screen construction on a phone.
   try {
-    jpeg = canvas.toDataURL('image/jpeg', 0.93);
+    const jpeg = canvas.toDataURL('image/jpeg', 0.93);
+    if (jpeg.startsWith('data:image/jpeg')) return jpeg;
   } catch {
-    /* no JPEG encoder — PNG it is */
+    /* no JPEG encoder in this engine */
   }
-  return jpeg.length > 32 && jpeg.length < png.length ? jpeg : png;
+  return canvas.toDataURL('image/png');
 }
 
 /** The hairline printed rule some stocks carry, as element-sized CSS layers. */
@@ -622,7 +651,7 @@ export function paintPaper(opts: PaperOpts): string {
   }
   if (wear >= 0.5) crease(ctx, rng, base);
   if (wear >= 0.85) crease(ctx, rng, base);
-  grain(ctx, `${kind}:${opts.seed}`, stock.grain2);
+  grain(ctx, rng, stock.grain2);
 
   const tile = `url("${encode(canvas)}")`;
   const paper = opts.theme ? THEME_PAPER[opts.theme] : null;

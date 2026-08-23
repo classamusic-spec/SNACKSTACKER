@@ -28,8 +28,6 @@ export interface Rng {
   range(min: number, max: number): number;
   /** Integer min..max inclusive. */
   int(min: number, max: number): number;
-  /** -1 or +1. */
-  sign(): number;
   /** True with probability p. */
   chance(p: number): boolean;
   /** Uniform element of a non-empty list. */
@@ -52,7 +50,6 @@ export function makeRng(seed: string | number): Rng {
     next,
     range: (min, max) => min + (max - min) * next(),
     int: (min, max) => min + Math.floor(next() * (max - min + 1)),
-    sign: () => (next() < 0.5 ? -1 : 1),
     chance: (p) => next() < p,
     pick: <T,>(items: readonly T[]): T => items[Math.floor(next() * items.length) % items.length],
     gauss: () => (next() + next() + next() - 1.5) * 0.8,

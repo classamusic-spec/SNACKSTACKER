@@ -99,6 +99,7 @@ export function inkUnderlinePath(_seed: string, _width: number): string {
 /** Release every cached texture. */
 export function disposeSnackKit(): void {
   paperCache.clear();
+  releasePaper();
   edgeCache.clear();
   edgeMaskCache.clear();
   edgeClipCache.clear();
@@ -113,7 +114,7 @@ export function disposeSnackKit(): void {
  * once" promise true.
  * ========================================================================== */
 
-import { paintPaper } from './paper';
+import { paintPaper, releasePaper } from './paper';
 import type { EdgeShape, SplatShape } from './shapes';
 import {
   buildEdge,

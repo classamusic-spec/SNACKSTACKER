@@ -372,13 +372,16 @@
   content: "";
   position: absolute;
   inset: 0;
+  /* Sauce is close to matte. One small wet specular and a settled darker rim
+     is all it takes; a broad top-to-bottom gradient turns it into a plastic
+     pill, which is the failure mode DESIGN §8 is warning about. */
   background-image: radial-gradient(
-      26% 20% at 32% 20%,
+      18% 15% at 31% 21%,
       rgba(255, 255, 255, 0.26),
-      rgba(255, 255, 255, 0) 76%
+      rgba(255, 255, 255, 0) 78%
     ),
-    radial-gradient(96% 44% at 50% 106%, rgba(74, 4, 8, 0.34), rgba(74, 4, 8, 0) 56%),
-    radial-gradient(120% 120% at 50% 44%, rgba(0, 0, 0, 0) 62%, rgba(84, 8, 12, 0.24) 100%);
+    radial-gradient(64% 26% at 50% 100%, rgba(78, 4, 8, 0.2), rgba(78, 4, 8, 0) 62%),
+    radial-gradient(122% 128% at 50% 42%, rgba(0, 0, 0, 0) 78%, rgba(96, 10, 14, 0.3) 100%);
   -webkit-mask-image: var(--sn-splat, var(--sn-fb-splat-1));
   mask-image: var(--sn-splat, var(--sn-fb-splat-1));
   -webkit-mask-size: 100% 100%;
