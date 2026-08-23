@@ -1039,8 +1039,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  /* Never wide enough to reach the pause button at any width. */
-  max-width: calc(100vw - 2 * (var(--gutter) + 62px));
+  /* Centred, so half of this has to clear the 46px pause button sitting at the
+     right gutter. Enough for "9,999 layers · best 999,999" without wrapping. */
+  max-width: calc(100vw - 2 * (var(--gutter) + 56px));
   padding: 6px 18px 9px;
   /* A tighter, darker contact shadow than the stock's default: this one has to
      separate from a bright patisserie as well as sit on a dark counter. */
@@ -1269,6 +1270,48 @@
 .sn-deck__best.is-empty {
   opacity: 1;
   color: var(--ink);
+}
+
+/* Full ink is still not enough on its own. This block and the how-to line
+   above it are the only type in the app with nothing behind them but the
+   scene, and the scene is a near-white patisserie in Candy Stack and a pale
+   griddle in Breakfast Rush: white-on-pale measured 2.1:1 there even at full
+   opacity, because a text-shadow halo is not a background.
+
+   ui.css already owns this device — `.sn-home::before` / `::after` are two
+   broad washes for exactly this reason — so this is the same idea focused on
+   the two lines that need it, rather than a heavier wash over the whole lower
+   third. Soft-edged and centred, so on the dark worlds it disappears into a
+   backdrop that is already dark. */
+.sn-deck__detail {
+  position: relative;
+}
+
+.sn-deck__detail::before {
+  content: "";
+  position: absolute;
+  /* Full width and feathered top and bottom, so it reads as one more band of
+     shade in the family `.sn-hud::before` and `.sn-home::after` already
+     established — never as a lozenge sitting on the scene. */
+  inset: -20px 0 -14px;
+  z-index: -1;
+  background: linear-gradient(
+    180deg,
+    rgba(14, 8, 3, 0) 0%,
+    rgba(14, 8, 3, 0.42) 22%,
+    rgba(14, 8, 3, 0.42) 74%,
+    rgba(14, 8, 3, 0) 100%
+  );
+  pointer-events: none;
+}
+
+/* And the halo does the rest. Over a backdrop this variable a per-glyph
+   outline is worth more than any amount of wash: it is dark exactly where the
+   letterform is and nowhere else, so the patisserie stays a patisserie. */
+.sn-deck__how,
+.sn-deck__best {
+  text-shadow: 0 0 3px rgba(10, 6, 2, 0.92), 0 1px 2px rgba(10, 6, 2, 0.8),
+    0 2px 12px rgba(10, 6, 2, 0.55);
 }
 
 /* ==========================================================================

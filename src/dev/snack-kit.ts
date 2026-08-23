@@ -143,7 +143,12 @@ function splatButton(seed: string, label: string, width: number, aspectHint?: nu
     layer,
     h('span', { class: 'sn-btn__label', text: label }),
   );
-  const aspect = aspectHint ?? (width * 1.24) / (60 * 1.92);
+  // Must track `.sn-btn__splat`'s insets in snack.css (-10% / -38% / -42%)
+  // and SPLAT_ASPECT in src/ui/components/button.ts: the layer is the button's
+  // box scaled by 1.20 x 1.80, and that is the box the 0..100 viewBox is
+  // stretched into. Author the splat for anything else and the droplets come
+  // out on their side.
+  const aspect = aspectHint ?? (width * 1.2) / (60 * 1.8);
   const svg = s(
     'svg',
     { viewBox: '0 0 100 100', preserveAspectRatio: 'none', width: '100%', height: '100%' },
@@ -156,12 +161,15 @@ function splatButton(seed: string, label: string, width: number, aspectHint?: nu
 }
 
 app.appendChild(head('the ketchup splat', 'uneven rim, satellites falling off with distance, drips'));
+// The three shapes of primary the app actually builds, at the aspects
+// button.ts hands the kit for each. Anything the harness proves at some other
+// aspect it has not proved.
 app.appendChild(
   band(
     'dark',
-    cell('PLAY 322x60', splatButton('splat:PLAY', 'PLAY', 322)),
-    cell('Play again 200x60', splatButton('splat:again', 'Play again', 200)),
-    cell('Retry 140x60', splatButton('splat:retry', 'Retry', 140)),
+    cell('PLAY 320x60 (aspect 3.6)', splatButton('splat:Play', 'PLAY', 320, 3.6)),
+    cell('wide 350x56 (aspect 4.2)', splatButton('splat:Play Again', 'Play Again', 350, 4.2)),
+    cell('inline 135x56 (aspect 1.6)', splatButton('splat:Retry', 'Retry', 135, 1.6)),
   ),
 );
 app.appendChild(
