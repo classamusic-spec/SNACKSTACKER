@@ -10,3 +10,8 @@ snackery.html
 dist-audit
 .measure
 .vercel
+
+# Per-agent capture output from mode development.
+.recipe-shots
+.conveyor-shots
+.topple-shots
