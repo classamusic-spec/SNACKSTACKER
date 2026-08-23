@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- TEMPORARY: snack-material kit harness. Delete with src/dev/snack-kit.ts -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Snack kit — dev</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #14100d; }
+      body { font: 400 14px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif; }
+      #app.sn-root {
+        position: static;
+        inset: auto;
+        pointer-events: auto;
+        overflow: visible;
+        z-index: auto;
+        user-select: text;
+      }
+      .hx { padding: 26px 26px 8px; font: 700 11px/1 ui-monospace, Menlo, monospace;
+            letter-spacing: .18em; text-transform: uppercase; color: #d8c7ad; }
+      .hx small { display:block; margin-top:6px; letter-spacing:.02em; text-transform:none;
+                  font-weight:500; color:#8d8175; }
+      .band { padding: 14px 26px 30px; }
+      .band--dark { background: linear-gradient(160deg, #1d1712, #0d0a08); }
+      .band--light { background: linear-gradient(160deg, #f4ece0, #cdbda6); }
+      .band--scene { background: linear-gradient(180deg, #ffe7c4, #e07a5f); }
+      .band--sushi { background: linear-gradient(180deg, #22384a, #0a1218); }
+      .grid { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+      .cell { display: flex; flex-direction: column; gap: 7px; }
+      .cap { font: 600 10px/1.2 ui-monospace, Menlo, monospace; letter-spacing: .09em;
+             color: #9d9184; }
+      .band--light .cap { color: #6c604f; }
+      .band--scene .cap { color: #7c3a26; }
+      .swatch { width: 250px; height: 118px; display: flex; flex-direction: column;
+                justify-content: center; padding: 14px 18px; gap: 4px; }
+      .swatch--tall { height: 190px; width: 210px; }
+      .swatch--wide { width: 330px; }
+      .t1 { font-size: 17px; font-weight: 650; letter-spacing: -.015em; }
+      .t2 { font-size: 12.5px; }
+      .row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+      #stats { padding: 10px 26px 26px; font: 500 11px/1.6 ui-monospace, Menlo, monospace;
+               color: #7d7368; white-space: pre; }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="sn-root"></div>
+    <div id="stats"></div>
+    <script type="module" src="/src/dev/snack-kit.ts"></script>
+  </body>
+</html>

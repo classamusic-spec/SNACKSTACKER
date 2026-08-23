@@ -11,3 +11,6 @@ dist-audit
 .measure
 .vercel
 
+
+# QA captures from the snack-material UI pass.
+.snack-shots
