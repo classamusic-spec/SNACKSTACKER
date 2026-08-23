@@ -1,4 +1,4 @@
-/** TEMPORARY: per-theme draw-call/triangle budget for the conveyor mode. */
+/** TEMPORARY: per-theme draw-call/triangle budget. Delete with src/dev/conveyor-*. */
 import { chromium } from 'playwright';
 import { existsSync } from 'node:fs';
 const CHROME = ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome'].find((p) => existsSync(p));

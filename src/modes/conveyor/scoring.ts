@@ -32,12 +32,14 @@ export function gapFor(level: number): number {
 /**
  * Odds the next item is one the ticket still wants.
  *
- * The first order is nearly all signal so the rule teaches itself; it settles
- * at a little under half, which is the point where letting things go is a real
- * decision rather than a formality.
+ * The first order is mostly signal so the rule teaches itself, and it settles
+ * a little under half, which is where letting an item go becomes a real
+ * decision rather than a formality. The spawner also caps how many wanted
+ * items may be in flight at once, so this number sets the texture of the belt
+ * rather than the raw supply.
  */
 export function needShareFor(level: number): number {
-  return clamp(0.82 - level * 0.055, 0.42, 0.82);
+  return clamp(0.76 - level * 0.05, 0.42, 0.76);
 }
 
 /** Seconds the clock is topped up by on a completed order. */

@@ -134,9 +134,13 @@ export class ItemPool {
     return q === 'high' ? 'medium' : 'low';
   }
 
-  /** Draw calls per belt item. Five on screen makes this the whole budget. */
-  private static maxMaterials(q: QualityTier): number {
-    return q === 'low' ? 2 : 3;
+  /**
+   * Draw calls per belt item. Five on screen makes this the whole budget: two
+   * materials each plus the four the machine costs is exactly the 14-draw
+   * line, on every theme, in the worst case rather than on average.
+   */
+  private static maxMaterials(_q: QualityTier): number {
+    return 2;
   }
 
   /** Build (or rebuild, on a theme change) every food template and dressing. */

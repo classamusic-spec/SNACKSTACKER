@@ -648,6 +648,11 @@ class ConveyorMode implements GameMode {
     const foods = this.theme.foods;
     if (!order) return this.runRng.int(0, foods.length);
 
+    let outstanding = 0;
+    for (let i = 0; i < order.rows.length; i++) {
+      outstanding += Math.max(0, order.rows[i].want - order.rows[i].got);
+    }
+
     let wantedOnBelt = 0;
     const slots = this.pool.slots;
     for (let i = 0; i < slots.length; i++) {
@@ -655,23 +660,26 @@ class ConveyorMode implements GameMode {
       if (s.state === 'ride' && !s.delivered && s.food && rowFor(order, s.food)) wantedOnBelt++;
     }
 
-    const forced = wantedOnBelt === 0;
-    const wantNeeded = forced || this.runRng.next() < needShareFor(this.level);
+    // Fairness at the bottom, variety at the top. If nothing the docket wants
+    // is on the belt at all, the next item is one it wants — an order can never
+    // be starved out by the dice. And never more than three wanted items in
+    // flight at once: without that cap a one-item order filled the whole belt
+    // with four copies of the same lettuce, which is neither a decision nor a
+    // photograph anyone would want.
+    const cap = Math.min(Math.max(outstanding, 1), 3);
+    const forced = wantedOnBelt === 0 && outstanding > 0;
+    const saturated = wantedOnBelt >= cap;
+    const wantNeeded =
+      forced || (!saturated && outstanding > 0 && this.runRng.next() < needShareFor(this.level));
 
-    if (wantNeeded) {
+    if (wantNeeded && outstanding > 0) {
       // Weight by how many of that row are still outstanding.
-      let total = 0;
+      let pick = this.runRng.next() * outstanding;
       for (let i = 0; i < order.rows.length; i++) {
-        total += Math.max(0, order.rows[i].want - order.rows[i].got);
-      }
-      if (total > 0) {
-        let pick = this.runRng.next() * total;
-        for (let i = 0; i < order.rows.length; i++) {
-          pick -= Math.max(0, order.rows[i].want - order.rows[i].got);
-          if (pick <= 0) {
-            const idx = foods.indexOf(order.rows[i].food);
-            if (idx >= 0) return idx;
-          }
+        pick -= Math.max(0, order.rows[i].want - order.rows[i].got);
+        if (pick <= 0) {
+          const idx = foods.indexOf(order.rows[i].food);
+          if (idx >= 0) return idx;
         }
       }
     }

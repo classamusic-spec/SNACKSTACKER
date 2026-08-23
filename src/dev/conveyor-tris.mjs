@@ -1,3 +1,4 @@
+/** TEMPORARY: counts theme triangles inside the belt corridor. Delete with src/dev/conveyor-*. */
 import { chromium } from 'playwright';
 import { existsSync } from 'node:fs';
 const CHROME = ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome'].find((p) => existsSync(p));

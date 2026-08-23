@@ -154,12 +154,16 @@ kit.renderer.info.autoReset = false;
 /** Simulation clock. `step()` advances it too, so headless fast-forward works. */
 let simT = 0;
 
+/** Freeze the simulation but keep rendering, so a transient frame can be shot. */
+let frozen = false;
+
 new Ticker().start(({ dt, fps }) => {
-  simT += dt;
-  mode.update(dt, simT);
-  rig.update(dt, playing ? TUNING.CAM_FOLLOW_LAMBDA : 2.2);
-  vfx.update(dt, simT);
-  kit.update(dt, simT);
+  const d = frozen ? 0 : dt;
+  simT += d;
+  mode.update(d, simT);
+  rig.update(d, playing ? TUNING.CAM_FOLLOW_LAMBDA : 2.2);
+  vfx.update(d, simT);
+  kit.update(d, simT);
   kit.render();
   stats.fps = Math.round(fps);
   stats.drawCalls = kit.renderer.info.render.calls;
@@ -237,6 +241,9 @@ function slotScreen(i: number): { x: number; y: number } | null {
    * fps with a clamped dt, so a phase that takes 0.5s of game time would take
    * half a minute of wall clock to reach otherwise.
    */
+  freeze: (v: boolean) => {
+    frozen = v;
+  },
   step: (frames: number) => {
     for (let i = 0; i < frames; i++) {
       simT += 1 / 60;
