@@ -20,6 +20,12 @@ const WORD = 'Snackery';
  * The Snackery wordmark, set in type: tight tracking, large optical size, and a
  * hairline baseline rule that the letters visibly *sit on* — the mark reads as
  * a stack of layers resting on a plate.
+ *
+ * Deliberately carries no snack material. The logo is the one thing on screen
+ * that is not made of the stuff a snack arrives on; printing it on a napkin
+ * would make the brand a prop of the chrome instead of the other way round, and
+ * a paper backing behind these letters would cost the contrast the lockup gets
+ * from sitting straight on the scene. See docs/DESIGN.md §8.
  */
 export function createWordmark(opts: WordmarkOpts = {}): Wordmark {
   const size = opts.size ?? 'hero';

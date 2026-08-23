@@ -2,7 +2,9 @@ import type { StoreItemView } from '../api';
 import type { UiCtx } from '../ctx';
 import { h } from '../dom';
 import { iconCheck } from '../icons';
+import { CONDIMENT, EDGE, INK, PAPER } from '../snack/classes';
 import { hexFromInt } from '../theme';
+import { applyPaper } from './material';
 
 export interface StoreCardOpts {
   item: StoreItemView;
@@ -46,6 +48,13 @@ function thumb(item: StoreItemView, hero: boolean): HTMLElement {
 /**
  * A store card. Rendered as a single `<button>` containing only phrasing
  * content, so the entire card is one large, valid, accessible hit target.
+ *
+ * Material: menu-card stock with a guillotined edge, and the price as a peel-off
+ * sticker. Deliberately *not* a napkin — napkins are the mode deck's role — and
+ * deliberately not deckled: the cards stack in a vertical list where a ragged
+ * edge reads as damage, and a clip-path would cut off the selection ring and
+ * the contact shadow. No tilt for the same reason; a list of leaning cards is
+ * a jumble, not a menu.
  */
 export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElement {
   const { item } = opts;
@@ -54,7 +63,7 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
   const selected = item.owned && item.selected;
   const usable = item.owned && !item.selected;
 
-  const classes = ['sn-card'];
+  const classes = ['sn-card', PAPER.menucard, EDGE.clean];
   if (hero) classes.push('sn-card--hero');
   if (selected) classes.push('is-selected');
   if (pending) classes.push('is-pending');
@@ -67,6 +76,8 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
     type: 'button',
     data: { sku: item.sku },
   });
+  // Seeded on the sku: the same card is printed on the same sheet every time.
+  applyPaper(card, { kind: 'menucard', seed: `sku:${item.sku}`, edge: 'clean', wear: 0.12 });
 
   let ariaLabel = `${item.name}. ${item.tagline}`;
   if (selected) ariaLabel += ' Currently selected.';
@@ -83,13 +94,14 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
   const meta = h(
     'span',
     { class: 'sn-card__meta' },
-    h('span', { class: 'sn-card__name', text: item.name }),
+    h('span', { class: `sn-card__name ${INK.print}`, text: item.name }),
     h('span', { class: 'sn-card__tag', text: item.tagline }),
   );
   // The badge is an in-flow eyebrow rather than a corner overlay: at 320px a
   // "Best value" ribbon would otherwise crush the name into three lines.
+  // BEST / NEW is exactly what the rubber stamp is for.
   if (item.badge) {
-    card.appendChild(h('span', { class: 'sn-card__badge', text: item.badge }));
+    card.appendChild(h('span', { class: `sn-card__badge ${INK.stamp}`, text: item.badge }));
   }
   card.appendChild(h('span', { class: 'sn-card__top' }, thumb(item, hero), meta));
 
@@ -117,20 +129,21 @@ export function createStoreCard(ctx: UiCtx, opts: StoreCardOpts): HTMLButtonElem
     cta.appendChild(h('span', { class: 'sn-spinner', aria: { hidden: 'true' } }));
     cta.appendChild(h('span', { class: 'sn-card__cta-text', text: 'Working…' }));
   } else if (selected) {
-    cta.classList.add('sn-card__cta--selected');
+    // A state, not an action: stamped on the card rather than stuck to it.
+    cta.classList.add('sn-card__cta--selected', INK.stamp);
     cta.appendChild(h('span', { class: 'sn-card__cta-icon' }, iconCheck()));
     cta.appendChild(h('span', { class: 'sn-card__cta-text', text: 'SELECTED' }));
   } else if (usable) {
-    cta.classList.add('sn-card__cta--use');
+    cta.classList.add('sn-card__cta--use', CONDIMENT.sticker);
     cta.appendChild(h('span', { class: 'sn-card__cta-text', text: 'USE' }));
   } else {
-    cta.classList.add('sn-card__cta--buy');
+    cta.classList.add('sn-card__cta--buy', CONDIMENT.sticker);
     cta.appendChild(h('span', { class: 'sn-card__cta-text', text: item.priceLabel }));
   }
   card.appendChild(cta);
   // Progress toward the coin price, so the free route is always visible.
   if (!item.owned && !pending && item.subLabel) {
-    card.appendChild(h('span', { class: 'sn-card__sub', text: item.subLabel }));
+    card.appendChild(h('span', { class: `sn-card__sub ${INK.thermal}`, text: item.subLabel }));
   }
   card.appendChild(h('span', { class: 'sn-btn__dim', aria: { hidden: 'true' } }));
 

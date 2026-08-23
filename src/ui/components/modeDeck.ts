@@ -3,7 +3,10 @@ import type { ModeCardView } from '../api';
 import type { UiCtx } from '../ctx';
 import { Bag, clear, formatInt, h, setText, toggleClass } from '../dom';
 import { EASE_IOS, animate, easeIos, isReduced } from '../motion';
+import { EDGE, INK, PAPER, TILT, tiltFor } from '../snack/classes';
+import type { TiltClass } from '../snack/classes';
 import { hexFromInt, inkFor, rgbTriplet } from '../theme';
+import { applyPaper, inkUnderline } from './material';
 
 export interface ModeDeckOpts {
   /** Focus moved. Fires live while a fling is still settling. */
@@ -32,6 +35,8 @@ interface Slot {
   name: HTMLElement;
   tag: HTMLElement;
   lock: HTMLElement;
+  /** Seeded from the mode id, so a napkin leans the same way on every mount. */
+  tilt: TiltClass;
 }
 
 /** How long the rail has to be still before we call the host. */
@@ -188,6 +193,10 @@ export function createModeDeck(ctx: UiCtx, opts: ModeDeckOpts): ModeDeck {
       slot.el.setAttribute('aria-checked', on ? 'true' : 'false');
       slot.el.tabIndex = on ? 0 : -1;
       toggleClass(slot.el, 'is-focused', on);
+      // The chosen napkin has been picked up: it straightens as it lifts, and
+      // `is-focused` carries the rest of the treatment. Focus changes only —
+      // never on scroll, never per frame.
+      if (slot.tilt !== TILT.none) toggleClass(slot.el, slot.tilt, !on);
       const locked = slot.view.locked ? ' Not unlocked yet.' : '';
       slot.el.setAttribute(
         'aria-label',
@@ -346,23 +355,40 @@ export function createModeDeck(ctx: UiCtx, opts: ModeDeckOpts): ModeDeck {
 
   // ------------------------------------------------------------------ cards
 
+  /**
+   * A mode card is a themed paper napkin: scalloped edge, clean print for the
+   * name, and a small stable lean. The lean, the fibre and the deckle are all
+   * seeded from the mode id — never from the card's position in the rail, so
+   * re-ordering or re-rendering the deck never reshuffles the paper.
+   */
   function buildCard(view: ModeCardView): Slot {
+    const seed = `mode:${view.id}`;
+    const tilt = tiltFor(seed);
+
     const glyph = h('span', { class: 'sn-mode__glyph', text: view.glyph, aria: { hidden: 'true' } });
     const tile = h('span', { class: 'sn-mode__tile', aria: { hidden: 'true' } }, glyph);
-    const name = h('span', { class: 'sn-mode__name', text: view.name });
+    const name = h('span', { class: `sn-mode__name ${INK.print}`, text: view.name });
     const tag = h('span', { class: 'sn-mode__tag', text: view.tagline });
     const lock = h('span', { class: 'sn-mode__lock', text: 'Soon', aria: { hidden: 'true' } });
 
     const card = h('button', {
-      class: 'sn-mode',
+      class: `sn-mode ${PAPER.napkin} ${EDGE.scallop} ${tilt}`.trim(),
       type: 'button',
       role: 'radio',
       tabIndex: -1,
       aria: { checked: 'false' },
       data: { mode: view.id },
     });
+    applyPaper(card, { kind: 'napkin', seed, edge: 'scallop', wear: 0.22 });
+
+    const meta = h('span', { class: 'sn-mode__meta' }, name, tag);
+    // The selection mark is drawn ink, not a geometric ring; CSS reveals it on
+    // the focused card. Absent until the kit can draw it.
+    const underline = inkUnderline(seed, 'sn-mode__underline');
+    if (underline) meta.appendChild(underline);
+
     card.appendChild(tile);
-    card.appendChild(h('span', { class: 'sn-mode__meta' }, name, tag));
+    card.appendChild(meta);
     card.appendChild(lock);
     card.appendChild(h('span', { class: 'sn-btn__dim', aria: { hidden: 'true' } }));
 
@@ -395,7 +421,7 @@ export function createModeDeck(ctx: UiCtx, opts: ModeDeckOpts): ModeDeck {
     card.addEventListener('pointerleave', press(false));
     card.addEventListener('blur', press(false));
 
-    const slot: Slot = { view, el: card, glyph, name, tag, lock };
+    const slot: Slot = { view, el: card, glyph, name, tag, lock, tilt };
     paintCard(slot, view);
     return slot;
   }

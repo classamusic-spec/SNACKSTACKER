@@ -2,7 +2,9 @@ import type { UiCtx } from '../ctx';
 import { Bag, h } from '../dom';
 import { iconClose } from '../icons';
 import { EASE_IOS, animate, isReduced, resetAnimations, runExit } from '../motion';
+import { EDGE, INK, PAPER, PART } from '../snack/classes';
 import { createButton } from './button';
+import { applyPaper, stain, tearLine } from './material';
 
 export interface SheetOpts {
   /** Used for `data-sheet` and styling hooks. */
@@ -42,8 +44,27 @@ export function createSheet(ctx: UiCtx, opts: SheetOpts): Sheet {
   const scrim = h('div', { class: 'sn-scrim', aria: { hidden: 'true' } });
   const grab = h('div', { class: 'sn-sheet__grab', aria: { hidden: 'true' } }, h('span'));
   const titleEl = opts.title
-    ? h('h2', { class: 'sn-sheet__title', text: opts.title })
+    ? h('h2', { class: `sn-sheet__title ${INK.print}`, text: opts.title })
     : null;
+
+  /**
+   * A sheet is greaseproof paper laid on a brushed metal tray: the panel is the
+   * tray, and the paper is a decorative layer inside it, inset so the metal
+   * shows as a rim. Keeping the paper out of the flow means the sheet's whole
+   * flex column — grabber, header, scrolling body — is untouched, and the
+   * torn edge clips the paper only, never the content or the tray's shadow.
+   * Grease spots ride the paper so they clip with it.
+   */
+  const paper = h(
+    'span',
+    {
+      class: `sn-sheet__paper ${PAPER.greaseproof} ${EDGE.torn}`,
+      aria: { hidden: 'true' },
+    },
+    stain('sn-sheet__stain'),
+    stain('sn-sheet__stain sn-sheet__stain--b'),
+  );
+  applyPaper(paper, { kind: 'greaseproof', seed: `sheet:${opts.name}`, edge: 'torn', wear: 0.3 });
 
   const headRight = h('div', { class: 'sn-sheet__head-right' });
   for (const extra of opts.headerExtras ?? []) headRight.appendChild(extra);
@@ -63,17 +84,23 @@ export function createSheet(ctx: UiCtx, opts: SheetOpts): Sheet {
   const head = h('div', { class: 'sn-sheet__head' }, titleEl, headRight);
   const body = h('div', { class: 'sn-sheet__body' });
 
+  // The header/body divider is a perforated tear-line, not a hairline rule.
+  // Only where there is a header to divide — the result sheet has none.
+  const tear = opts.title ? tearLine(`sheet:${opts.name}`, 'sn-sheet__tear') : null;
+
   const panel = h(
     'div',
     {
-      class: `sn-sheet sn-sheet--${opts.variant ?? 'auto'}`,
+      class: `sn-sheet sn-sheet--${opts.variant ?? 'auto'} ${PART.tray}`,
       role: 'dialog',
       tabIndex: -1,
       aria: { modal: 'true', label: opts.ariaLabel },
       data: { sheet: opts.name },
     },
+    paper,
     grab,
     head,
+    tear,
     body,
   );
 

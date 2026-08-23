@@ -1,5 +1,6 @@
 import { formatInt, h, setText } from '../dom';
 import { countTo, pop } from '../motion';
+import { INK } from '../snack/classes';
 
 export interface CounterOpts {
   value?: number;
@@ -7,6 +8,11 @@ export interface CounterOpts {
   format?(value: number): string;
   /** Wrapping element tag; defaults to a span. */
   tag?: 'span' | 'div';
+  /**
+   * Ink for the numerals. `print` is the order-pad default; `thermal` is the
+   * faded receipt print, for a figure that is metadata rather than the point.
+   */
+  ink?: 'print' | 'thermal';
 }
 
 export interface Counter {
@@ -16,14 +22,20 @@ export interface Counter {
   readonly value: number;
 }
 
-/** A tabular-numerals number that can count up on a rAF ease-out. */
+/**
+ * A tabular-numerals number that can count up on a rAF ease-out.
+ *
+ * Set in order-pad ink: a printed figure, not a distressed one. The count-up
+ * writes text only — no material work happens while the number is running.
+ */
 export function createCounter(opts: CounterOpts = {}): Counter {
   const format = opts.format ?? formatInt;
   let value = opts.value ?? 0;
   let cancel: (() => void) | null = null;
 
+  const ink = opts.ink === 'thermal' ? INK.thermal : INK.print;
   const el = h(opts.tag ?? 'span', {
-    class: `sn-num${opts.className ? ` ${opts.className}` : ''}`,
+    class: `sn-num ${ink}${opts.className ? ` ${opts.className}` : ''}`,
     text: format(value),
   });
 

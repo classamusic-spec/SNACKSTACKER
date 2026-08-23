@@ -1,6 +1,8 @@
 import type { ToastKind } from '../ctx';
 import { Bag, h } from '../dom';
 import { EASE_IOS, animate, runExit } from '../motion';
+import { EDGE, INK, PAPER } from '../snack/classes';
+import { applyPaper } from './material';
 
 const MAX_VISIBLE = 3;
 const LIFETIME = 2600;
@@ -42,10 +44,14 @@ export function createToastHost(): ToastHost {
         if (!first) break;
         first.remove();
       }
+      // A small torn ticket. Seeded on the message, so the same notice tears
+      // the same way every time it appears — and two different notices on
+      // screen together are visibly two different scraps of paper.
       const node = h('div', {
-        class: `sn-toast sn-toast--${kind}`,
+        class: `sn-toast sn-toast--${kind} ${PAPER.ticket} ${EDGE.torn} ${INK.print}`,
         text: message,
       });
+      applyPaper(node, { kind: 'ticket', seed: `toast:${message}`, edge: 'torn', wear: 0.18 });
       el.appendChild(node);
       animate(
         node,

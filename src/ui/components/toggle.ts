@@ -1,5 +1,6 @@
 import type { UiCtx } from '../ctx';
 import { h } from '../dom';
+import { CONDIMENT, INK } from '../snack/classes';
 
 export interface SwitchOpts {
   label: string;
@@ -14,14 +15,18 @@ export interface SwitchHandle {
 }
 
 /**
- * iOS-style switch built on a real `<button role="switch">` so it is keyboard
- * operable and announced correctly. The knob animates on `transform` only.
+ * A switch built on a real `<button role="switch">` so it is keyboard operable
+ * and announced correctly. The knob animates on `transform` only.
+ *
+ * Material: a condiment sachet. The track is the packet and the knob is the
+ * sauce inside it, which has moved to one end. The button around it stays a
+ * plain rectangular 44px hit target — the material never becomes the hit area.
  */
 export function createSwitch(ctx: UiCtx, opts: SwitchOpts): SwitchHandle {
   let value = opts.value;
 
   const knob = h('span', { class: 'sn-switch__knob' });
-  const track = h('span', { class: 'sn-switch__track' }, knob);
+  const track = h('span', { class: `sn-switch__track ${CONDIMENT.sachet}` }, knob);
 
   const btn = h('button', {
     class: 'sn-switch',
@@ -52,7 +57,7 @@ export function createSwitch(ctx: UiCtx, opts: SwitchOpts): SwitchHandle {
     h(
       'span',
       { class: 'sn-row__text' },
-      h('span', { class: 'sn-row__label', text: opts.label }),
+      h('span', { class: `sn-row__label ${INK.print}`, text: opts.label }),
       opts.hint ? h('span', { class: 'sn-row__hint', text: opts.hint }) : null,
     ),
     btn,
@@ -85,7 +90,13 @@ export interface SegmentedHandle<T extends string> {
   set(value: T): void;
 }
 
-/** Segmented control with a sliding selection pill (transform-driven). */
+/**
+ * Segmented control with a sliding selection pill (transform-driven).
+ *
+ * Same material as the switch, for the same reason: it is the other half of one
+ * role. The strip is the sachet, the pill is the sauce that has moved to the
+ * chosen end.
+ */
 export function createSegmented<T extends string>(
   ctx: UiCtx,
   opts: SegmentedOpts<T>,
@@ -94,7 +105,7 @@ export function createSegmented<T extends string>(
   const count = opts.options.length;
   const indicator = h('span', { class: 'sn-seg__pill', aria: { hidden: 'true' } });
   const group = h('div', {
-    class: 'sn-seg',
+    class: `sn-seg ${CONDIMENT.sachet}`,
     role: 'radiogroup',
     aria: { label: opts.label },
     style: { '--seg-count': String(count) },
@@ -104,7 +115,7 @@ export function createSegmented<T extends string>(
   const buttons: HTMLButtonElement[] = [];
   opts.options.forEach((opt) => {
     const b = h('button', {
-      class: 'sn-seg__item',
+      class: `sn-seg__item ${INK.print}`,
       type: 'button',
       role: 'radio',
       text: opt.label,
@@ -136,7 +147,7 @@ export function createSegmented<T extends string>(
   const row = h(
     'div',
     { class: 'sn-row sn-row--stack' },
-    h('span', { class: 'sn-row__label', text: opts.label }),
+    h('span', { class: `sn-row__label ${INK.print}`, text: opts.label }),
     group,
   );
 
