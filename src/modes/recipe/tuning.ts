@@ -103,7 +103,8 @@ export const RR = {
   /** Input is dead for this long after the reveal, so the last demo tap cannot mis-pick. */
   GO_LOCKOUT: 0.16,
   COMPLETE_HOLD: 0.46,
-  OVER_HOLD: 1.05,
+  /** Long enough for the cloche to lift on the answer before the result screen. */
+  OVER_HOLD: 1.55,
 
   /** Landing squash, matching the stacker's motion language. */
   SQUASH: 0.17,

@@ -283,8 +283,11 @@ function slotScreen(i: number): { x: number; y: number } | null {
       }
       if (wrong < 0) break;
       const p = slotScreen(wrong);
-      if (p) mode.tap(p.x, p.y);
-      for (let f = 0; f < 6; f++) { simT += 1/60; mode.update(1/60, simT); vfx.update(1/60, simT); }
+      if (!p) break;
+      // The pick phase opens with an input lockout, so retry until it lands.
+      let g = 0;
+      while (!mode.tap(p.x, p.y) && g++ < 40) { simT += 1/60; mode.update(1/60, simT); vfx.update(1/60, simT); }
+      for (let f = 0; f < 8; f++) { simT += 1/60; mode.update(1/60, simT); vfx.update(1/60, simT); }
     }
   },
   setActiveAll: () => {

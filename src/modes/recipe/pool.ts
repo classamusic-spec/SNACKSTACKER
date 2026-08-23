@@ -35,70 +35,99 @@ function disposeTree(root: THREE.Object3D): void {
  * paid sixteen times over. Buckets of one are left completely alone; anything
  * that cannot be merged (mismatched attributes) falls back to the original.
  */
+/**
+ * Can these be merged? `mergeGeometries` logs to console.error and returns
+ * null on a mismatch, and a shipped game must not print on a normal frame, so
+ * the check happens first: identical attribute sets, identical item sizes, and
+ * either all indexed or none.
+ */
+function mergeable(geos: THREE.BufferGeometry[]): boolean {
+  const first = geos[0];
+  const names = Object.keys(first.attributes).sort();
+  const indexed = first.getIndex() !== null;
+  for (let i = 1; i < geos.length; i++) {
+    const g = geos[i];
+    if ((g.getIndex() !== null) !== indexed) return false;
+    const n = Object.keys(g.attributes).sort();
+    if (n.length !== names.length) return false;
+    for (let k = 0; k < n.length; k++) {
+      if (n[k] !== names[k]) return false;
+      if (g.attributes[n[k]].itemSize !== first.attributes[names[k]].itemSize) return false;
+    }
+  }
+  return true;
+}
+
 function compactByMaterial(root: THREE.Object3D): THREE.Object3D {
   const meshes: THREE.Mesh[] = [];
   root.updateMatrixWorld(true);
   root.traverse((o) => {
     const m = o as THREE.Mesh;
-    if (m.isMesh && !Array.isArray(m.material)) meshes.push(m);
+    if (m.isMesh && !Array.isArray(m.material) && m.geometry) meshes.push(m);
   });
   if (meshes.length < 2) return root;
 
-  const buckets = new Map<THREE.Material, THREE.Mesh[]>();
+  let shareable = false;
+  const seen = new Set<THREE.Material>();
   for (const m of meshes) {
-    const key = m.material as THREE.Material;
-    const list = buckets.get(key);
-    if (list) list.push(m);
-    else buckets.set(key, [m]);
+    const mat = m.material as THREE.Material;
+    if (seen.has(mat)) {
+      shareable = true;
+      break;
+    }
+    seen.add(mat);
   }
-  let merged = false;
-  for (const list of buckets.values()) if (list.length > 1) merged = true;
-  if (!merged) return root;
+  if (!shareable) return root;
 
+  // Every geometry is cloned before it is transformed: a food is free to use
+  // one geometry instance for two meshes, and baking a matrix into a shared
+  // instance twice would corrupt it. The originals are disposed together at
+  // the end, once nothing references them.
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const local = new THREE.Matrix4();
+  const buckets = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; src: THREE.Mesh[] }>();
+  const originals = new Set<THREE.BufferGeometry>();
+  for (const m of meshes) {
+    originals.add(m.geometry);
+    const g = m.geometry.clone();
+    g.applyMatrix4(local.multiplyMatrices(inv, m.matrixWorld));
+    const mat = m.material as THREE.Material;
+    const bucket = buckets.get(mat);
+    if (bucket) {
+      bucket.geos.push(g);
+      bucket.src.push(m);
+    } else {
+      buckets.set(mat, { geos: [g], src: [m] });
+    }
+  }
+
   const out = new THREE.Group();
   out.name = root.name;
-  for (const [material, list] of buckets) {
-    if (list.length === 1) {
-      const m = list[0];
-      const geo = m.geometry;
-      const local = new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld);
-      geo.applyMatrix4(local);
-      const mesh = new THREE.Mesh(geo, material);
-      mesh.castShadow = m.castShadow;
-      mesh.receiveShadow = m.receiveShadow;
-      out.add(mesh);
-      continue;
-    }
-    const parts: THREE.BufferGeometry[] = [];
-    for (const m of list) {
-      const g = m.geometry.clone();
-      g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
-      parts.push(g);
-    }
+  for (const [material, bucket] of buckets) {
     let geo: THREE.BufferGeometry | null = null;
-    try {
-      geo = mergeGeometries(parts, false);
-    } catch {
-      geo = null;
+    if (bucket.geos.length > 1 && mergeable(bucket.geos)) {
+      try {
+        geo = mergeGeometries(bucket.geos, false);
+      } catch {
+        geo = null;
+      }
     }
     if (geo) {
-      for (const g of parts) g.dispose();
-      for (const m of list) m.geometry.dispose();
+      for (const g of bucket.geos) g.dispose();
       const mesh = new THREE.Mesh(geo, material);
-      mesh.castShadow = list[0].castShadow;
-      mesh.receiveShadow = list[0].receiveShadow;
+      mesh.castShadow = bucket.src[0].castShadow;
+      mesh.receiveShadow = bucket.src[0].receiveShadow;
       out.add(mesh);
     } else {
-      for (let i = 0; i < list.length; i++) {
-        const mesh = new THREE.Mesh(parts[i], material);
-        mesh.castShadow = list[i].castShadow;
-        mesh.receiveShadow = list[i].receiveShadow;
+      for (let i = 0; i < bucket.geos.length; i++) {
+        const mesh = new THREE.Mesh(bucket.geos[i], material);
+        mesh.castShadow = bucket.src[i].castShadow;
+        mesh.receiveShadow = bucket.src[i].receiveShadow;
         out.add(mesh);
-        list[i].geometry.dispose();
       }
     }
   }
+  for (const g of originals) g.dispose();
   return out;
 }
 

@@ -227,11 +227,6 @@ export class Pass {
     this.applyPalette(palette, themeId);
   }
 
-  /** Board-plane Y, so the caller can sit the tokens on it. */
-  get surfaceY(): number {
-    return this.boardTopY;
-  }
-
   applyPalette(palette: ThemePaletteLike, themeId: string): void {
     this.palette = palette;
     this.themeId = themeId;
@@ -250,7 +245,7 @@ export class Pass {
    */
   build(count: number, tableTopY: number, plateRadius: number): void {
     this.teardown();
-    this.slotCount = Math.min(count, RR.MAX_SLOTS);
+    this.slotCount = clamp(Math.floor(count), 0, RR.MAX_SLOTS);
     this.tableTopY = tableTopY;
     this.plateRadius = plateRadius;
     this.boardTopY = tableTopY + RR.BOARD_LIP;
@@ -336,10 +331,15 @@ export class Pass {
     ) {
       return false;
     }
+    // The pass is square to the camera by construction: if the host ever
+    // orbits the rig, a fixed 45-degree yaw would shear the whole grid and
+    // put half the pick targets off screen.
+    this.root.rotation.y = Math.atan2(cam.position.x, cam.position.z);
+
     // Portrait stacks the slots 4x2. Landscape has width to spare and almost
     // no height, and a two-row grid there drops the cells under the 44px
     // floor, so the whole alphabet goes in one row.
-    this.cols = cam.aspect > 1.15 ? this.slotCount : Math.ceil(this.slotCount / 2);
+    this.cols = Math.max(1, cam.aspect > 1.15 ? this.slotCount : Math.ceil(this.slotCount / 2));
     this.rows = this.slotCount > this.cols ? 2 : 1;
 
     this.lastAspect = cam.aspect;
@@ -683,7 +683,7 @@ export class Cloche {
   private mesh: THREE.Mesh | null = null;
 
   constructor(
-    private materials: MaterialLibrary,
+    materials: MaterialLibrary,
     palette: ThemePaletteLike,
     themeId: string,
     quality: 'low' | 'medium' | 'high',
@@ -694,22 +694,23 @@ export class Cloche {
     // A true hemisphere: anything shallower leaves a gap between the rim and
     // the plate that reads as a floating bowl.
     const dome = new THREE.SphereGeometry(1, seg, Math.round(seg * 0.4), 0, Math.PI * 2, 0, Math.PI / 2);
-    dome.scale(1.52, 1.18, 1.52);
-    const knob = new THREE.SphereGeometry(0.15, 10, 7);
-    knob.scale(1, 0.85, 1);
-    knob.translate(0, 1.2, 0);
-    const stem = new THREE.CylinderGeometry(0.055, 0.075, 0.14, 8);
-    stem.translate(0, 1.12, 0);
-    const rim = new THREE.CylinderGeometry(1.54, 1.58, 0.075, seg, 1, false);
-    rim.translate(0, 0.0375, 0);
+    dome.scale(1.17, 1.04, 1.17);
+    const knob = new THREE.SphereGeometry(0.2, 12, 8);
+    knob.scale(1, 0.8, 1);
+    knob.translate(0, 1.11, 0);
+    const stem = new THREE.CylinderGeometry(0.07, 0.1, 0.16, 10);
+    stem.translate(0, 1.0, 0);
+    const rim = new THREE.CylinderGeometry(1.19, 1.23, 0.08, seg, 1, false);
+    rim.translate(0, 0.04, 0);
     const geo = mergeAll([dome, knob, stem, rim]);
     if (!geo) return;
     const mat = materials.physical(`recipe.cloche.${themeId}`, {
-      // Brushed, not mirrored: a chrome dome under a bright sky blows out to a
-      // white blob and loses its silhouette entirely.
-      color: mixHex(0xc6c9d0, palette.rim, 0.22),
-      roughness: 0.3,
-      metalness: 0.5,
+      // Pewter, not chrome. A mirrored dome under these skies blows out to a
+      // white blob and loses its silhouette; a darker base colour with only
+      // moderate metalness keeps a readable dark-to-light gradient across it.
+      color: mixHex(0x7f858f, palette.rim, 0.16),
+      roughness: 0.32,
+      metalness: 0.4,
     });
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.castShadow = true;

@@ -260,7 +260,6 @@ class RecipeMode implements GameMode {
     this.cloche.dispose();
 
     this.theme = theme;
-    this.audio.setTheme(theme);
     this.pool = new FoodPool({ materials: this.ctx.materials, quality: this.ctx.quality });
     this.pass = new Pass(
       { materials: this.ctx.materials, camera: this.ctx.camera },
@@ -331,7 +330,9 @@ class RecipeMode implements GameMode {
 
   update(dt: number, elapsed: number): void {
     this.elapsed = elapsed;
-    if (this.phase !== 'idle' && this.phase !== 'attract') this.pass.layout();
+    if (this.phase !== 'idle' && this.phase !== 'attract' && this.phase !== 'over') {
+      this.pass.layout();
+    }
     this.pass.update(dt);
     this.updateItems(dt);
     if (this.lock > 0) this.lock -= dt;
@@ -497,6 +498,7 @@ class RecipeMode implements GameMode {
       this.dishScale = 0.02;
       this.applyDishScale();
       this.clearDish();
+      if (this.phase === 'over') this.revealAnswer();
       this.audio.play('drop', { pitch: -4, gain: 0.9 });
       this.audio.play('ui_toggle', { pitch: 7, gain: 0.5 });
       _v1.set(0, 0.06, 0);
@@ -523,6 +525,34 @@ class RecipeMode implements GameMode {
     if (this.phase === 'over') return;
     if (this.coverPurpose === 'hide') this.enterPick();
     else this.beginRecipe();
+  }
+
+  /**
+   * The last beat of a run: the cloche lifts on the recipe the player was
+   * trying to build. Closure, and the only moment the answer is ever shown —
+   * a memory game that never tells you what it wanted is just a shrug.
+   */
+  private revealAnswer(): void {
+    for (let i = 0; i < this.len; i++) {
+      const food = this.theme.foods[this.recipe[i]];
+      if (food) this.placeItem(food, this.recipe[i], null, 0);
+    }
+    for (const it of this.items) {
+      it.flying = false;
+      it.squashing = false;
+      it.obj.position.set(0, it.y, 0);
+      it.obj.scale.set(1, 1, 1);
+      it.obj.rotation.set(0, 0, 0);
+    }
+    this.pass.setSteps(this.len, this.len);
+    _v1.set(0, this.topY + 0.4, 0);
+    this.ctx.vfx.ring({
+      position: _v1,
+      color: this.theme.palette.accentSoft,
+      radius: 1.1,
+      life: 0.6,
+      orientation: 'billboard',
+    });
   }
 
   private enterPick(): void {
@@ -574,6 +604,12 @@ class RecipeMode implements GameMode {
     this.events.emit('score', { score: this.score, delta: points, pop: this.combo > 1 });
     this.events.emit('combo', this.combo);
     this.events.emit('progress', { primary: this.pickIndex, label: `of ${this.len}` });
+    // The music rides the streak as well as the recipe number — a long clean
+    // run should audibly lift, which is most of why the ladder works.
+    this.events.emit(
+      'intensity',
+      clamp01(this.recipeNo / 8) * 0.7 + clamp01(this.combo / 16) * 0.3,
+    );
     this.ctx.flash(0.1 + clamp01(this.combo / 20) * 0.12);
 
     if (this.pickIndex >= this.len) this.onServed();
@@ -608,6 +644,7 @@ class RecipeMode implements GameMode {
     this.audio.play('fail', { gain: 0.75 });
     this.ctx.shake(0.09, 0.3);
     this.events.emit('combo', 0);
+    this.events.emit('intensity', clamp01(this.recipeNo / 8) * 0.7);
 
     if (this.lives <= 0) {
       this.enterOver();
@@ -678,8 +715,10 @@ class RecipeMode implements GameMode {
     this.audio.duck(1.2);
     this.ctx.shake(0.14, 0.5);
     this.events.emit('intensity', 0);
-    this.ctx.rig.setOrbit(0.3);
-    this.ctx.rig.setLift(1.6);
+    // No orbit here. The stacker turns the camera to show off the tower; this
+    // mode's subject is the pass, which is laid out against a fixed bearing —
+    // turning it would shear the board across the last frame of the run.
+    this.ctx.rig.setLift(0.85);
   }
 
   // --------------------------------------------------------------- dish items
