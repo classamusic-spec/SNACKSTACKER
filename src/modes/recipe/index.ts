@@ -15,9 +15,19 @@
  * **The memorise phase is played, not waited through.** A tap advances the
  * chef. The auto-dwell (0.26-0.44s) is only a safety net: a confident player
  * drums the recipe out in under a second and gets straight to the speed bonus,
- * and a slower player simply does not tap. Nobody is ever sitting still
- * watching a timer they cannot influence — which is the single biggest risk in
- * a memory game, so it is designed out rather than tuned around.
+ * and a slower player simply does not tap. The memorise phase has NO clock —
+ * you study for as long as you like — because a clock on watching is pressure
+ * you cannot influence, the single biggest risk in a memory game.
+ *
+ * **The recall phase does have a clock, and it speeds up.** The moment the
+ * cloche lifts and it is your turn, a countdown runs (see `enterPick` and the
+ * CLOCK_* tuning). This is the opposite kind of timer: one you beat by playing
+ * well. Recipe one is almost languid; the per-item budget tightens every
+ * recipe while the recipe itself gets longer, so by recipe eight the pace
+ * roughly doubles — "start slow, then rush." A correct pick banks a little
+ * time, so a confident player pulls ahead and only a hesitant one is caught.
+ * Running out costs a life, not the run (below), so it never kills you from a
+ * state you could not see coming.
  *
  * **Three channels carry every ingredient.** Its shape (real theme food, whose
  * silhouettes are authored to be distinct at 120px), its slot (canonical and
@@ -31,18 +41,20 @@
  * separately, and both are visible on the table — the ramp is something the
  * player can see rather than something they infer from failing.
  *
- * **A wrong pick costs a life, not the run.** Three lives. The wrong token is
- * rejected and shaken off; the step stays open and you try again. Two wrong
- * picks on one step and the correct slot starts nudging — you cannot get
- * stuck, and you cannot farm the hint either, because it costs two of your
- * three lives to reach it.
+ * **A wrong pick — or a timeout — costs a life, not the run.** Three lives.
+ * The wrong token is rejected and shaken off; the step stays open and you try
+ * again. Two wrong picks on one step and the correct slot starts nudging — you
+ * cannot get stuck, and you cannot farm the hint either, because it costs two
+ * of your three lives to reach it. A timeout spends a life through the same
+ * economy, nudges the step you blanked on, and refills the clock a little
+ * tighter, so the countdown escalates the pressure without ever being an
+ * instant loss.
  *
  * **Partial credit is real.** Every correct pick banks points immediately, so
  * seven of nine on the recipe that ends the run still paid. Serving a recipe
  * pays a length bonus, doubled when it was flawless, plus a speed bonus
- * against par — recall speed is rewarded, but there is no timer, because a
- * timer is exactly the wrong pressure to put on the players who most need this
- * mode to be fair.
+ * against par — so recall speed is rewarded twice over: once for surviving the
+ * clock, and again for beating par with time to spare.
  *
  * Length runs 3,4,5,6,7,8,9 and then holds; a good run reaches recipe six or
  * seven, which lands between 30 and 60 seconds. Restart is one `start()`: the
@@ -65,6 +77,7 @@ import {
   pickPoints,
   recipeBonus,
   recipeLength,
+  recipeTimeLimit,
   serveTier,
   speedBonus,
 } from './rules';
@@ -134,6 +147,11 @@ class RecipeMode implements GameMode {
   private recipeMistakes = 0;
   private pickStart = 0;
   private elapsed = 0;
+
+  /** Recall countdown. `clockLimit` is this recipe's budget; `clockLeft` ticks. */
+  private clockLimit = 0;
+  private clockLeft = 0;
+  private clockUrgent = false;
 
   private score = 0;
   private combo = 0;
@@ -361,6 +379,21 @@ class RecipeMode implements GameMode {
         }
         break;
 
+      case 'pick':
+        // The clock does not start until the reveal lock-out has cleared, so a
+        // slow first frame after the cloche lifts never steals recall time.
+        if (this.lock <= 0) {
+          this.clockLeft -= dt;
+          if (this.clockLeft <= 0) {
+            this.clockLeft = 0;
+            this.emitClock();
+            this.onTimeout();
+          } else {
+            this.emitClock();
+          }
+        }
+        break;
+
       case 'cover':
         this.t += dt;
         this.updateCover();
@@ -560,6 +593,10 @@ class RecipeMode implements GameMode {
     this.t = 0;
     this.lock = RR.GO_LOCKOUT;
     this.pickStart = this.elapsed;
+    this.clockLimit = recipeTimeLimit(this.recipeNo, this.len);
+    this.clockLeft = this.clockLimit;
+    this.clockUrgent = false;
+    this.emitClock();
     this.pass.setSteps(this.len, 0);
     this.events.emit('progress', { primary: 0, label: `of ${this.len}` });
     _v1.set(0, 1.5, 0);
@@ -596,6 +633,11 @@ class RecipeMode implements GameMode {
     this.pickIndex++;
     this.wrongOnStep = 0;
     this.pass.setSteps(this.len, this.pickIndex);
+
+    // Bank a little time for a right answer, so a confident player pulls ahead
+    // of the clock and only a hesitant one is caught by it.
+    this.clockLeft = Math.min(this.clockLimit, this.clockLeft + RR.CLOCK_PICK_BONUS);
+    this.emitClock();
 
     this.noteFor(slot, 0.7);
     this.audio.playComboNote(this.combo);
@@ -658,7 +700,52 @@ class RecipeMode implements GameMode {
     }
   }
 
+  /** Push the current countdown to the HUD, and heat the music as it runs low. */
+  private emitClock(): void {
+    const remaining01 = this.clockLimit > 0 ? clamp01(this.clockLeft / this.clockLimit) : 0;
+    const urgent = this.clockLeft <= RR.CLOCK_URGENT;
+    if (urgent && !this.clockUrgent) {
+      this.clockUrgent = true;
+      this.audio.play('countdown', { gain: 0.3, pitch: 9 });
+      this.events.emit('intensity', clamp01(this.recipeNo / 8) * 0.6 + 0.4);
+    }
+    this.events.emit('clock', { remaining01, seconds: this.clockLeft, urgent });
+  }
+
+  /**
+   * The clock ran out. Same currency as a wrong pick — a life, not the run —
+   * so the countdown escalates the pressure without turning into an instant
+   * loss the player cannot see coming. Correct picks so far are kept; the
+   * forgotten step is nudged, and the refill comes back a little tighter.
+   */
+  private onTimeout(): void {
+    this.combo = 0;
+    this.lives--;
+    this.pass.setLives(this.lives);
+
+    this.audio.play('fail', { gain: 0.8 });
+    this.audio.play('slice', { gain: 0.5, pitch: -7 });
+    this.ctx.shake(0.11, 0.34);
+    this.ctx.flash(0.18);
+    this.events.emit('combo', 0);
+    _v1.set(0, this.topY + 0.92, 0);
+    this.ctx.vfx.popText(_v1, "TIME'S UP", this.theme.palette.accent);
+
+    if (this.lives <= 0) {
+      this.events.emit('clock', null);
+      this.enterOver();
+      return;
+    }
+
+    this.pass.nudgeSlot(this.recipe[this.pickIndex]);
+    this.clockLeft = this.clockLimit * RR.CLOCK_TIMEOUT_REFILL;
+    this.clockUrgent = false;
+    this.emitClock();
+    this.events.emit('intensity', clamp01(this.recipeNo / 8) * 0.7);
+  }
+
   private onServed(): void {
+    this.events.emit('clock', null);
     const flawless = this.recipeMistakes === 0;
     const taken = Math.max(0, this.elapsed - this.pickStart);
     const bonus = recipeBonus(this.len, flawless);
@@ -709,6 +796,7 @@ class RecipeMode implements GameMode {
     this.coverPurpose = 'serve';
     this.coverClinked = false;
     this.t = 0;
+    this.events.emit('clock', null);
     this.cloche.show(this.topY + 2.6);
     this.audio.play('fall', { gain: 0.9 });
     this.audio.play('collapse', { delay: 0.16 });
@@ -955,6 +1043,11 @@ class RecipeMode implements GameMode {
     this.demoIndex = 0;
     this.lock = 0;
     this.t = 0;
+    this.clockLimit = 0;
+    this.clockLeft = 0;
+    this.clockUrgent = false;
+    // Drop the HUD clock, in case the run was abandoned mid-recall.
+    this.events.emit('clock', null);
     this.cloche.hide();
     this.ctx.vfx.clear();
   }

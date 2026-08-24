@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
-    "test": "tsc src/game/slice.ts --outDir .test-build --module esnext --target es2022 --moduleResolution bundler && esbuild src/content/kit.ts --bundle --format=esm --outfile=.test-build/kit.mjs --external:three --log-level=error && esbuild src/modes/topple/physics/stability.ts --bundle --format=esm --outfile=.test-build/topple-stability.mjs --log-level=error && node --test \"tests/**/*.test.mjs\"",
+    "test": "tsc src/game/slice.ts --outDir .test-build --module esnext --target es2022 --moduleResolution bundler && esbuild src/content/kit.ts --bundle --format=esm --outfile=.test-build/kit.mjs --external:three --log-level=error && esbuild src/modes/topple/physics/stability.ts --bundle --format=esm --outfile=.test-build/topple-stability.mjs --log-level=error && esbuild src/modes/recipe/rules.ts --bundle --format=esm --outfile=.test-build/recipe-rules.mjs --log-level=error && node --test \"tests/**/*.test.mjs\"",
     "shots": "node tools/shoot.mjs",
     "playtest": "node tools/playtest.mjs",
     "icons": "node tools/make-icons.mjs",

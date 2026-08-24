@@ -28,6 +28,14 @@ export type ModeEvents = {
   progress: { primary: number; label: string };
   /** 0..1, drives adaptive music intensity. */
   intensity: number;
+
+  /**
+   * A recall countdown, for modes that run one (Recipe Rush). `remaining01`
+   * falls 1 -> 0 across the current limit, `seconds` is what the player reads,
+   * and `urgent` flags the last stretch so the HUD can heat up. `null` hides
+   * the clock — modes without a countdown never emit this and it stays hidden.
+   */
+  clock: { remaining01: number; seconds: number; urgent: boolean } | null;
   /** Player took their first meaningful action; ends the coach hint. */
   firstAction: void;
   /** Run finished. The host records it and shows results. */

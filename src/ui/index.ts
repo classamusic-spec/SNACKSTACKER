@@ -422,6 +422,9 @@ export function createUi(root: HTMLElement, hooks: UiHooks): Ui {
     setCombo(combo: number): void {
       game.setCombo(combo);
     },
+    setClock(view): void {
+      game.setClock(view);
+    },
 
     showPerfect(label: string, tier: number): void {
       game.showPerfect(label, tier);

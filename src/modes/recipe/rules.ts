@@ -121,10 +121,25 @@ export function recipeBonus(len: number, flawless: boolean): number {
   return len * RR.RECIPE_BONUS * (flawless ? RR.FLAWLESS_MULT : 1);
 }
 
-/** Extra for beating par. Rewards fast recall without ever imposing a timer. */
+/** Extra for beating par. Rewards fast recall on top of surviving the clock. */
 export function speedBonus(len: number, seconds: number): number {
   const par = RR.PAR_BASE + RR.PAR_PER_ITEM * len;
   return Math.max(0, Math.round((par - seconds) * RR.SPEED_RATE));
+}
+
+/**
+ * Total seconds allowed to recall recipe `n` (1-based), `len` ingredients long.
+ *
+ * The per-item budget tightens from `CLOCK_PER_ITEM_START` to
+ * `CLOCK_PER_ITEM_END` across the first `CLOCK_RAMP` recipes; because `len` is
+ * itself climbing, the pace the player must keep rises faster than the budget
+ * falls. A flat `CLOCK_BASE` grace keeps the very short early recipes from
+ * being unwinnably tight. Pure so the curve can be asserted without a renderer.
+ */
+export function recipeTimeLimit(n: number, len: number): number {
+  const ramp = clamp((n - 1) / RR.CLOCK_RAMP, 0, 1);
+  const perItem = RR.CLOCK_PER_ITEM_START + (RR.CLOCK_PER_ITEM_END - RR.CLOCK_PER_ITEM_START) * ramp;
+  return RR.CLOCK_BASE + perItem * len;
 }
 
 /** Praise tier for a served recipe, 0..3. */

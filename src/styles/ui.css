@@ -978,6 +978,77 @@
   opacity: 0.6;
 }
 
+/* ---- recall countdown (Recipe Rush) ------------------------------------ */
+
+/* Hidden until a mode emits a clock; it takes no pad height while off, so the
+   other three modes' pads are unchanged. */
+.sn-clock {
+  display: none;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  margin-top: 10px;
+}
+
+.sn-clock.is-on {
+  display: flex;
+}
+
+/* A groove pressed into the ticket, so the bar reads as printed on the pad. */
+.sn-clock__track {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+
+.sn-clock__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(1);
+  border-radius: inherit;
+  background: var(--accent);
+  /* Only the width changes per frame, and it changes via a composited
+     transform — no layout, no repaint of the pad. */
+  will-change: transform;
+}
+
+.sn-clock__time {
+  min-width: 2.4ch;
+  text-align: right;
+  font-size: var(--t-14);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+/* The last stretch: a fixed alert red that does not depend on the theme
+   accent (some accents are already red, some pastel), plus a gentle pulse. */
+.sn-clock.is-urgent .sn-clock__fill {
+  background: #ff3b30;
+}
+
+.sn-clock.is-urgent .sn-clock__time {
+  color: #ff5348;
+}
+
+.sn-clock.is-urgent {
+  animation: sn-clock-pulse 0.62s ease-in-out infinite;
+}
+
+@keyframes sn-clock-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.sn-root[data-reduced-motion="1"] .sn-clock.is-urgent {
+  animation: none;
+}
+
 /* ---- perfect banner ---------------------------------------------------- */
 
 .sn-perfect {

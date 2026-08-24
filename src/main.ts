@@ -435,6 +435,7 @@ async function boot(): Promise<void> {
           coins: meta.data.coins,
         });
       });
+      game.events.on('clock', (v) => ui.setClock(v));
       game.events.on('intensity', (v) => audio.setIntensity(clamp01(v)));
       game.events.on('firstAction', () => {
         meta.markTutorialSeen();

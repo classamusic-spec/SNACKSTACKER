@@ -122,6 +122,34 @@ export const RR = {
   PAR_PER_ITEM: 0.75,
   PAR_BASE: 0.6,
   SPEED_RATE: 18,
+
+  // ------------------------------------------------------------- recall clock
+  /**
+   * The countdown runs during the PICK phase only — the recall — never during
+   * the demo. The design's old objection to a timer was "pressure you cannot
+   * influence"; a recall clock is the opposite, a clock you beat by playing
+   * well. You study for as long as you like; the moment you start building it
+   * back, the rush is on.
+   *
+   * The felt speed rises two ways at once as the run deepens: fewer seconds per
+   * ingredient (below), AND more ingredients to place. Early recipes are almost
+   * languid; by recipe eight the same per-item budget covers nine items, so the
+   * required pace roughly doubles. That is the "increase the rush" the brief
+   * asked for, without ever making recipe one feel like a panic.
+   */
+  CLOCK_BASE: 0.8,
+  /** Seconds granted per ingredient on the FIRST recipe. Generous. */
+  CLOCK_PER_ITEM_START: 1.7,
+  /** Seconds per ingredient once fully ramped. Frantic. */
+  CLOCK_PER_ITEM_END: 0.6,
+  /** Recipes over which the per-item budget tightens from START to END. */
+  CLOCK_RAMP: 7,
+  /** Time refunded on each correct pick, so a fast player banks slack. */
+  CLOCK_PICK_BONUS: 0.35,
+  /** After a timeout costs a life, the clock refills to this fraction. */
+  CLOCK_TIMEOUT_REFILL: 0.82,
+  /** Below this many seconds the HUD clock reads as urgent and the heat rises. */
+  CLOCK_URGENT: 2,
 } as const;
 
 /**

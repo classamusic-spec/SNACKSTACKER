@@ -19,6 +19,9 @@ export interface HudState {
   coins: number;
 }
 
+/** A recall countdown for the HUD; `null` hides it. Mirrors the mode `clock` event. */
+export type ClockView = { remaining01: number; seconds: number; urgent: boolean } | null;
+
 export interface StoreItemView {
   sku: SkuId;
   themeId: ThemeId | null;
@@ -103,6 +106,8 @@ export interface Ui {
   setHud(state: HudState): void;
   setScore(score: number, opts?: { pop?: boolean; delta?: number }): void;
   setCombo(combo: number): void;
+  /** Recall countdown for modes that run one; `null` hides it. */
+  setClock(view: ClockView): void;
   /** "PERFECT" / "FLAWLESS" banner; tier 0..3 scales the treatment. */
   showPerfect(label: string, tier: number): void;
   showMilestone(text: string, sub?: string): void;

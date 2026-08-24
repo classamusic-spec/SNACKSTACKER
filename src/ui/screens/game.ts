@@ -1,6 +1,6 @@
 import type { ModeId } from '../../modes/api';
 import { MODE_INFO } from '../../modes/api';
-import type { HudState } from '../api';
+import type { ClockView, HudState } from '../api';
 import { createIconButton } from '../components/button';
 import { applyPaper, tearLine } from '../components/material';
 import type { UiCtx } from '../ctx';
@@ -16,6 +16,7 @@ export interface GameScreen {
   setHud(state: HudState): void;
   setScore(score: number, opts?: { pop?: boolean; delta?: number }): void;
   setCombo(combo: number): void;
+  setClock(view: ClockView): void;
   setBest(best: number): void;
   showPerfect(label: string, tier: number): void;
   showMilestone(text: string, sub?: string): void;
@@ -89,11 +90,27 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
    * Nothing here opts back into pointer events: the whole screen is the drop
    * control and the pad must never eat a tap.
    */
+  // The recall countdown for modes that run one (Recipe Rush). It lives inside
+  // the pad so it borrows the same opaque contrast the score does, and reads
+  // like the time remaining printed on a ticket. Hidden until a mode emits a
+  // clock; `aria-hidden` because a per-frame seconds tick is noise to a screen
+  // reader, not information. The fill is driven by `scaleX` so it costs no
+  // layout per frame.
+  const clockFill = h('span', { class: 'sn-clock__fill' });
+  const clockTime = h('span', { class: 'sn-clock__time', text: '' });
+  const clock = h(
+    'div',
+    { class: 'sn-clock', aria: { hidden: 'true' } },
+    h('span', { class: 'sn-clock__track' }, clockFill),
+    clockTime,
+  );
+
   const pad = h(
     'div',
     { class: `sn-hud__pad ${PAPER.ticket} ${INK.print} ${tiltFor(PAD_SEED)}`.trim() },
     scoreLine,
     sub,
+    clock,
   );
   applyPaper(pad, { kind: 'ticket', seed: PAD_SEED, edge: 'perforated', wear: 0.12 });
   const padTear = tearLine(PAD_SEED, 'sn-hud__tear');
@@ -197,6 +214,8 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
       exitSeq += 1;
       resetAnimations(el);
       el.classList.remove('is-leaving');
+      // A fresh run must not show the previous run's frozen countdown bar.
+      clock.classList.remove('is-on', 'is-urgent');
       animate(
         el,
         [
@@ -265,6 +284,17 @@ export function createGameScreen(ctx: UiCtx): GameScreen {
       const prev = combo;
       combo = Math.max(0, Math.round(next));
       paintCombo(combo, prev);
+    },
+    setClock(view): void {
+      if (!view) {
+        clock.classList.remove('is-on', 'is-urgent');
+        return;
+      }
+      clock.classList.add('is-on');
+      clock.classList.toggle('is-urgent', view.urgent);
+      // scaleX from the left edge: no layout, just a composited transform.
+      clockFill.style.transform = `scaleX(${Math.max(0, Math.min(1, view.remaining01))})`;
+      setText(clockTime, view.seconds >= 10 ? String(Math.ceil(view.seconds)) : view.seconds.toFixed(1));
     },
     setBest(value: number): void {
       best = Math.max(0, Math.round(value));
